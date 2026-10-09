@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = ["crates/detent-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "LicenseRef-Proprietary"
+publish = false
+rust-version = "1.85"
+
+[workspace.dependencies]
+detent-core = { path = "crates/detent-core" }
+detent-input = { path = "crates/detent-input" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+log = "0.4"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

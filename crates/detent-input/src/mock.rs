@@ -150,11 +150,15 @@ impl InputBackend for MockBackend {
             // Pulses last 30 ms, 90 ms apart.
             let phase = tick % 400;
             if phase < 45 && phase % 9 < 2 {
-                let button = if (tick / 400) % 2 == 0 { 11 } else { 10 };
+                let button = if (tick / 400).is_multiple_of(2) {
+                    11
+                } else {
+                    10
+                };
                 out.push(BackendEvent::Button {
                     instance: 4,
                     index: button,
-                    pressed: phase % 9 == 0,
+                    pressed: phase.is_multiple_of(9),
                     time_ns: now,
                 });
             }

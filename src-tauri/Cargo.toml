@@ -1,0 +1,28 @@
+[package]
+name = "detent"
+description = "Detent: HOTAS configuration tool with in-game overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "detent_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+detent-core.workspace = true
+detent-input.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-log = "2"
+
+[lints]
+workspace = true

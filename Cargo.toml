@@ -1,13 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/detent-core", "crates/detent-input"]
+members = ["crates/detent-core", "crates/detent-input", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-Proprietary"
 publish = false
-rust-version = "1.85"
+rust-version = "1.90"
 
 [workspace.dependencies]
 detent-core = { path = "crates/detent-core" }

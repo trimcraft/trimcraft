@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Event access for the main and overlay windows; all app logic goes through Detent's own commands.",
+  "windows": ["main", "overlay"],
+  "permissions": ["core:default"]
+}

@@ -25,9 +25,9 @@ jobs:
             bundles: app
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -49,7 +49,7 @@ jobs:
 
       - name: Upload Windows installer
         if: matrix.name == 'windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: detent-windows
           path: |
@@ -66,7 +66,7 @@ jobs:
 
       - name: Upload macOS artifact
         if: matrix.name == 'macos'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: detent-macos
           path: Detent-macos.zip

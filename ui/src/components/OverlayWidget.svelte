@@ -24,7 +24,7 @@
       <span class="rname">{c.name}</span>
       <ul>
         {#each c.kind.states as s (s.id)}
-          <li class:on={c.active === s.id}>{s.name}</li>
+          <li class:on={c.active === s.id} data-label={s.name}>{s.name}</li>
         {/each}
       </ul>
     </div>
@@ -61,8 +61,14 @@
   .rname { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
   .horizontal ul { flex-direction: row; }
+  /* The highlight must not change the size: every item has the same border, and the width of
+     the bold text is reserved on all items by a hidden bold copy. */
   li {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     font-size: 16px;
+    font-variant-numeric: tabular-nums;
     padding: 2px 10px;
     border-radius: 4px;
     border: 1px solid rgba(240, 160, 48, 0.25);
@@ -70,4 +76,5 @@
     white-space: nowrap;
   }
   li.on { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 700; }
+  li::after { content: attr(data-label); font-weight: 700; visibility: hidden; height: 0; overflow: hidden; }
 </style>

@@ -1,4 +1,5 @@
-//! The user's configuration: encoders, functions, overlay. Stored as one JSON file.
+//! The user's configuration: encoders, functions, virtual controls, overlay. Stored as one
+//! JSON file.
 //!
 //! Stage 2 turns this into per-game profiles; until then there is a single setup.
 
@@ -6,6 +7,7 @@ use crate::device::DeviceId;
 use crate::encoder::{DetectorConfig, EncoderBinding};
 use crate::function::Function;
 use crate::overlay::OverlayConfig;
+use crate::virtual_control::VirtualControl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -25,6 +27,8 @@ pub struct Setup {
     pub schema_version: u32,
     pub encoders: Vec<EncoderBinding>,
     pub functions: Vec<Function>,
+    /// Radios and later other virtual controls. Missing in files from before they existed.
+    pub virtual_controls: Vec<VirtualControl>,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
     /// Encoder suggestions the user rejected; not suggested again.
@@ -37,6 +41,7 @@ impl Default for Setup {
             schema_version: SETUP_SCHEMA_VERSION,
             encoders: Vec::new(),
             functions: Vec::new(),
+            virtual_controls: Vec::new(),
             overlay: OverlayConfig::default(),
             detector: DetectorConfig::default(),
             dismissed_suggestions: Vec::new(),
@@ -86,6 +91,22 @@ mod tests {
     fn newer_schema_is_refused() {
         let err = Setup::from_json(r#"{"schemaVersion": 99}"#).unwrap_err();
         assert!(matches!(err, SetupError::NewerSchema { found: 99 }));
+    }
+
+    #[test]
+    fn file_from_before_virtual_controls_loads() {
+        let json = r#"{
+            "schemaVersion": 1,
+            "encoders": [{"id":"enc-1","name":"Knob","device":"f00d:0003#1","decrement":10,"increment":11}],
+            "functions": [],
+            "overlay": {"visible": true, "hotkey": "Ctrl+Shift+F10", "anchor": "bottomLeft",
+                        "margin": 32, "scale": 1.0, "widgets": [{"type":"function","function":"fn-1"}]},
+            "detector": {"maxPulseMs": 200, "maxRunGapMs": 600, "minRunLength": 3},
+            "dismissedSuggestions": []
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert!(s.virtual_controls.is_empty());
+        assert_eq!(s.encoders.len(), 1);
     }
 
     #[test]

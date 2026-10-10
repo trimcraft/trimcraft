@@ -77,6 +77,8 @@ pub struct Applied {
     pub devices_changed: bool,
     /// A button edge, for encoder detection and counters.
     pub button: Option<ButtonEdge>,
+    /// A hat change, for triggers.
+    pub hat: Option<HatEdge>,
     pub state_changed: bool,
 }
 
@@ -86,6 +88,14 @@ pub struct ButtonEdge {
     pub index: u16,
     pub pressed: bool,
     pub time_ns: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HatEdge {
+    pub device: DeviceId,
+    pub index: u16,
+    pub previous: HatState,
+    pub state: HatState,
 }
 
 #[derive(Debug, Clone)]
@@ -209,18 +219,25 @@ impl LiveState {
                 let Some((id, state)) = self.state_mut(instance) else {
                     return Applied::default();
                 };
-                if let Some(slot) = state.hats.get_mut(usize::from(index)) {
-                    *slot = hat;
-                }
+                let previous = state
+                    .hats
+                    .get_mut(usize::from(index))
+                    .map(|slot| std::mem::replace(slot, hat));
                 if hat != HatState::CENTERED {
                     self.last_activity = Some(Activity {
-                        device: id,
+                        device: id.clone(),
                         control: ControlRef::Hat { index },
                         time_ns,
                     });
                 }
                 Applied {
                     state_changed: true,
+                    hat: previous.map(|previous| HatEdge {
+                        device: id,
+                        index,
+                        previous,
+                        state: hat,
+                    }),
                     ..Default::default()
                 }
             }

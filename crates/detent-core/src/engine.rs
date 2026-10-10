@@ -1,9 +1,11 @@
-//! Ties everything together: live input, encoder detection and stateful functions.
+//! Ties everything together: live input, encoder detection, stateful functions and virtual
+//! controls.
 //!
 //! The engine is driven by backend events one at a time, so every encoder pulse is counted
 //! when it happens, independent of how often the UI or overlay redraws.
 
 use crate::device::DeviceId;
+use crate::device::DeviceKind;
 use crate::encoder::{
     DetectorConfig, EncoderBinding, EncoderDetector, EncoderSuggestion, PulseStats,
 };
@@ -12,7 +14,12 @@ use crate::function::{CounterInput, Function, FunctionKind, SpecError};
 use crate::overlay::{ControlRef, OverlayConfig};
 use crate::registry::DeviceRegistry;
 use crate::setup::{ButtonPair, Setup};
+use crate::state::{ButtonEdge, HatEdge};
 use crate::state::{LiveState, Snapshot};
+use crate::virtual_control::{
+    ActionRequest, ControlError, HatDirection, RadioCommand, Startup, StepDirection, Trigger,
+    VirtualControl,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
@@ -23,6 +30,8 @@ pub struct Dirty {
     pub registry: bool,
     pub setup: bool,
     pub values: bool,
+    /// Active states of virtual controls.
+    pub controls: bool,
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -37,8 +46,14 @@ pub enum EngineError {
     SameButton,
     #[error("button {0} already belongs to another encoder")]
     ButtonInUse(u16),
+    #[error("unknown virtual control {0}")]
+    UnknownControl(String),
+    #[error("unknown state {0}")]
+    UnknownState(String),
     #[error(transparent)]
     Spec(#[from] SpecError),
+    #[error(transparent)]
+    Control(#[from] ControlError),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -73,6 +88,25 @@ pub struct FunctionView {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VirtualControlView {
+    #[serde(flatten)]
+    pub control: VirtualControl,
+    /// Id of the active state, if any.
+    pub active: Option<String>,
+    /// Name of the active state, for display.
+    pub active_name: Option<String>,
+}
+
+/// "Learn" mode: the next input edge is captured instead of firing triggers.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LearnView {
+    /// `None` while still waiting for an input.
+    pub captured: Option<Trigger>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EngineSnapshot {
     #[serde(flatten)]
     pub live: Snapshot,
@@ -82,8 +116,18 @@ pub struct EngineSnapshot {
     pub half_detected: Vec<ButtonPair>,
     pub button_stats: Vec<ButtonStats>,
     pub functions: Vec<FunctionView>,
+    pub virtual_controls: Vec<VirtualControlView>,
+    /// `None` unless learn mode is on or just captured something.
+    pub learn: Option<LearnView>,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum Learn {
+    Off,
+    Waiting,
+    Captured(Trigger),
 }
 
 #[derive(Debug)]
@@ -94,11 +138,17 @@ pub struct Engine {
     detector: EncoderDetector,
     positions: HashMap<String, i64>,
     steps: HashMap<(String, bool), u64>,
+    /// Active state id per virtual control.
+    active: HashMap<String, String>,
+    /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
+    actions: Vec<ActionRequest>,
+    learn: Learn,
     dirty: Dirty,
 }
 
 impl Engine {
-    /// `values` are the function values saved at the last run.
+    /// `values` are the function values saved at the last run. Virtual controls start without
+    /// an active state; see [`Engine::restore_active_states`].
     pub fn new(registry: DeviceRegistry, setup: Setup, values: &BTreeMap<String, f64>) -> Self {
         let positions = setup
             .functions
@@ -118,7 +168,27 @@ impl Engine {
             live: LiveState::default(),
             positions,
             steps: HashMap::new(),
+            active: HashMap::new(),
+            actions: Vec::new(),
+            learn: Learn::Off,
             dirty: Dirty::default(),
+        }
+    }
+
+    /// Restores the active states saved at the last run (control id to state id), without
+    /// running any actions. Controls set to start empty, and states that no longer exist,
+    /// are skipped.
+    pub fn restore_active_states(&mut self, saved: &BTreeMap<String, String>) {
+        for control in &self.setup.virtual_controls {
+            let radio = control.radio();
+            if radio.startup == Startup::Empty {
+                continue;
+            }
+            if let Some(state) = saved.get(&control.id)
+                && radio.index_of(state).is_some()
+            {
+                self.active.insert(control.id.clone(), state.clone());
+            }
         }
     }
 
@@ -135,25 +205,96 @@ impl Engine {
     }
 
     /// Applies one backend event. Returns whether anything visible changed.
+    ///
+    /// Triggers of virtual controls are evaluated right here, edge by edge; the actions they
+    /// emit are queued in order and collected with [`Engine::take_actions`].
     pub fn apply(&mut self, event: BackendEvent) -> bool {
         let applied = self.live.apply(event, &mut self.registry);
         self.dirty.registry |= applied.devices_changed;
-        if let Some(edge) = applied.button {
+        let mut fired = Vec::new();
+        if let Some(edge) = &applied.button {
             self.detector
                 .observe(&edge.device, edge.index, edge.pressed, edge.time_ns);
             if edge.pressed {
-                self.step_encoders(&edge.device, edge.index);
+                fired = self.step_encoders(&edge.device, edge.index);
+                fired.extend(self.button_trigger(edge));
+            }
+        }
+        if let Some(edge) = &applied.hat {
+            fired.extend(self.hat_trigger(edge));
+        }
+        if !fired.is_empty() {
+            if self.learn == Learn::Waiting {
+                // The first trigger wins: an encoder detent before the plain button press.
+                self.learn = Learn::Captured(fired.swap_remove(0));
+            } else {
+                for trigger in &fired {
+                    self.fire(trigger);
+                }
             }
         }
         applied.state_changed
     }
 
-    fn step_encoders(&mut self, device: &DeviceId, button: u16) {
+    /// Buttons and hats of virtual devices (vJoy) are Detent's own output, never triggers.
+    fn is_input_device(&self, device: &DeviceId) -> bool {
+        self.live
+            .device(device)
+            .is_some_and(|d| d.kind == DeviceKind::Physical)
+    }
+
+    fn button_trigger(&self, edge: &ButtonEdge) -> Option<Trigger> {
+        self.is_input_device(&edge.device).then(|| Trigger::Button {
+            device: edge.device.clone(),
+            index: edge.index,
+        })
+    }
+
+    fn hat_trigger(&self, edge: &HatEdge) -> Option<Trigger> {
+        let direction = HatDirection::from_state(edge.state)?;
+        if HatDirection::from_state(edge.previous) == Some(direction)
+            || !self.is_input_device(&edge.device)
+        {
+            return None;
+        }
+        Some(Trigger::Hat {
+            device: edge.device.clone(),
+            index: edge.index,
+            direction,
+        })
+    }
+
+    /// Runs `trigger` through every virtual control, in setup order.
+    fn fire(&mut self, trigger: &Trigger) {
+        for control in &self.setup.virtual_controls {
+            for command in control.radio().commands_for(trigger) {
+                self.dirty.controls |=
+                    run_radio_command(control, command, &mut self.active, &mut self.actions);
+            }
+        }
+    }
+
+    /// Actions emitted since the last call, in the order they must run.
+    pub fn take_actions(&mut self) -> Vec<ActionRequest> {
+        std::mem::take(&mut self.actions)
+    }
+
+    /// Returns a trigger per encoder detent caused by this press.
+    fn step_encoders(&mut self, device: &DeviceId, button: u16) -> Vec<Trigger> {
+        let mut fired = Vec::new();
         for encoder in &self.setup.encoders {
             let direction = encoder.direction(device, button);
             if direction == 0 {
                 continue;
             }
+            fired.push(Trigger::EncoderStep {
+                encoder: encoder.id.clone(),
+                direction: if direction > 0 {
+                    StepDirection::Increment
+                } else {
+                    StepDirection::Decrement
+                },
+            });
             *self
                 .steps
                 .entry((encoder.id.clone(), direction > 0))
@@ -168,6 +309,7 @@ impl Engine {
                 self.dirty.values = true;
             }
         }
+        fired
     }
 
     /// Current function values, for persisting.
@@ -177,6 +319,27 @@ impl Engine {
             .iter()
             .map(|f| (f.id.clone(), self.value_of(f)))
             .collect()
+    }
+
+    /// Active state per virtual control (control id to state id), for persisting.
+    pub fn active_states(&self) -> BTreeMap<String, String> {
+        self.active
+            .iter()
+            .map(|(c, s)| (c.clone(), s.clone()))
+            .collect()
+    }
+
+    fn control_view(&self, control: &VirtualControl) -> VirtualControlView {
+        let radio = control.radio();
+        let active = self
+            .active
+            .get(&control.id)
+            .and_then(|id| radio.index_of(id));
+        VirtualControlView {
+            control: control.clone(),
+            active: active.map(|i| radio.states[i].id.clone()),
+            active_name: active.map(|i| radio.states[i].name.clone()),
+        }
     }
 
     fn value_of(&self, f: &Function) -> f64 {
@@ -243,6 +406,19 @@ impl Engine {
                     }
                 })
                 .collect(),
+            virtual_controls: self
+                .setup
+                .virtual_controls
+                .iter()
+                .map(|c| self.control_view(c))
+                .collect(),
+            learn: match &self.learn {
+                Learn::Off => None,
+                Learn::Waiting => Some(LearnView { captured: None }),
+                Learn::Captured(t) => Some(LearnView {
+                    captured: Some(t.clone()),
+                }),
+            },
             overlay: self.setup.overlay.clone(),
             detector: self.setup.detector,
         }
@@ -327,6 +503,13 @@ impl Engine {
             let FunctionKind::Counter { input, .. } = &mut f.kind;
             if matches!(input, CounterInput::Encoder { encoder } if encoder == id) {
                 *input = CounterInput::None;
+            }
+        }
+        for control in &mut self.setup.virtual_controls {
+            for slot in control.radio_mut().triggers_mut() {
+                slot.retain(
+                    |t| !matches!(t, Trigger::EncoderStep { encoder, .. } if encoder == id),
+                );
             }
         }
         self.dirty.setup = true;
@@ -422,6 +605,118 @@ impl Engine {
         self.dirty.setup = true;
     }
 
+    /// Creates the control if `control.id` is empty, updates it otherwise. Returns its id.
+    ///
+    /// Editing never runs actions. The active state is kept if it still exists; a new control
+    /// starts with no state active and is put on the overlay.
+    pub fn save_virtual_control(
+        &mut self,
+        mut control: VirtualControl,
+    ) -> Result<String, EngineError> {
+        let radio = control.radio_mut();
+        radio.normalize()?;
+        for trigger in radio.triggers() {
+            if let Trigger::EncoderStep { encoder, .. } = trigger
+                && !self.setup.encoders.iter().any(|e| &e.id == encoder)
+            {
+                return Err(EngineError::UnknownEncoder(encoder.clone()));
+            }
+        }
+        control.name = control.name.trim().to_owned();
+        if control.name.is_empty() {
+            control.name = "Radio".into();
+        }
+        if control.id.is_empty() {
+            control.id = next_id(
+                "vc",
+                self.setup.virtual_controls.iter().map(|c| c.id.as_str()),
+            );
+            self.setup.overlay.toggle_virtual_control(&control.id);
+            self.setup.virtual_controls.push(control.clone());
+        } else {
+            let slot = self
+                .setup
+                .virtual_controls
+                .iter_mut()
+                .find(|c| c.id == control.id)
+                .ok_or_else(|| EngineError::UnknownControl(control.id.clone()))?;
+            *slot = control.clone();
+            if let Some(state) = self.active.get(&control.id)
+                && control.radio().index_of(state).is_none()
+            {
+                self.active.remove(&control.id);
+                self.dirty.controls = true;
+            }
+        }
+        self.dirty.setup = true;
+        Ok(control.id)
+    }
+
+    pub fn remove_virtual_control(&mut self, id: &str) -> Result<(), EngineError> {
+        self.virtual_control(id)?;
+        self.setup.virtual_controls.retain(|c| c.id != id);
+        self.setup.overlay.remove_virtual_control(id);
+        self.active.remove(id);
+        self.dirty.setup = true;
+        self.dirty.controls = true;
+        Ok(())
+    }
+
+    /// Sets the active state (or none) without running actions, e.g. to match the game.
+    pub fn set_radio_active(&mut self, id: &str, state: Option<String>) -> Result<(), EngineError> {
+        let radio = self.virtual_control(id)?.radio();
+        match state {
+            Some(state) => {
+                if radio.index_of(&state).is_none() {
+                    return Err(EngineError::UnknownState(state));
+                }
+                self.active.insert(id.into(), state);
+            }
+            None => {
+                self.active.remove(id);
+            }
+        }
+        self.dirty.controls = true;
+        Ok(())
+    }
+
+    /// Runs a radio command as if a trigger had fired, including its actions.
+    pub fn command_radio(&mut self, id: &str, command: RadioCommand) -> Result<(), EngineError> {
+        let control = self
+            .setup
+            .virtual_controls
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownControl(id.into()))?;
+        self.dirty.controls |=
+            run_radio_command(control, command, &mut self.active, &mut self.actions);
+        Ok(())
+    }
+
+    pub fn toggle_overlay_virtual_control(&mut self, id: &str) -> Result<bool, EngineError> {
+        self.virtual_control(id)?;
+        self.dirty.setup = true;
+        Ok(self.setup.overlay.toggle_virtual_control(id))
+    }
+
+    /// Starts learn mode: the next button press, hat direction or encoder detent is captured
+    /// (see [`EngineSnapshot::learn`]) instead of firing triggers.
+    pub fn start_learn(&mut self) {
+        self.learn = Learn::Waiting;
+    }
+
+    pub fn stop_learn(&mut self) {
+        self.learn = Learn::Off;
+    }
+
+    fn virtual_control(&self, id: &str) -> Result<&VirtualControl, EngineError> {
+        self.setup
+            .virtual_controls
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownControl(id.into()))
+    }
+
     fn function(&self, id: &str) -> Result<&Function, EngineError> {
         self.setup
             .functions
@@ -437,6 +732,28 @@ impl Engine {
             .find(|e| e.id == id)
             .ok_or_else(|| EngineError::UnknownEncoder(id.into()))
     }
+}
+
+/// Applies `command` to a radio: updates its entry in `active` and queues the transition's
+/// actions. Returns whether the active state changed.
+fn run_radio_command(
+    control: &VirtualControl,
+    command: RadioCommand,
+    active: &mut HashMap<String, String>,
+    actions: &mut Vec<ActionRequest>,
+) -> bool {
+    let radio = control.radio();
+    let from = active.get(&control.id).and_then(|s| radio.index_of(s));
+    let to = radio.next(from, command);
+    if from == to {
+        return false;
+    }
+    actions.extend(radio.transition_actions(&control.name, from, to));
+    match to {
+        Some(i) => active.insert(control.id.clone(), radio.states[i].id.clone()),
+        None => active.remove(&control.id),
+    };
+    true
 }
 
 fn next_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
@@ -455,10 +772,12 @@ fn next_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::{Action, KeyStep};
     use crate::device::Fingerprint;
     use crate::event::RawDevice;
     use crate::function::{CounterSpec, EndBehavior};
     use crate::state::HatState;
+    use crate::virtual_control::{Radio, RadioState, VirtualControlKind};
 
     const MS: u64 = 1_000_000;
 
@@ -615,5 +934,408 @@ mod tests {
     fn ids_continue_after_highest() {
         assert_eq!(next_id("fn", ["fn-1", "fn-7", "x-9"].into_iter()), "fn-8");
         assert_eq!(next_id("fn", std::iter::empty()), "fn-1");
+    }
+
+    // --- Virtual controls ----------------------------------------------------------------
+
+    fn dev() -> DeviceId {
+        DeviceId("3344:0001#1".into())
+    }
+
+    fn tap(key: &str) -> Action {
+        Action::KeyboardMacro {
+            steps: vec![KeyStep::KeyTap {
+                key: key.into(),
+                hold_ms: None,
+            }],
+        }
+    }
+
+    fn button(index: u16) -> Trigger {
+        Trigger::Button {
+            device: dev(),
+            index,
+        }
+    }
+
+    /// Radio with states A, B, C (A: keys F1/F2 on/off, B: F3/F4, C: F5/F6), driven by
+    /// encoder `enc-1` (buttons 10/11), button 0 selects B, hat up clears.
+    fn engine_with_radio(radio: impl FnOnce(&mut Radio)) -> (Engine, String) {
+        let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
+        let state = |name: &str, on: &str, off: &str| RadioState {
+            id: String::new(),
+            name: name.into(),
+            select: vec![],
+            on_activate: vec![tap(on)],
+            on_deactivate: vec![tap(off)],
+        };
+        let mut r = Radio {
+            states: vec![
+                state("A", "F1", "F2"),
+                state("B", "F3", "F4"),
+                state("C", "F5", "F6"),
+            ],
+            increment: vec![Trigger::EncoderStep {
+                encoder: "enc-1".into(),
+                direction: StepDirection::Increment,
+            }],
+            decrement: vec![Trigger::EncoderStep {
+                encoder: "enc-1".into(),
+                direction: StepDirection::Decrement,
+            }],
+            clear: vec![Trigger::Hat {
+                device: dev(),
+                index: 0,
+                direction: HatDirection::Up,
+            }],
+            ..Default::default()
+        };
+        r.states[1].select.push(button(0));
+        radio(&mut r);
+        let id = engine
+            .save_virtual_control(VirtualControl {
+                id: String::new(),
+                name: "Comms".into(),
+                kind: VirtualControlKind::Radio(r),
+            })
+            .unwrap();
+        (engine, id)
+    }
+
+    fn active(engine: &Engine, id: &str) -> Option<String> {
+        engine
+            .snapshot()
+            .virtual_controls
+            .into_iter()
+            .find(|c| c.control.id == id)
+            .unwrap()
+            .active_name
+    }
+
+    /// The keys tapped by the queued actions, in order.
+    fn keys(engine: &mut Engine) -> Vec<String> {
+        engine
+            .take_actions()
+            .into_iter()
+            .flat_map(|a| match a.action {
+                Action::KeyboardMacro { steps } => steps,
+                Action::MouseMacro { .. } => vec![],
+            })
+            .filter_map(|s| match s {
+                KeyStep::KeyTap { key, .. } => Some(key),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn press(engine: &mut Engine, index: u16, at_ms: u64) {
+        pulse(engine, index, at_ms);
+    }
+
+    fn hat(engine: &mut Engine, mask: u8, at_ms: u64) {
+        engine.apply(BackendEvent::Hat {
+            instance: 1,
+            index: 0,
+            state: HatState(mask),
+            time_ns: at_ms * MS,
+        });
+    }
+
+    #[test]
+    fn encoder_steps_switch_states_with_ordered_actions() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        assert_eq!(active(&engine, &id), None);
+        press(&mut engine, 11, 0);
+        assert_eq!(active(&engine, &id).as_deref(), Some("A"));
+        assert_eq!(keys(&mut engine), ["F1"]);
+        press(&mut engine, 11, 100);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        assert_eq!(keys(&mut engine), ["F2", "F3"]);
+        press(&mut engine, 10, 200);
+        press(&mut engine, 10, 300);
+        assert_eq!(active(&engine, &id).as_deref(), Some("C")); // wraps from A to C
+        assert_eq!(keys(&mut engine), ["F4", "F1", "F2", "F5"]);
+        assert!(engine.take_dirty().controls);
+    }
+
+    #[test]
+    fn decrement_from_nothing_selects_last() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 10, 0);
+        assert_eq!(active(&engine, &id).as_deref(), Some("C"));
+        assert_eq!(keys(&mut engine), ["F5"]);
+    }
+
+    #[test]
+    fn button_selects_and_reselect_is_noop_or_toggle() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        press(&mut engine, 0, 1_000);
+        assert_eq!(keys(&mut engine), ["F3"]);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+
+        let (mut engine, id) = engine_with_radio(|r| r.toggle_on_reselect = true);
+        press(&mut engine, 0, 0);
+        press(&mut engine, 0, 1_000);
+        assert_eq!(active(&engine, &id), None);
+        assert_eq!(keys(&mut engine), ["F3", "F4"]);
+    }
+
+    #[test]
+    fn hat_clears_when_direction_is_entered() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        engine.take_actions();
+        hat(&mut engine, HatState::UP, 100);
+        assert_eq!(active(&engine, &id), None);
+        assert_eq!(keys(&mut engine), ["F4"]);
+        // Clearing again does nothing, and staying in the direction does not fire again.
+        hat(&mut engine, HatState::UP, 150);
+        press(&mut engine, 0, 200);
+        engine.take_actions();
+        hat(&mut engine, HatState::UP, 300);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        hat(&mut engine, 0, 400);
+        hat(&mut engine, HatState::UP, 500);
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn clamp_does_not_fire_at_the_end() {
+        let (mut engine, id) = engine_with_radio(|r| r.end = EndBehavior::Clamp);
+        press(&mut engine, 10, 0); // none -> C
+        press(&mut engine, 11, 100); // stays C
+        assert_eq!(active(&engine, &id).as_deref(), Some("C"));
+        assert_eq!(keys(&mut engine), ["F5"]);
+    }
+
+    #[test]
+    fn button_release_does_not_fire() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        engine.apply(BackendEvent::Button {
+            instance: 1,
+            index: 0,
+            pressed: false,
+            time_ns: 0,
+        });
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn restart_restores_state_without_actions() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        engine.take_actions();
+        let saved = engine.active_states();
+        assert_eq!(saved.get(&id).map(String::as_str), Some("st-2"));
+
+        let mut restarted = Engine::new(
+            engine.registry().clone(),
+            engine.setup().clone(),
+            &BTreeMap::new(),
+        );
+        restarted.restore_active_states(&saved);
+        assert_eq!(active(&restarted, &id).as_deref(), Some("B"));
+        assert!(restarted.take_actions().is_empty());
+
+        let mut setup = engine.setup().clone();
+        setup.virtual_controls[0].radio_mut().startup = Startup::Empty;
+        let mut empty = Engine::new(engine.registry().clone(), setup, &BTreeMap::new());
+        empty.restore_active_states(&saved);
+        assert_eq!(active(&empty, &id), None);
+
+        // A state that no longer exists is not restored.
+        let mut gone = Engine::new(
+            engine.registry().clone(),
+            engine.setup().clone(),
+            &BTreeMap::new(),
+        );
+        gone.restore_active_states(&BTreeMap::from([(id.clone(), "st-99".to_string())]));
+        assert_eq!(active(&gone, &id), None);
+    }
+
+    #[test]
+    fn learn_captures_first_edge_instead_of_firing() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        engine.start_learn();
+        assert_eq!(engine.snapshot().learn, Some(LearnView { captured: None }));
+        press(&mut engine, 11, 0); // encoder button: the detent wins over the button
+        press(&mut engine, 0, 100); // learning is over: this fires normally
+        let learned = engine.snapshot().learn.unwrap().captured;
+        assert_eq!(
+            learned,
+            Some(Trigger::EncoderStep {
+                encoder: "enc-1".into(),
+                direction: StepDirection::Increment
+            })
+        );
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        assert_eq!(keys(&mut engine), ["F3"]);
+        engine.stop_learn();
+        assert_eq!(engine.snapshot().learn, None);
+
+        engine.start_learn();
+        hat(&mut engine, HatState::LEFT | HatState::DOWN, 200);
+        assert_eq!(
+            engine.snapshot().learn.unwrap().captured,
+            Some(Trigger::Hat {
+                device: dev(),
+                index: 0,
+                direction: HatDirection::DownLeft
+            })
+        );
+    }
+
+    #[test]
+    fn virtual_devices_never_trigger() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        let mut vjoy = raw();
+        vjoy.instance = 2;
+        vjoy.fingerprint.vendor_id = 0x1234;
+        vjoy.fingerprint.product_id = 0xBEAD;
+        vjoy.fingerprint.serial = None;
+        engine.apply(BackendEvent::Added(vjoy));
+        let vjoy_id = DeviceId("1234:bead#1".into());
+        let mut control = engine.setup().virtual_controls[0].clone();
+        control.radio_mut().states[0].select.push(Trigger::Button {
+            device: vjoy_id,
+            index: 3,
+        });
+        engine.save_virtual_control(control).unwrap();
+        engine.start_learn();
+        engine.apply(BackendEvent::Button {
+            instance: 2,
+            index: 3,
+            pressed: true,
+            time_ns: 0,
+        });
+        assert_eq!(engine.snapshot().learn.unwrap().captured, None);
+        engine.stop_learn();
+        engine.apply(BackendEvent::Button {
+            instance: 2,
+            index: 3,
+            pressed: false,
+            time_ns: 1,
+        });
+        engine.apply(BackendEvent::Button {
+            instance: 2,
+            index: 3,
+            pressed: true,
+            time_ns: 2,
+        });
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn editing_keeps_active_state_and_never_runs_actions() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        engine.take_actions();
+        let mut control = engine.setup().virtual_controls[0].clone();
+        control.radio_mut().states.swap(0, 1);
+        control.radio_mut().states[0].name = "Bravo".into();
+        engine.save_virtual_control(control.clone()).unwrap();
+        assert_eq!(active(&engine, &id).as_deref(), Some("Bravo"));
+
+        control.radio_mut().states.remove(0);
+        engine.save_virtual_control(control).unwrap();
+        assert_eq!(active(&engine, &id), None);
+        assert!(engine.take_actions().is_empty());
+    }
+
+    #[test]
+    fn new_control_goes_on_the_overlay_and_removal_cleans_up() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        assert!(engine.setup().overlay.has_virtual_control(&id));
+        assert!(!engine.toggle_overlay_virtual_control(&id).unwrap());
+        assert!(engine.toggle_overlay_virtual_control(&id).unwrap());
+        press(&mut engine, 0, 0);
+        engine.remove_virtual_control(&id).unwrap();
+        assert!(engine.snapshot().virtual_controls.is_empty());
+        assert!(engine.snapshot().overlay.widgets.is_empty());
+        assert!(engine.active_states().is_empty());
+    }
+
+    #[test]
+    fn validation() {
+        let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
+        let control = |radio: Radio| VirtualControl {
+            id: String::new(),
+            name: "  ".into(),
+            kind: VirtualControlKind::Radio(radio),
+        };
+        assert!(matches!(
+            engine.save_virtual_control(control(Radio::default())),
+            Err(EngineError::Control(ControlError::NoStates))
+        ));
+        let mut r = Radio {
+            states: vec![RadioState::default()],
+            ..Default::default()
+        };
+        r.increment.push(Trigger::EncoderStep {
+            encoder: "enc-9".into(),
+            direction: StepDirection::Increment,
+        });
+        assert_eq!(
+            engine.save_virtual_control(control(r.clone())),
+            Err(EngineError::UnknownEncoder("enc-9".into()))
+        );
+        r.increment.clear();
+        r.states[0].on_activate.push(tap("NoSuchKey"));
+        assert!(matches!(
+            engine.save_virtual_control(control(r.clone())),
+            Err(EngineError::Control(ControlError::Action(_)))
+        ));
+        r.states[0].on_activate = vec![tap("f1")];
+        let id = engine.save_virtual_control(control(r)).unwrap();
+        let saved = &engine.setup().virtual_controls[0];
+        assert_eq!(
+            (saved.id.as_str(), saved.name.as_str()),
+            (id.as_str(), "Radio")
+        );
+        assert_eq!(saved.radio().states[0].on_activate, [tap("F1")]);
+        assert_eq!(saved.radio().states[0].name, "State 1");
+    }
+
+    #[test]
+    fn removing_encoder_removes_its_triggers() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        engine.remove_encoder("enc-1").unwrap();
+        let radio = engine.setup().virtual_controls[0].radio().clone();
+        assert!(radio.increment.is_empty() && radio.decrement.is_empty());
+        assert_eq!(radio.clear.len(), 1);
+        press(&mut engine, 11, 0);
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn manual_set_is_silent_and_command_runs_actions() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        assert_eq!(active(&engine, &id).as_deref(), Some("C"));
+        assert!(engine.take_actions().is_empty());
+        assert_eq!(
+            engine.set_radio_active(&id, Some("nope".into())),
+            Err(EngineError::UnknownState("nope".into()))
+        );
+        engine.command_radio(&id, RadioCommand::Select(0)).unwrap();
+        assert_eq!(keys(&mut engine), ["F6", "F1"]);
+        engine.set_radio_active(&id, None).unwrap();
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn snapshot_json_has_virtual_controls() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        engine.start_learn();
+        let json = serde_json::to_value(engine.snapshot()).unwrap();
+        let vc = &json["virtualControls"][0];
+        assert_eq!(vc["id"], "vc-1");
+        assert_eq!(vc["kind"]["type"], "radio");
+        assert_eq!(vc["active"], serde_json::Value::Null);
+        assert_eq!(vc["activeName"], serde_json::Value::Null);
+        assert_eq!(json["learn"]["captured"], serde_json::Value::Null);
+        assert_eq!(json["overlay"]["widgets"][0]["type"], "virtualControl");
     }
 }

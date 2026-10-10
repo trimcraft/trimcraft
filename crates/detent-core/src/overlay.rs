@@ -1,4 +1,4 @@
-//! Overlay layout: which inputs and functions are shown, and where.
+//! Overlay layout: which inputs, functions and virtual controls are shown, and where.
 
 use crate::device::DeviceId;
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,8 @@ pub enum OverlayWidget {
     },
     /// The current value of a stateful function, e.g. "Channel 3".
     Function { function: String },
+    /// A virtual control and its state, e.g. "Comms  Guard".
+    VirtualControl { control: String },
 }
 
 impl OverlayWidget {
@@ -104,6 +106,29 @@ impl OverlayConfig {
     pub fn remove_function(&mut self, function: &str) {
         self.widgets
             .retain(|w| !matches!(w, OverlayWidget::Function { function: f } if f == function));
+    }
+
+    pub fn has_virtual_control(&self, control: &str) -> bool {
+        self.widgets
+            .iter()
+            .any(|w| matches!(w, OverlayWidget::VirtualControl { control: c } if c == control))
+    }
+
+    pub fn toggle_virtual_control(&mut self, control: &str) -> bool {
+        if self.has_virtual_control(control) {
+            self.remove_virtual_control(control);
+            false
+        } else {
+            self.widgets.push(OverlayWidget::VirtualControl {
+                control: control.into(),
+            });
+            true
+        }
+    }
+
+    pub fn remove_virtual_control(&mut self, control: &str) {
+        self.widgets
+            .retain(|w| !matches!(w, OverlayWidget::VirtualControl { control: c } if c == control));
     }
 }
 

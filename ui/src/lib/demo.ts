@@ -277,7 +277,7 @@ export function createDemo(): Backend {
   const ok = async () => emit();
 
   return {
-    meta: async () => ({ version: "demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser" }),
+    meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser" }),
     async subscribe(cb) {
       listeners.add(cb);
       cb(structuredClone(s));

@@ -19,6 +19,9 @@
     {#if w.type === "function"}
       {@const f = snapshot.functions.find((f) => f.id === w.function)}
       {#if f}<div class="fn"><span class="fname">{f.name}</span> <span class="fvalue">{f.display}</span></div>{/if}
+    {:else if w.type === "virtualControl"}
+      {@const c = snapshot.virtualControls.find((c) => c.id === w.control)}
+      {#if c}<div class="fn"><span class="fname">{c.name}</span> <span class="fvalue" class:none={!c.activeName}>{c.activeName ?? "–"}</span></div>{/if}
     {:else}
       {@const d = findDevice(snapshot, w.device)}
       {@const offline = !d || !d.connected}
@@ -45,6 +48,7 @@
   .fn { font-size: 22px; }
   .fname { color: var(--muted); }
   .fvalue { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .fvalue.none { color: var(--muted); }
   .ctl { display: flex; flex-direction: column; gap: 2px; }
   .ctl:has(.lamp), .ctl:has(:global(.rose)) { flex-direction: row; align-items: center; gap: 8px; }
   .ctl.offline { opacity: 0.4; }

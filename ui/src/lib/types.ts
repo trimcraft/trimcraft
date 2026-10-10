@@ -101,7 +101,8 @@ export type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 
 export type OverlayWidget =
   | { type: "control"; device: DeviceId; control: ControlRef; label: string | null }
-  | { type: "function"; function: string };
+  | { type: "function"; function: string }
+  | { type: "virtualControl"; control: string };
 
 export interface OverlayConfig {
   visible: boolean;
@@ -133,6 +134,9 @@ export interface EngineSnapshot {
   halfDetected: ButtonPair[];
   buttonStats: ButtonStats[];
   functions: FunctionView[];
+  virtualControls: VirtualControlView[];
+  /** Null unless learn mode is on or just captured something. */
+  learn: LearnView | null;
   overlay: OverlayConfig;
   detector: DetectorConfig;
 }
@@ -144,3 +148,79 @@ export interface AppMeta {
   logDir: string;
   platform: string;
 }
+
+// --- Virtual controls (detent-core: virtual_control.rs, action.rs) ---------------------------
+
+export type HatDirection = "up" | "upRight" | "right" | "downRight" | "down" | "downLeft" | "left" | "upLeft";
+
+export type StepDirection = "decrement" | "increment";
+
+export type Trigger =
+  | { type: "button"; device: DeviceId; index: number }
+  | { type: "hat"; device: DeviceId; index: number; direction: HatDirection }
+  | { type: "encoderStep"; encoder: string; direction: StepDirection };
+
+export type KeyStep =
+  | { type: "keyDown"; key: string }
+  | { type: "keyUp"; key: string }
+  | { type: "keyTap"; key: string; holdMs: number | null }
+  | { type: "delay"; ms: number };
+
+export type MouseButton = "left" | "right" | "middle" | "x1" | "x2";
+
+export type MouseStep =
+  | { type: "buttonDown"; button: MouseButton }
+  | { type: "buttonUp"; button: MouseButton }
+  | { type: "click"; button: MouseButton; holdMs: number | null }
+  | { type: "wheel"; delta: number }
+  | { type: "moveRelative"; dx: number; dy: number }
+  | { type: "delay"; ms: number };
+
+export type Action =
+  | { type: "keyboardMacro"; steps: KeyStep[] }
+  | { type: "mouseMacro"; steps: MouseStep[] };
+
+export interface RadioState {
+  id: string;
+  name: string;
+  select: Trigger[];
+  onActivate: Action[];
+  onDeactivate: Action[];
+}
+
+export type Startup = "restoreLast" | "empty";
+
+export interface Radio {
+  states: RadioState[];
+  increment: Trigger[];
+  decrement: Trigger[];
+  clear: Trigger[];
+  end: EndBehavior;
+  toggleOnReselect: boolean;
+  startup: Startup;
+}
+
+export interface VirtualControlDef {
+  id: string;
+  name: string;
+  kind: { type: "radio" } & Radio;
+}
+
+export interface VirtualControlView extends VirtualControlDef {
+  /** Id of the active state. */
+  active: string | null;
+  activeName: string | null;
+}
+
+export interface LearnView {
+  captured: Trigger | null;
+}
+
+export interface KeyInfo {
+  name: string;
+  scan: number;
+  extended: boolean;
+}
+
+/** Radio commands the UI can run; they fire actions like a trigger would. */
+export type RadioCommand = "increment" | "decrement" | "clear";

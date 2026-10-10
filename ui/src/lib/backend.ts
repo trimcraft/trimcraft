@@ -9,7 +9,10 @@ import type {
   DeviceId,
   EngineSnapshot,
   FunctionDef,
+  KeyInfo,
   OverlayConfig,
+  RadioCommand,
+  VirtualControlDef,
 } from "./types";
 import { createDemo } from "./demo";
 
@@ -31,6 +34,16 @@ export interface Backend {
   setOverlayVisible(visible: boolean): Promise<void>;
   setHotkey(hotkey: string): Promise<void>;
   setDetectorConfig(config: DetectorConfig): Promise<void>;
+  keys(): Promise<KeyInfo[]>;
+  saveVirtualControl(control: VirtualControlDef): Promise<string>;
+  removeVirtualControl(id: string): Promise<void>;
+  /** Sets the active state without running actions. */
+  setRadioActive(id: string, state: string | null): Promise<void>;
+  /** Runs a command like a trigger would, including actions. */
+  commandRadio(id: string, command: RadioCommand): Promise<void>;
+  toggleOverlayVirtualControl(id: string): Promise<boolean>;
+  startLearn(): Promise<void>;
+  stopLearn(): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -61,6 +74,14 @@ async function tauriBackend(): Promise<Backend> {
     setOverlayVisible: (visible) => invoke("set_overlay_visible", { visible }),
     setHotkey: (hotkey) => invoke("set_hotkey", { hotkey }),
     setDetectorConfig: (config) => invoke("set_detector_config", { config }),
+    keys: () => invoke("get_keys"),
+    saveVirtualControl: (control) => invoke("save_virtual_control", { control }),
+    removeVirtualControl: (id) => invoke("remove_virtual_control", { id }),
+    setRadioActive: (id, state) => invoke("set_radio_active", { id, state }),
+    commandRadio: (id, command) => invoke("command_radio", { id, command }),
+    toggleOverlayVirtualControl: (id) => invoke("toggle_overlay_virtual_control", { id }),
+    startLearn: () => invoke("start_learn"),
+    stopLearn: () => invoke("stop_learn"),
   };
 }
 

@@ -2,7 +2,39 @@
 // (`npm run dev` in a browser). It is deliberately simple: enough to exercise every screen.
 
 import type { Backend } from "./backend";
-import type { DeviceSnapshot, EngineSnapshot, FunctionDef, FunctionView, PulseStats } from "./types";
+import type {
+  DeviceSnapshot,
+  EngineSnapshot,
+  FunctionDef,
+  FunctionView,
+  HatDirection,
+  KeyInfo,
+  PulseStats,
+  Radio,
+  Trigger,
+  VirtualControlView,
+} from "./types";
+import { actionText, sameTrigger } from "./format";
+
+type Cmd = { type: "increment" | "decrement" | "clear" } | { type: "select"; index: number };
+
+const HAT_MASKS: Record<number, HatDirection> = {
+  1: "up", 3: "upRight", 2: "right", 6: "downRight", 4: "down", 12: "downLeft", 8: "left", 9: "upLeft",
+};
+
+// Names of detent-core's action::KEYS (the real app gets them, with scan codes, from Rust).
+const KEY_NAMES = [
+  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
+  ...Array.from({ length: 24 }, (_, i) => `F${i + 1}`),
+  "LeftShift", "RightShift", "LeftCtrl", "RightCtrl", "LeftAlt", "RightAlt", "LeftWin", "RightWin", "Menu",
+  "Escape", "Tab", "CapsLock", "Space", "Enter", "Backspace", "Insert", "Delete", "Home", "End", "PageUp",
+  "PageDown", "Up", "Down", "Left", "Right", "PrintScreen", "ScrollLock", "NumLock",
+  ...Array.from({ length: 10 }, (_, i) => `Numpad${i}`),
+  "NumpadAdd", "NumpadSubtract", "NumpadMultiply", "NumpadDivide", "NumpadDecimal", "NumpadEnter",
+  "Minus", "Equals", "LeftBracket", "RightBracket", "Semicolon", "Apostrophe", "Grave", "Backslash",
+  "Comma", "Period", "Slash", "IntlBackslash",
+];
+const DEMO_KEYS: KeyInfo[] = KEY_NAMES.map((name) => ({ name, scan: 0, extended: false }));
 
 function device(id: string, name: string, vid: number, pid: number, axes: number, buttons: number, hats: number, virt = false): DeviceSnapshot {
   return {
@@ -38,6 +70,8 @@ export function createDemo(): Backend {
     halfDetected: [],
     buttonStats: [],
     functions: [],
+    virtualControls: [],
+    learn: null,
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
   };
@@ -46,6 +80,50 @@ export function createDemo(): Backend {
   let tick = 0;
 
   const emit = () => listeners.forEach((l) => l(structuredClone(s)));
+
+  // Virtual controls: same semantics as detent-core's virtual_control.rs, without actions
+  // (they are only logged to the console).
+  const nextState = (r: Radio, active: number | null, cmd: Cmd): number | null => {
+    const last = r.states.length - 1;
+    if (last < 0) return null;
+    switch (cmd.type) {
+      case "increment":
+        return active === null ? 0 : active >= last ? (r.end === "wrap" ? 0 : last) : active + 1;
+      case "decrement":
+        return active === null ? last : active === 0 ? (r.end === "wrap" ? last : 0) : active - 1;
+      case "select":
+        if (cmd.index > last) return active;
+        return active === cmd.index ? (r.toggleOnReselect ? null : active) : cmd.index;
+      case "clear":
+        return null;
+    }
+  };
+  const runCommand = (c: VirtualControlView, cmd: Cmd) => {
+    const r = c.kind;
+    const fromIndex = r.states.findIndex((st) => st.id === c.active);
+    const from = fromIndex >= 0 ? fromIndex : null;
+    const to = nextState(r, from, cmd);
+    if (from === to) return;
+    if (from !== null) r.states[from]!.onDeactivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[from]!.name} deactivate:`, actionText(a)));
+    if (to !== null) r.states[to]!.onActivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[to]!.name} activate:`, actionText(a)));
+    c.active = to === null ? null : r.states[to]!.id;
+    c.activeName = to === null ? null : r.states[to]!.name;
+  };
+  const fire = (t: Trigger) => {
+    for (const c of s.virtualControls) {
+      const r = c.kind;
+      const has = (list: Trigger[]) => list.some((x) => sameTrigger(x, t));
+      if (has(r.increment)) runCommand(c, { type: "increment" });
+      if (has(r.decrement)) runCommand(c, { type: "decrement" });
+      r.states.forEach((st, index) => { if (has(st.select)) runCommand(c, { type: "select", index }); });
+      if (has(r.clear)) runCommand(c, { type: "clear" });
+    }
+  };
+  const findControl = (id: string) => {
+    const c = s.virtualControls.find((x) => x.id === id);
+    if (!c) throw new Error(`unknown virtual control ${id}`);
+    return c;
+  };
 
   const counterValue = (f: FunctionDef): number => {
     const { spec } = f.kind;
@@ -77,8 +155,13 @@ export function createDemo(): Backend {
     stick!.state.axes[1] = Math.cos(t * 1.3) * 0.6;
     throttle1!.state.axes[2] = Math.sin(t * 0.2);
     throttle2!.state.axes[2] = Math.cos(t * 0.25);
-    stick!.state.buttons[0] = Math.floor(tick / 30) % 2 === 1;
-    stick!.state.hats[0] = [0, 1, 2, 4, 8][Math.floor(tick / 45) % 5]!;
+    const edges: Trigger[] = [];
+    const pressed = Math.floor(tick / 30) % 2 === 1;
+    if (pressed && !stick!.state.buttons[0]) edges.push({ type: "button", device: stick!.id, index: 0 });
+    stick!.state.buttons[0] = pressed;
+    const hat = [0, 1, 2, 4, 8][Math.floor(tick / 45) % 5]!;
+    if (hat !== stick!.state.hats[0] && HAT_MASKS[hat]) edges.push({ type: "hat", device: stick!.id, index: 0, direction: HAT_MASKS[hat]! });
+    stick!.state.hats[0] = hat;
     // Encoder: a run of 5 detents every 4 s, alternating direction.
     const phase = tick % 120;
     const pulse = phase < 15 && phase % 3 === 0;
@@ -89,16 +172,22 @@ export function createDemo(): Backend {
       for (const e of s.encoders) {
         if (e.device !== panel!.id) continue;
         const button = up ? 11 : 10;
-        if (button === e.increment) { e.stepsUp++; step(e.id, 1); }
-        if (button === e.decrement) { e.stepsDown++; step(e.id, -1); }
+        if (button === e.increment) { e.stepsUp++; step(e.id, 1); edges.push({ type: "encoderStep", encoder: e.id, direction: "increment" }); }
+        if (button === e.decrement) { e.stepsDown++; step(e.id, -1); edges.push({ type: "encoderStep", encoder: e.id, direction: "decrement" }); }
       }
+      edges.push({ type: "button", device: panel!.id, index: up ? 11 : 10 });
       s.lastActivity = { device: panel!.id, control: { type: "button", index: up ? 11 : 10 }, timeNs: tick };
+    }
+    if (edges.length) {
+      if (s.learn && !s.learn.captured) s.learn.captured = edges[0]!;
+      else edges.forEach(fire);
     }
     emit();
   }, 33);
 
   let nextEnc = 1;
   let nextFn = 1;
+  let nextVc = 1;
   const ok = async () => emit();
 
   return {
@@ -134,6 +223,14 @@ export function createDemo(): Backend {
     async removeEncoder(id) {
       s.encoders = s.encoders.filter((e) => e.id !== id);
       for (const f of s.functions) if (f.kind.input.type === "encoder" && f.kind.input.encoder === id) f.kind.input = { type: "none" };
+      const keep = (t: Trigger) => !(t.type === "encoderStep" && t.encoder === id);
+      for (const c of s.virtualControls) {
+        const r = c.kind;
+        r.increment = r.increment.filter(keep);
+        r.decrement = r.decrement.filter(keep);
+        r.clear = r.clear.filter(keep);
+        for (const st of r.states) st.select = st.select.filter(keep);
+      }
       emit();
     },
     async dismissSuggestion(pair) {
@@ -178,5 +275,62 @@ export function createDemo(): Backend {
     setOverlayVisible: async (visible) => { s.overlay.visible = visible; await ok(); },
     setHotkey: async (hotkey) => { s.overlay.hotkey = hotkey; await ok(); },
     setDetectorConfig: async (config) => { s.detector = config; await ok(); },
+    keys: async () => DEMO_KEYS,
+    async saveVirtualControl(control) {
+      const c = structuredClone(control);
+      const r = c.kind;
+      if (!r.states.length) throw new Error("a radio needs at least one state");
+      for (const step of r.states.flatMap((st) => [...st.onActivate, ...st.onDeactivate]).flatMap((a) => (a.type === "keyboardMacro" ? a.steps : []))) {
+        if ("key" in step) {
+          const known = KEY_NAMES.find((k) => k.toLowerCase() === step.key.trim().toLowerCase());
+          if (!known) throw new Error(`unknown key "${step.key}"`);
+          step.key = known;
+        }
+      }
+      let nextState = Math.max(0, ...r.states.map((st) => Number(st.id.replace("st-", "")) || 0)) + 1;
+      r.states.forEach((st, i) => {
+        if (!st.id) st.id = `st-${nextState++}`;
+        st.name = st.name.trim() || `State ${i + 1}`;
+      });
+      c.name = c.name.trim() || "Radio";
+      if (!c.id) {
+        c.id = `vc-${nextVc++}`;
+        s.virtualControls.push({ ...c, active: null, activeName: null });
+        s.overlay.widgets.push({ type: "virtualControl", control: c.id });
+      } else {
+        const i = s.virtualControls.findIndex((x) => x.id === c.id);
+        if (i < 0) throw new Error(`unknown virtual control ${c.id}`);
+        const old = s.virtualControls[i]!;
+        const still = r.states.find((st) => st.id === old.active);
+        s.virtualControls[i] = { ...c, active: still?.id ?? null, activeName: still?.name ?? null };
+      }
+      emit();
+      return c.id;
+    },
+    async removeVirtualControl(id) {
+      s.virtualControls = s.virtualControls.filter((c) => c.id !== id);
+      s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "virtualControl" && w.control === id));
+      emit();
+    },
+    async setRadioActive(id, state) {
+      const c = findControl(id);
+      const st = c.kind.states.find((x) => x.id === state);
+      if (state !== null && !st) throw new Error(`unknown state ${state}`);
+      c.active = st?.id ?? null;
+      c.activeName = st?.name ?? null;
+      emit();
+    },
+    async commandRadio(id, command) {
+      runCommand(findControl(id), { type: command });
+      emit();
+    },
+    async toggleOverlayVirtualControl(id) {
+      const i = s.overlay.widgets.findIndex((w) => w.type === "virtualControl" && w.control === id);
+      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "virtualControl", control: id });
+      emit();
+      return i < 0;
+    },
+    startLearn: async () => { s.learn = { captured: null }; await ok(); },
+    stopLearn: async () => { s.learn = null; await ok(); },
   };
 }

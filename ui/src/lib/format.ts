@@ -1,4 +1,14 @@
-import type { ControlRef, DeviceSnapshot, EngineSnapshot, IdentityConfidence } from "./types";
+import type {
+  Action,
+  ControlRef,
+  DeviceSnapshot,
+  EngineSnapshot,
+  HatDirection,
+  IdentityConfidence,
+  KeyStep,
+  MouseStep,
+  Trigger,
+} from "./types";
 
 /** Buttons, axes and hats are 0-based internally and shown 1-based, like Windows does. */
 export function controlName(c: ControlRef): string {
@@ -48,4 +58,70 @@ export function hatArrow(mask: number): string {
 
 export function sameControl(a: ControlRef, b: ControlRef): boolean {
   return a.type === b.type && a.index === b.index;
+}
+
+export const HAT_DIRECTIONS: [HatDirection, string][] = [
+  ["up", "↑ up"],
+  ["upRight", "↗ up-right"],
+  ["right", "→ right"],
+  ["downRight", "↘ down-right"],
+  ["down", "↓ down"],
+  ["downLeft", "↙ down-left"],
+  ["left", "← left"],
+  ["upLeft", "↖ up-left"],
+];
+
+const hatDirectionText = (d: HatDirection) => HAT_DIRECTIONS.find(([v]) => v === d)?.[1] ?? d;
+
+/** E.g. "Demo Stick · Button 4", "Radio knob +", "Demo Stick · Hat 1 ↑ up". */
+export function triggerText(s: EngineSnapshot, t: Trigger): string {
+  if (t.type === "encoderStep") {
+    const e = s.encoders.find((e) => e.id === t.encoder);
+    return `${e?.name ?? `Missing encoder ${t.encoder}`} ${t.direction === "increment" ? "+" : "−"}`;
+  }
+  const device = deviceTitle(findDevice(s, t.device), t.device);
+  if (t.type === "button") return `${device} · ${controlName({ type: "button", index: t.index })}`;
+  return `${device} · ${controlName({ type: "hat", index: t.index })} ${hatDirectionText(t.direction)}`;
+}
+
+export function sameTrigger(a: Trigger, b: Trigger): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+const hold = (ms: number | null) => (ms === null ? "" : ` ${ms} ms`);
+
+export function keyStepText(s: KeyStep): string {
+  switch (s.type) {
+    case "keyDown":
+      return `↓ ${s.key}`;
+    case "keyUp":
+      return `↑ ${s.key}`;
+    case "keyTap":
+      return `${s.key}${hold(s.holdMs)}`;
+    case "delay":
+      return `wait ${s.ms} ms`;
+  }
+}
+
+export function mouseStepText(s: MouseStep): string {
+  switch (s.type) {
+    case "buttonDown":
+      return `↓ ${s.button}`;
+    case "buttonUp":
+      return `↑ ${s.button}`;
+    case "click":
+      return `click ${s.button}${hold(s.holdMs)}`;
+    case "wheel":
+      return `wheel ${s.delta > 0 ? "+" : ""}${s.delta}`;
+    case "moveRelative":
+      return `move ${s.dx}, ${s.dy}`;
+    case "delay":
+      return `wait ${s.ms} ms`;
+  }
+}
+
+/** One-line summary, e.g. "Keys: ↓ LeftCtrl, F1, ↑ LeftCtrl". */
+export function actionText(a: Action): string {
+  const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
+  return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}: ${steps.join(", ") || "no steps"}`;
 }

@@ -10,36 +10,14 @@
   import VirtualControlsView from "./components/VirtualControlsView.svelte";
   import RecorderSettings from "./components/RecorderSettings.svelte";
   import RecordingBanner from "./components/RecordingBanner.svelte";
-
-  type Section = "hardware" | "controls";
-  const sections: [Section, string][] = [
-    ["hardware", "Hardware Test"],
-    ["controls", "Virtual Controls"],
-  ];
+  import ConnectionsView from "./components/ConnectionsView.svelte";
+  import { SECTIONS, nav, show } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
   let meta = $state<AppMeta | null>(null);
   let selected = $state<string | null>(null);
-  let section = $state<Section>(loadSection());
 
   let device = $derived(snapshot?.devices.find((d) => d.id === selected) ?? snapshot?.devices[0]);
-
-  function loadSection(): Section {
-    try {
-      return localStorage.getItem("detent.section") === "controls" ? "controls" : "hardware";
-    } catch {
-      return "hardware";
-    }
-  }
-
-  function show(s: Section) {
-    section = s;
-    try {
-      localStorage.setItem("detent.section", s);
-    } catch {
-      // Only a convenience; the app works without it.
-    }
-  }
 
   onMount(() => {
     let stop: (() => void) | undefined;
@@ -59,15 +37,15 @@
   {/if}
   {#if snapshot}<RecordingBanner {snapshot} />{/if}
   <nav>
-    {#each sections as [value, text] (value)}
-      <button class:current={section === value} onclick={() => show(value)}>{text}</button>
+    {#each SECTIONS as [value, text] (value)}
+      <button class:current={nav.section === value} onclick={() => show(value)}>{text}</button>
     {/each}
   </nav>
 </header>
 
 {#if snapshot}
   {#if snapshot.backendError}<p class="error banner">Input backend failed: {snapshot.backendError}</p>{/if}
-  {#if section === "hardware"}
+  {#if nav.section === "hardware"}
     <main>
       <aside>
         <h2>Devices</h2>
@@ -84,6 +62,12 @@
         <EncoderPanel {snapshot} />
         <FunctionPanel {snapshot} />
         <OverlayPanel {snapshot} />
+      </div>
+    </main>
+  {:else if nav.section === "connections"}
+    <main class="single">
+      <div class="content">
+        <ConnectionsView {snapshot} />
       </div>
     </main>
   {:else}

@@ -3,6 +3,7 @@
 //!
 //! Stage 2 turns this into per-game profiles; until then there is a single setup.
 
+use crate::connection::Connections;
 use crate::device::DeviceId;
 use crate::encoder::{DetectorConfig, EncoderBinding};
 use crate::function::Function;
@@ -34,6 +35,8 @@ pub struct Setup {
     pub detector: DetectorConfig,
     /// Macro recorder settings. Missing in files from before the recorder.
     pub recorder: RecorderConfig,
+    /// Connector settings (Soundpad). Missing in files from before connections.
+    pub connections: Connections,
     /// Encoder suggestions the user rejected; not suggested again.
     pub dismissed_suggestions: Vec<ButtonPair>,
 }
@@ -48,6 +51,7 @@ impl Default for Setup {
             overlay: OverlayConfig::default(),
             detector: DetectorConfig::default(),
             recorder: RecorderConfig::default(),
+            connections: Connections::default(),
             dismissed_suggestions: Vec::new(),
         }
     }

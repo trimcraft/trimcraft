@@ -1,6 +1,7 @@
 <script lang="ts">
   // Edits a list of actions: keyboard and mouse macros (see MacroEditor) and Soundpad commands.
-  import type { Action, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
+  import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
+  import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
   import MacroEditor from "./MacroEditor.svelte";
   import SoundpadEditor from "./SoundpadEditor.svelte";
@@ -13,6 +14,15 @@
   }: { label: string; actions: Action[]; keys: KeyInfo[]; snapshot: EngineSnapshot } = $props();
 
   let open = $state<number | null>(null);
+  /** The connector an action needs (keyboard and mouse macros are built in). */
+  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" ? "soundpad" : null);
+  const connectorView = (id: ConnectorId) => snapshot.connectors.find((c) => c.id === id);
+  /** A connector's actions are offered, and run, only while it is enabled. */
+  const enabled = (id: ConnectorId) => snapshot.connections[id].enabled;
+  const inactive = (a: Action) => {
+    const id = connectorOf(a);
+    return id !== null && !enabled(id);
+  };
 
   const playback = (): Playback => ({ speedPercent: 100, minDelayMs: 0, endpointOnly: false });
 
@@ -44,7 +54,7 @@
   <span class="label">{label}</span>
   <div class="body">
     {#each actions as action, ai (ai)}
-      <div class="action">
+      <div class="action" class:inactive={inactive(action)}>
         <div class="row head">
           <button class="link" onclick={() => (open = open === ai ? null : ai)}>{open === ai ? "▾" : "▸"} {actionText(action)}</button>
           <span class="spacer"></span>
@@ -52,10 +62,16 @@
           <button class="small" title="Move down" onclick={() => move(actions, ai, 1)}>↓</button>
           <button class="small" onclick={() => { actions.splice(ai, 1); open = null; }}>Delete</button>
         </div>
+        {#if inactive(action)}
+          <p class="hint">
+            The {connectorView(connectorOf(action)!)?.name} connection is disabled: this action is kept but does not run.
+            <button class="link small" onclick={() => show("connections")}>Open Connections</button>
+          </p>
+        {/if}
         {#if open === ai}
           <div class="steps">
             {#if action.type === "soundpad"}
-              <SoundpadEditor bind:command={action.command} />
+              <SoundpadEditor bind:command={action.command} connector={connectorView("soundpad")} />
             {:else}
               <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
@@ -68,7 +84,7 @@
     <div class="row">
       <button class="small" onclick={() => addAction("keyboardMacro")}>+ Keyboard macro</button>
       <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
-      <button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>
+      {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
     </div>
   </div>
 </div>
@@ -78,6 +94,9 @@
   .label { color: var(--muted); font-size: 12px; padding-top: 3px; }
   .body { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .action { border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; }
+  .action.inactive { opacity: 0.55; border-style: dashed; }
+  .hint { margin: 2px 0 0; font-size: 11px; color: var(--warn); }
+  .hint .link { color: var(--accent); text-decoration: underline; }
   .head { flex-wrap: nowrap; }
   .link { border: none; background: none; padding: 0; text-align: left; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .spacer { flex: 1; }

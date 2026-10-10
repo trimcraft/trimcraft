@@ -1,11 +1,11 @@
 <script lang="ts">
   // Edits one Soundpad action: the command, where to play, and which sound (picked from
   // Soundpad's live list; stored by title and path).
-  import type { Sound, SoundOutput, SoundpadCommand } from "../lib/types";
+  import type { ConnectorView, Sound, SoundOutput, SoundpadCommand } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
-  import SoundpadStatusBadge from "./SoundpadStatusBadge.svelte";
+  import ConnectorBadge from "./ConnectorBadge.svelte";
 
-  let { command = $bindable() }: { command: SoundpadCommand } = $props();
+  let { command = $bindable(), connector }: { command: SoundpadCommand; connector: ConnectorView | undefined } = $props();
 
   const commandTypes: [SoundpadCommand["type"], string][] = [
     ["play", "Play sound"],
@@ -78,7 +78,7 @@
       </label>
     {/if}
     <span class="spacer"></span>
-    <SoundpadStatusBadge showWarning={false} />
+    {#if connector && connector.status.state !== "connected"}<ConnectorBadge {connector} />{/if}
   </div>
   {#if command.type === "play"}
     <div class="row">

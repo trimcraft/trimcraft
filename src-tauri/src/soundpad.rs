@@ -1,34 +1,29 @@
-//! Talks to Soundpad over its remote control pipe (see `detent_core::soundpad`).
+//! The Soundpad connector: talks to Soundpad over its remote control pipe (see
+//! `detent_core::soundpad`).
+//!
+//! While the connector is enabled, a monitor thread checks `IsAlive()` and keeps the sound
+//! list fresh; when Soundpad is not reachable it retries with a growing pause (backoff). The
+//! status goes to the engine, which shows it on the Connections page.
 //!
 //! Commands from actions run on a worker thread of their own, so the action queue never
 //! waits for Soundpad. Every pipe operation has a short timeout; when Soundpad is not running
-//! or a sound is missing, a warning is logged and kept for the UI.
-//!
-//! The sound list is cached and refreshed when it is older than [`LIST_MAX_AGE`] or when a
-//! stored sound is not found in it, so playing a sound normally costs one round trip.
+//! or a sound is missing, a warning is logged and kept for the UI. Before a sound is looked
+//! up, a sound list older than the configured age is fetched again, and also when the sound
+//! is not in it, so playing a sound normally costs one round trip.
 
+use detent_core::connection::{ConnectorState, ConnectorStatus, SoundpadSettings};
 use detent_core::soundpad::{self, Sound, SoundpadCommand};
-use serde::Serialize;
 use std::sync::mpsc::{Sender, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-/// Upper bound for one request (connect, write, read).
-const TIMEOUT: Duration = Duration::from_millis(500);
-/// A cached sound list older than this is fetched again before resolving a sound, so an index
-/// is rarely taken from a list the user has rearranged since.
-const LIST_MAX_AGE: Duration = Duration::from_secs(10);
+/// How often a connected Soundpad is checked.
+const POLL: Duration = Duration::from_secs(5);
+/// First and longest pause between reconnect attempts.
+const BACKOFF_START: Duration = Duration::from_secs(1);
+const BACKOFF_MAX: Duration = Duration::from_secs(30);
 
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SoundpadStatus {
-    /// Soundpad answered `IsAlive()`.
-    pub alive: bool,
-    /// Why it is not reachable.
-    pub error: Option<String>,
-    /// The last problem running a Soundpad action, until one succeeds again.
-    pub last_warning: Option<String>,
-}
+type Reporter = Box<dyn Fn(ConnectorState) + Send + Sync>;
 
 #[derive(Default)]
 struct Cache {
@@ -38,8 +33,13 @@ struct Cache {
 
 #[derive(Default)]
 struct State {
+    settings: Mutex<SoundpadSettings>,
     cache: Mutex<Cache>,
-    last_warning: Mutex<Option<String>>,
+    status: Mutex<ConnectorState>,
+    /// Set (and notified) when the monitor should look again at once.
+    wake: Mutex<bool>,
+    woken: Condvar,
+    reporter: OnceLock<Reporter>,
 }
 
 pub struct Soundpad {
@@ -48,9 +48,10 @@ pub struct Soundpad {
 }
 
 impl Soundpad {
-    pub fn spawn() -> Self {
+    pub fn spawn(settings: SoundpadSettings) -> Self {
         let (queue, commands) = channel::<SoundpadCommand>();
         let state = Arc::new(State::default());
+        *lock(&state.settings) = settings;
         let worker = state.clone();
         std::thread::Builder::new()
             .name("detent-soundpad".into())
@@ -60,7 +61,24 @@ impl Soundpad {
                 }
             })
             .expect("spawn soundpad thread");
+        let monitor = state.clone();
+        std::thread::Builder::new()
+            .name("detent-soundpad-monitor".into())
+            .spawn(move || monitor.monitor())
+            .expect("spawn soundpad monitor");
         Self { queue, state }
+    }
+
+    /// Where status changes go (the engine). Set once, after the app state exists.
+    pub fn on_status(&self, report: impl Fn(ConnectorState) + Send + Sync + 'static) {
+        let _ = self.state.reporter.set(Box::new(report));
+        self.state.report();
+    }
+
+    /// New settings from the Connections page; the monitor looks again at once.
+    pub fn apply(&self, settings: SoundpadSettings) {
+        *lock(&self.state.settings) = settings;
+        self.state.wake();
     }
 
     /// Queues a command; returns at once.
@@ -70,18 +88,12 @@ impl Soundpad {
         }
     }
 
-    /// Asks Soundpad whether it is there. Blocks for at most [`TIMEOUT`].
-    pub fn status(&self) -> SoundpadStatus {
-        let (alive, error) = match pipe::request(soundpad::IS_ALIVE, TIMEOUT) {
-            Ok(r) if soundpad::is_success(&r) => (true, None),
-            Ok(r) => (false, Some(format!("Soundpad answered {r:?}"))),
-            Err(e) => (false, Some(e)),
-        };
-        SoundpadStatus {
-            alive,
-            error,
-            last_warning: lock(&self.state.last_warning).clone(),
-        }
+    /// "Test connection": checks now (blocks for at most the timeout, twice) and restarts the
+    /// reconnect backoff.
+    pub fn test(&self) -> Result<String, String> {
+        let result = self.state.probe();
+        self.state.wake();
+        result
     }
 
     /// The current sound list, fetched from Soundpad (and cached for actions).
@@ -94,9 +106,141 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+fn sounds_text(n: usize) -> String {
+    if n == 1 {
+        "1 sound".into()
+    } else {
+        format!("{n} sounds")
+    }
+}
+
 impl State {
+    fn settings(&self) -> SoundpadSettings {
+        lock(&self.settings).clone()
+    }
+
+    fn timeout(&self) -> Duration {
+        Duration::from_millis(u64::from(self.settings().timeout_ms))
+    }
+
+    fn report(&self) {
+        if let Some(report) = self.reporter.get() {
+            report(lock(&self.status).clone());
+        }
+    }
+
+    fn set_status(&self, status: ConnectorStatus, detail: Option<String>) {
+        {
+            let mut s = lock(&self.status);
+            if s.status == status && s.detail == detail {
+                return;
+            }
+            if s.status != status {
+                log::info!("soundpad connector: {status:?}");
+            }
+            s.status = status;
+            s.detail = detail;
+        }
+        self.report();
+    }
+
+    fn wake(&self) {
+        *lock(&self.wake) = true;
+        self.woken.notify_all();
+    }
+
+    /// Sleeps for `pause` (forever if `None`) or until woken.
+    fn wait(&self, pause: Option<Duration>) {
+        let mut woken = lock(&self.wake);
+        let deadline = pause.map(|p| Instant::now() + p);
+        while !*woken {
+            woken = match deadline {
+                None => self.woken.wait(woken).unwrap_or_else(|e| e.into_inner()),
+                Some(d) => {
+                    let left = d.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    self.woken
+                        .wait_timeout(woken, left)
+                        .unwrap_or_else(|e| e.into_inner())
+                        .0
+                }
+            };
+        }
+        *woken = false;
+    }
+
+    /// `IsAlive()`, then the sound list if the cached one is stale. Updates the status.
+    fn probe(&self) -> Result<String, String> {
+        let result = match pipe::request(soundpad::IS_ALIVE, self.timeout()) {
+            Ok(r) if soundpad::is_success(&r) => {
+                let max_age = Duration::from_millis(u64::from(self.settings().list_max_age_ms));
+                let cached = {
+                    let cache = lock(&self.cache);
+                    cache
+                        .fetched
+                        .filter(|t| t.elapsed() < max_age)
+                        .map(|_| cache.sounds.len())
+                };
+                match cached {
+                    Some(n) => Ok(n),
+                    None => self.refresh().map(|s| s.len()),
+                }
+            }
+            Ok(r) => Err(format!("Soundpad answered {:?}", r.trim())),
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(n) => {
+                self.set_status(ConnectorStatus::Connected, Some(sounds_text(n)));
+                Ok(format!("Connected, {}", sounds_text(n)))
+            }
+            Err(message) => {
+                self.set_status(
+                    ConnectorStatus::Error {
+                        message: message.clone(),
+                    },
+                    None,
+                );
+                Err(message)
+            }
+        }
+    }
+
+    fn monitor(&self) {
+        let mut backoff = BACKOFF_START;
+        loop {
+            if !self.settings().enabled {
+                {
+                    let mut s = lock(&self.status);
+                    *s = ConnectorState::default();
+                }
+                self.report();
+                self.wait(None);
+                backoff = BACKOFF_START;
+                continue;
+            }
+            // Just enabled. (While retrying, the last error stays visible.)
+            let just_enabled = lock(&self.status).status == ConnectorStatus::NotConfigured;
+            if just_enabled {
+                self.set_status(ConnectorStatus::Connecting, None);
+            }
+            match self.probe() {
+                Ok(_) => {
+                    backoff = BACKOFF_START;
+                    self.wait(Some(POLL));
+                }
+                Err(_) => {
+                    self.wait(Some(backoff));
+                    backoff = (backoff * 2).min(BACKOFF_MAX);
+                }
+            }
+        }
+    }
+
     fn refresh(&self) -> Result<Vec<Sound>, String> {
-        let xml = pipe::request(soundpad::GET_SOUNDLIST, TIMEOUT)?;
+        let xml = pipe::request(soundpad::GET_SOUNDLIST, self.timeout())?;
         if !xml.contains("<Soundlist") {
             return Err(format!("unexpected answer to GetSoundlist: {xml:.80}"));
         }
@@ -110,9 +254,10 @@ impl State {
     /// Index of the stored sound: from the cache if it is fresh and has the sound, otherwise
     /// from a newly fetched list.
     fn index_of(&self, sound: &detent_core::SoundRef) -> Result<Option<u32>, String> {
+        let max_age = Duration::from_millis(u64::from(self.settings().list_max_age_ms));
         {
             let cache = lock(&self.cache);
-            let fresh = cache.fetched.is_some_and(|t| t.elapsed() < LIST_MAX_AGE);
+            let fresh = cache.fetched.is_some_and(|t| t.elapsed() < max_age);
             if fresh && let Some(i) = soundpad::resolve(&cache.sounds, sound) {
                 return Ok(Some(i));
             }
@@ -137,10 +282,10 @@ impl State {
         let Some(request) = command.request(index) else {
             return;
         };
-        match pipe::request(&request, TIMEOUT) {
+        match pipe::request(&request, self.timeout()) {
             Ok(r) if soundpad::is_success(&r) => {
                 log::info!("soundpad: {request}");
-                *lock(&self.last_warning) = None;
+                self.set_warning(None);
             }
             Ok(r) => self.warn(format!("Soundpad: {request} failed: {}", r.trim())),
             Err(e) => self.warn(format!("Soundpad: {e}")),
@@ -149,7 +294,20 @@ impl State {
 
     fn warn(&self, message: String) {
         log::warn!("{message}");
-        *lock(&self.last_warning) = Some(message);
+        self.set_warning(Some(message));
+        // Perhaps Soundpad went away: let the monitor look now.
+        self.wake();
+    }
+
+    fn set_warning(&self, warning: Option<String>) {
+        {
+            let mut s = lock(&self.status);
+            if s.warning == warning {
+                return;
+            }
+            s.warning = warning;
+        }
+        self.report();
     }
 }
 
@@ -340,12 +498,24 @@ mod tests {
     #[test]
     #[ignore = "needs a running Soundpad"]
     fn live_soundpad_answers() {
-        let soundpad = Soundpad::spawn();
-        let status = soundpad.status();
-        assert!(status.alive, "{status:?}");
+        let soundpad = Soundpad::spawn(SoundpadSettings {
+            enabled: true,
+            ..SoundpadSettings::default()
+        });
+        let (tx, rx) = channel();
+        soundpad.on_status(move |s| {
+            let _ = tx.send(s);
+        });
         let started = Instant::now();
+        let message = soundpad.test().unwrap();
+        println!("{message} in {:?}", started.elapsed());
+        // The monitor reports "connected" with the number of sounds.
+        let connected = rx
+            .iter()
+            .find(|s| s.status == ConnectorStatus::Connected)
+            .unwrap();
+        assert!(connected.detail.unwrap().ends_with("sounds"));
         let sounds = soundpad.sounds().unwrap();
-        println!("{} sounds in {:?}", sounds.len(), started.elapsed());
         assert!(!sounds.is_empty());
         let first = &sounds[0];
         let wanted = detent_core::SoundRef {
@@ -354,7 +524,13 @@ mod tests {
         };
         assert_eq!(soundpad.state.index_of(&wanted), Ok(Some(first.index)));
         // An unknown command gets a 404, not a hang.
-        let r = pipe::request("NoSuchCommand()", TIMEOUT).unwrap();
+        let r = pipe::request("NoSuchCommand()", soundpad.state.timeout()).unwrap();
         assert!(r.starts_with("R-404"), "{r}");
+        // Disabled: back to "not configured".
+        soundpad.apply(SoundpadSettings::default());
+        assert!(
+            rx.iter()
+                .any(|s| s.status == ConnectorStatus::NotConfigured)
+        );
     }
 }

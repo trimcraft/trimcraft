@@ -45,8 +45,8 @@ A virtual control is built from physical inputs and can run actions. The first k
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
   stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
-  (full version, with its remote control) must be running; the editor shows whether it is
-  reachable, and a missing sound or Soundpad is logged and shown in Virtual Controls.
+  (full version, with its remote control) must be running, and the Soundpad connection must be
+  enabled under **Connections**.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
@@ -88,6 +88,20 @@ recorder to see input while the game has focus).
 
 Mapping to a virtual joystick and per-game profiles come in later stages.
 
+## Connections
+
+The **Connections** section lists the programs Detent can control. Soundpad is the first. Each
+connection can be enabled, has its own settings (for Soundpad: timeout per request, how old the
+cached sound list may get), a live status (disabled, connecting, connected, not reachable) and a
+**Test connection** button. While enabled, Detent checks the connection every few seconds and
+reconnects with a growing pause when the program is gone; the number of sounds is shown.
+
+A connection's actions are offered in the action editor only while it is enabled. Actions of a
+connection that is later disabled stay saved, are shown greyed with a link to Connections, and
+are skipped (with a log entry) when they fire. Keyboard and mouse macros need no connection.
+Connection settings are stored in `setup.json`; secrets (future connections such as Discord)
+will be kept in the Windows Credential Manager, not in the file.
+
 ## Layout
 
 | Path | What |
@@ -112,7 +126,7 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 
 Settings live in the app config directory (`%APPDATA%\cloud.breu.detent` on Windows,
 `~/Library/Application Support/cloud.breu.detent` on macOS): `devices.json` (known devices and
-labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder), `values.json`
+labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder, connections), `values.json`
 (current counter values), `control-states.json` (active radio states).
 
 ## CI

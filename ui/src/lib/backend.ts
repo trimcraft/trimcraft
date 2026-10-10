@@ -5,6 +5,8 @@ import type {
   Action,
   AppMeta,
   ButtonPair,
+  Connections,
+  ConnectorId,
   ControlRef,
   DetectorConfig,
   DeviceId,
@@ -20,7 +22,6 @@ import type {
   RecordKind,
   RecorderConfig,
   Sound,
-  SoundpadStatus,
   VirtualControlDef,
   WidgetPosition,
 } from "./types";
@@ -60,7 +61,9 @@ export interface Backend {
   setOverlayWidget(index: number, item: OverlayItem): Promise<void>;
   setOverlayPositions(positions: (WidgetPosition | null)[]): Promise<void>;
   setOverlayEditing(editing: boolean): Promise<void>;
-  soundpadStatus(): Promise<SoundpadStatus>;
+  setConnections(connections: Connections): Promise<void>;
+  /** Checks a connector now; resolves with a message, rejects with the problem. */
+  testConnection(id: ConnectorId): Promise<string>;
   /** Soundpad's live sound list; fails when Soundpad is not reachable. */
   soundpadSounds(): Promise<Sound[]>;
   /** Records into the snapshot's `recorder.result` after a countdown. */
@@ -114,7 +117,8 @@ async function tauriBackend(): Promise<Backend> {
     setOverlayWidget: (index, item) => invoke("set_overlay_widget", { index, item }),
     setOverlayPositions: (positions) => invoke("set_overlay_positions", { positions }),
     setOverlayEditing: (editing) => invoke("set_overlay_editing", { editing }),
-    soundpadStatus: () => invoke("soundpad_status"),
+    setConnections: (connections) => invoke("set_connections", { connections }),
+    testConnection: (id) => invoke("test_connection", { id }),
     soundpadSounds: () => invoke("soundpad_sounds"),
     startRecording: (kind, movement) => invoke("start_recording", { kind, movement }),
     stopRecording: () => invoke("stop_recording"),

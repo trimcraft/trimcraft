@@ -5,6 +5,7 @@
 //! when it happens, independent of how often the UI or overlay redraws.
 
 use crate::action::{Action, Movement};
+use crate::connection::{ConnectionError, Connections, ConnectorId, ConnectorState, ConnectorView};
 use crate::device::DeviceId;
 use crate::device::DeviceKind;
 use crate::encoder::{
@@ -66,6 +67,8 @@ pub enum EngineError {
     Control(#[from] ControlError),
     #[error(transparent)]
     Recorder(#[from] RecorderError),
+    #[error(transparent)]
+    Connection(#[from] ConnectionError),
     #[error("a recording is already running")]
     Recording,
 }
@@ -138,6 +141,9 @@ pub struct EngineSnapshot {
     /// The macro recorder: countdown, recording, or the last result until the UI takes it.
     pub recorder: RecorderView,
     pub recorder_config: RecorderConfig,
+    pub connections: Connections,
+    /// Every connector with its live status.
+    pub connectors: Vec<ConnectorView>,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
 }
@@ -164,6 +170,7 @@ pub struct Engine {
     learn: Learn,
     overlay_editing: bool,
     recorder: RecorderView,
+    connector_states: HashMap<ConnectorId, ConnectorState>,
     dirty: Dirty,
 }
 
@@ -194,6 +201,7 @@ impl Engine {
             learn: Learn::Off,
             overlay_editing: false,
             recorder: RecorderView::default(),
+            connector_states: HashMap::new(),
             dirty: Dirty::default(),
         }
     }
@@ -450,6 +458,17 @@ impl Engine {
             overlay_editing: self.overlay_editing,
             recorder: self.recorder.clone(),
             recorder_config: self.setup.recorder.clone(),
+            connections: self.setup.connections.clone(),
+            connectors: ConnectorId::ALL
+                .iter()
+                .map(|&id| {
+                    ConnectorView::new(
+                        id,
+                        self.setup.connections.enabled(id),
+                        self.connector_states.get(&id),
+                    )
+                })
+                .collect(),
             overlay: self.setup.overlay.clone(),
             detector: self.setup.detector,
         }
@@ -796,6 +815,38 @@ impl Engine {
 
     pub fn stop_learn(&mut self) {
         self.learn = Learn::Off;
+    }
+
+    // --- Connections ----------------------------------------------------------------------
+
+    pub fn connections(&self) -> &Connections {
+        &self.setup.connections
+    }
+
+    pub fn set_connections(&mut self, connections: Connections) -> Result<(), EngineError> {
+        connections.validate()?;
+        self.setup.connections = connections;
+        self.dirty.setup = true;
+        Ok(())
+    }
+
+    /// Stores what the app found out about a connector. Returns whether anything changed.
+    pub fn set_connector_state(&mut self, id: ConnectorId, state: ConnectorState) -> bool {
+        if self.connector_states.get(&id) == Some(&state) {
+            return false;
+        }
+        self.connector_states.insert(id, state);
+        true
+    }
+
+    pub fn connector_state(&self, id: ConnectorId) -> ConnectorState {
+        self.connector_states.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// Whether an action may run now: built-in ones always, others while their connector is
+    /// enabled.
+    pub fn action_enabled(&self, action: &Action) -> bool {
+        self.setup.connections.action_enabled(action)
     }
 
     // --- Macro recorder -------------------------------------------------------------------
@@ -1505,6 +1556,46 @@ mod tests {
         assert_eq!(json["overlayEditing"], false);
         assert_eq!(json["recorder"]["phase"], "idle");
         assert_eq!(json["recorderConfig"]["stopHotkey"], "Ctrl+Shift+F9");
+    }
+
+    #[test]
+    fn connectors_gate_actions_and_show_their_status() {
+        use crate::connection::ConnectorStatus;
+        use crate::soundpad::SoundpadCommand;
+        let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
+        let sound = Action::Soundpad {
+            command: SoundpadCommand::Stop,
+        };
+        let view = |e: &Engine| e.snapshot().connectors[0].clone();
+        assert_eq!(view(&engine).status, ConnectorStatus::NotConfigured);
+        assert!(!engine.action_enabled(&sound));
+        assert!(engine.action_enabled(&tap("A")));
+        let mut c = engine.connections().clone();
+        c.soundpad.enabled = true;
+        engine.take_dirty();
+        engine.set_connections(c.clone()).unwrap();
+        assert!(engine.take_dirty().setup);
+        assert!(engine.action_enabled(&sound));
+        assert_eq!(view(&engine).status, ConnectorStatus::Connecting);
+        let connected = ConnectorState {
+            status: ConnectorStatus::Connected,
+            detail: Some("26 sounds".into()),
+            warning: None,
+        };
+        assert!(engine.set_connector_state(ConnectorId::Soundpad, connected.clone()));
+        assert!(!engine.set_connector_state(ConnectorId::Soundpad, connected));
+        assert_eq!(view(&engine).detail.as_deref(), Some("26 sounds"));
+        let json = serde_json::to_value(engine.snapshot()).unwrap();
+        assert_eq!(json["connections"]["soundpad"]["enabled"], true);
+        assert_eq!(json["connectors"][0]["status"]["state"], "connected");
+        c.soundpad.timeout_ms = 1;
+        assert!(engine.set_connections(c).is_err());
+        // Disabling keeps actions stored but gates them again.
+        let mut off = engine.connections().clone();
+        off.soundpad.enabled = false;
+        engine.set_connections(off).unwrap();
+        assert!(!engine.action_enabled(&sound));
+        assert_eq!(view(&engine).status, ConnectorStatus::NotConfigured);
     }
 
     #[test]

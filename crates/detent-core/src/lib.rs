@@ -5,6 +5,7 @@
 //! [`BackendEvent`]s; the [`Engine`] turns them into the state the UI and the overlay show.
 
 pub mod action;
+pub mod connection;
 pub mod device;
 pub mod encoder;
 pub mod engine;
@@ -23,6 +24,7 @@ pub use action::{
     Action, InputOp, KeyInfo, KeyStep, MouseButton, MouseStep, Movement, PathPoint, Playback,
     RelPoint,
 };
+pub use connection::{Connections, ConnectorId, ConnectorState, ConnectorStatus};
 pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualDriver};
 pub use encoder::{DetectorConfig, EncoderBinding};
 pub use engine::{Dirty, Engine, EngineError, EngineSnapshot};

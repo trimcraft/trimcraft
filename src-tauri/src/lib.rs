@@ -63,9 +63,25 @@ impl Shared {
         self.changed.store(true, Ordering::Relaxed);
     }
 
-    /// Hands the actions the engine emitted to the executor thread, in order.
+    /// Hands the actions the engine emitted to the executor thread, in order. Actions whose
+    /// connection is disabled stay stored but are skipped with a warning.
     fn dispatch(&self, engine: &mut Engine) {
-        let actions = engine.take_actions();
+        let actions: Vec<_> = engine
+            .take_actions()
+            .into_iter()
+            .filter(|request| {
+                let enabled = engine.action_enabled(&request.action);
+                if !enabled {
+                    log::warn!(
+                        "action skipped, its connection is disabled: {} / {}: {}",
+                        request.control,
+                        request.state,
+                        request.action.describe()
+                    );
+                }
+                enabled
+            })
+            .collect();
         if !actions.is_empty() {
             self.executor.submit(actions);
         }
@@ -117,6 +133,7 @@ pub fn run() {
             let backend = detent_input::default_backend();
             let shared = Arc::new(load(&handle, backend.name())?);
             app.manage(shared.clone());
+            report_connectors(&shared);
             overlay::create(&handle, &shared)?;
             start_input(handle, shared, backend);
             Ok(())
@@ -164,7 +181,7 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
     );
     let mut engine = Engine::new(registry, setup, &values);
     engine.restore_active_states(&control_states);
-    let soundpad = Arc::new(Soundpad::spawn());
+    let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
@@ -231,4 +248,16 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
             }
         })
         .expect("spawn engine thread");
+}
+
+/// Connector status changes go into the engine, so both windows see them.
+fn report_connectors(shared: &Arc<Shared>) {
+    let weak = Arc::downgrade(shared);
+    shared.soundpad.on_status(move |state| {
+        let Some(shared) = weak.upgrade() else { return };
+        let mut engine = shared.engine();
+        if engine.set_connector_state(detent_core::ConnectorId::Soundpad, state) {
+            shared.changed.store(true, Ordering::Relaxed);
+        }
+    });
 }

@@ -166,6 +166,9 @@ export interface EngineSnapshot {
   overlayEditing: boolean;
   recorder: RecorderView;
   recorderConfig: RecorderConfig;
+  connections: Connections;
+  /** Every connector with its live status. */
+  connectors: ConnectorView[];
   overlay: OverlayConfig;
   detector: DetectorConfig;
 }
@@ -302,11 +305,36 @@ export interface Sound {
   duration: string;
 }
 
-export interface SoundpadStatus {
-  alive: boolean;
-  error: string | null;
-  /** Last problem running a Soundpad action, until one succeeds again. */
-  lastWarning: string | null;
+// --- Connections (detent-core: connection.rs) -------------------------------------------------
+
+export type ConnectorId = "soundpad";
+
+export type ConnectorStatus =
+  | { state: "notConfigured" }
+  | { state: "connecting" }
+  | { state: "connected" }
+  | { state: "error"; message: string };
+
+export interface ConnectorView {
+  id: ConnectorId;
+  name: string;
+  enabled: boolean;
+  status: ConnectorStatus;
+  /** E.g. "26 sounds". */
+  detail: string | null;
+  /** Last problem running one of its actions. */
+  warning: string | null;
+}
+
+export interface SoundpadSettings {
+  enabled: boolean;
+  timeoutMs: number;
+  listMaxAgeMs: number;
+}
+
+/** Connector settings as stored in setup.json. Secrets never go here (see SecretRef in Rust). */
+export interface Connections {
+  soundpad: SoundpadSettings;
 }
 
 export interface RadioState {

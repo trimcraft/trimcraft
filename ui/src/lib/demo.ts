@@ -143,6 +143,8 @@ export function createDemo(): Backend {
     overlayEditing: false,
     recorder: { session: 0, phase: "idle", kind: null, movement: "absolute", result: null, error: null },
     recorderConfig: { stopHotkey: "Ctrl+Shift+F9", tolerance: 2, sampleIntervalMs: 8 },
+    connections: { soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 } },
+    connectors: [{ id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null }],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
   };
@@ -440,7 +442,24 @@ export function createDemo(): Backend {
       await ok();
     },
     setOverlayEditing: async (editing) => { s.overlayEditing = editing; await ok(); },
-    soundpadStatus: async () => ({ alive: true, error: null, lastWarning: null }),
+    async setConnections(connections) {
+      const sp = connections.soundpad;
+      if (sp.timeoutMs < 100 || sp.timeoutMs > 5000) throw new Error("timeout must be between 100 and 5000 ms");
+      const enabling = sp.enabled && !s.connections.soundpad.enabled;
+      s.connections = structuredClone(connections);
+      const c = s.connectors[0]!;
+      c.enabled = sp.enabled;
+      if (!sp.enabled) Object.assign(c, { status: { state: "notConfigured" }, detail: null, warning: null });
+      else if (enabling) {
+        c.status = { state: "connecting" };
+        setTimeout(() => {
+          if (s.connections.soundpad.enabled) Object.assign(c, { status: { state: "connected" }, detail: `${DEMO_SOUNDS.length} sounds` });
+          emit();
+        }, 800);
+      }
+      emit();
+    },
+    testConnection: async () => `Connected, ${DEMO_SOUNDS.length} sounds (demo)`,
     soundpadSounds: async () => structuredClone(DEMO_SOUNDS),
     async startRecording(kind, movement) {
       if (s.recorder.phase !== "idle") throw new Error("a recording is already running");

@@ -1,12 +1,11 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
-use crate::soundpad::SoundpadStatus;
 use crate::{Meta, Shared, overlay};
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
-    Action, ActionRequest, Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId,
-    EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem, Phase, RadioCommand,
-    Sound, VirtualControl, WidgetPosition,
+    Action, ActionRequest, Anchor, ButtonPair, Connections, ConnectorId, ControlRef,
+    DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem,
+    Phase, RadioCommand, Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -46,7 +45,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_overlay_widget,
         set_overlay_positions,
         set_overlay_editing,
-        soundpad_status,
+        set_connections,
+        test_connection,
         soundpad_sounds,
         start_recording,
         stop_recording,
@@ -325,14 +325,27 @@ fn set_overlay_editing(app: AppHandle, shared: State<'_, Arc<Shared>>, editing: 
     Ok(())
 }
 
-/// Whether Soundpad is reachable, plus the last problem running a Soundpad action. Async:
-/// the pipe round trip must not block the UI thread.
+/// Saves connector settings (Connections page) and applies them.
 #[tauri::command]
-async fn soundpad_status(shared: State<'_, Arc<Shared>>) -> Res<SoundpadStatus> {
-    let soundpad = shared.soundpad.clone();
-    tauri::async_runtime::spawn_blocking(move || soundpad.status())
-        .await
-        .map_err(|e| e.to_string())
+fn set_connections(shared: State<'_, Arc<Shared>>, connections: Connections) -> Res<()> {
+    let soundpad = connections.soundpad.clone();
+    with(&shared, |e| e.set_connections(connections))?;
+    shared.soundpad.apply(soundpad);
+    Ok(())
+}
+
+/// "Test connection": checks the connector now. Async: the pipe round trip must not block
+/// the UI thread.
+#[tauri::command]
+async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res<String> {
+    match id {
+        ConnectorId::Soundpad => {
+            let soundpad = shared.soundpad.clone();
+            tauri::async_runtime::spawn_blocking(move || soundpad.test())
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    }
 }
 
 /// Soundpad's sound list ("All sounds"), for the sound picker.
@@ -386,6 +399,9 @@ fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -
 #[tauri::command]
 fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     action.normalize().map_err(|e| e.to_string())?;
+    if !shared.engine().action_enabled(&action) {
+        return Err("this action's connection is disabled; enable it under Connections".into());
+    }
     let shared = Arc::clone(&shared);
     std::thread::Builder::new()
         .name("detent-test-play".into())
@@ -488,6 +504,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sp.radio().states[0].on_deactivate.len(), 5);
+
+        // Connections.
+        let connections: Connections = serde_json::from_str(
+            r#"{"soundpad":{"enabled":true,"timeoutMs":800,"listMaxAgeMs":10000}}"#,
+        )
+        .unwrap();
+        assert!(connections.validate().is_ok() && connections.soundpad.enabled);
+        let id: ConnectorId = serde_json::from_str(r#""soundpad""#).unwrap();
+        assert_eq!(id, ConnectorId::Soundpad);
 
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();

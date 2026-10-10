@@ -43,6 +43,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
   `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
+  `connection` (connector settings, status, gating of connector actions; secrets only by
+  reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
   `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
@@ -51,7 +53,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
-  `soundpad.rs` (Soundpad pipe client and worker thread), `recorder.rs` (macro recorder:
+  `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
+  `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).

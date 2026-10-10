@@ -102,15 +102,41 @@ export type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 export type OverlayWidget =
   | { type: "control"; device: DeviceId; control: ControlRef; label: string | null }
   | { type: "function"; function: string }
-  | { type: "virtualControl"; control: string };
+  | { type: "radio"; control: string; layout: RadioLayout };
+
+export type RadioLayout = "vertical" | "horizontal";
+
+/** Top-left corner as fractions (0..1) of the overlay monitor. */
+export interface WidgetPosition {
+  x: number;
+  y: number;
+}
+
+/** A widget plus where it is; `position: null` stacks it in the anchored corner. */
+export type OverlayItem = OverlayWidget & { position: WidgetPosition | null };
+
+export interface MonitorRef {
+  name: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface MonitorInfo extends MonitorRef {
+  primary: boolean;
+  scale: number;
+}
 
 export interface OverlayConfig {
   visible: boolean;
   hotkey: string;
+  /** Null: primary monitor. */
+  monitor: MonitorRef | null;
   anchor: Anchor;
   margin: number;
   scale: number;
-  widgets: OverlayWidget[];
+  widgets: OverlayItem[];
 }
 
 export interface DetectorConfig {
@@ -137,6 +163,7 @@ export interface EngineSnapshot {
   virtualControls: VirtualControlView[];
   /** Null unless learn mode is on or just captured something. */
   learn: LearnView | null;
+  overlayEditing: boolean;
   overlay: OverlayConfig;
   detector: DetectorConfig;
 }

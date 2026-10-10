@@ -56,7 +56,7 @@
   }
 
   function onOverlay(id: string): boolean {
-    return snapshot.overlay.widgets.some((w) => w.type === "virtualControl" && w.control === id);
+    return snapshot.overlay.widgets.some((w) => w.type === "radio" && w.control === id);
   }
 
   const command = (id: string, c: RadioCommand) => run(async () => (await backend()).commandRadio(id, c));

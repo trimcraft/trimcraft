@@ -20,6 +20,11 @@ with an in-game overlay.
 The overlay never touches the game process. It works over games in windowed or borderless
 fullscreen mode, not exclusive fullscreen.
 
+The overlay covers one monitor of your choice (primary by default). Every widget can be placed
+freely: press **Edit layout**, drag the widgets on the overlay, then **Done** (or Esc). Positions
+are stored relative to the monitor, so they survive resolution changes; X/Y can also be typed in.
+Widgets that were never placed stay stacked in the chosen corner, as in earlier versions.
+
 ## Virtual controls
 
 The main window has two sections: **Hardware Test** (everything above) and **Virtual Controls**.
@@ -36,6 +41,8 @@ A virtual control is built from physical inputs and can run actions. The first k
   that read DirectInput or RawInput see them. Every executed action is logged.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
+- On the overlay a radio shows its name and all its states, vertically or horizontally, with the
+  active state highlighted.
 
 Windows does not deliver synthesised input to programs running with higher privileges: if a
 game runs as administrator, Detent must too for its macros to reach the game.

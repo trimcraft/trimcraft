@@ -7,7 +7,6 @@
   import EncoderPanel from "./components/EncoderPanel.svelte";
   import FunctionPanel from "./components/FunctionPanel.svelte";
   import OverlayPanel from "./components/OverlayPanel.svelte";
-  import OverlayWidgets from "./components/OverlayWidgets.svelte";
   import VirtualControlsView from "./components/VirtualControlsView.svelte";
 
   type Section = "hardware" | "controls";
@@ -88,10 +87,7 @@
     <main class="single">
       <div class="content">
         <VirtualControlsView {snapshot} />
-        <section class="panel">
-          <h2>Overlay preview</h2>
-          <div class="preview"><OverlayWidgets {snapshot} /></div>
-        </section>
+        <OverlayPanel {snapshot} />
       </div>
     </main>
   {/if}
@@ -112,6 +108,5 @@
   .info { font-size: 11px; word-break: break-all; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
   .banner { padding: 8px 16px; margin: 0; }
   .pad { padding: 16px; }
-  .preview { background: repeating-linear-gradient(45deg, #1c2128, #1c2128 10px, #20262e 10px, #20262e 20px); padding: 12px; border-radius: 6px; }
   @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
 </style>

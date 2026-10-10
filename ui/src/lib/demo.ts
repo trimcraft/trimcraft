@@ -9,6 +9,7 @@ import type {
   FunctionView,
   HatDirection,
   KeyInfo,
+  MonitorInfo,
   PulseStats,
   Radio,
   Trigger,
@@ -35,6 +36,11 @@ const KEY_NAMES = [
   "Comma", "Period", "Slash", "IntlBackslash",
 ];
 const DEMO_KEYS: KeyInfo[] = KEY_NAMES.map((name) => ({ name, scan: 0, extended: false }));
+
+const DEMO_MONITORS: MonitorInfo[] = [
+  { name: "DEMO-1", x: 0, y: 0, width: 2560, height: 1440, primary: true, scale: 1 },
+  { name: "DEMO-2", x: 2560, y: 0, width: 1920, height: 1080, primary: false, scale: 1 },
+];
 
 function device(id: string, name: string, vid: number, pid: number, axes: number, buttons: number, hats: number, virt = false): DeviceSnapshot {
   return {
@@ -72,7 +78,8 @@ export function createDemo(): Backend {
     functions: [],
     virtualControls: [],
     learn: null,
-    overlay: { visible: true, hotkey: "Ctrl+Shift+F10", anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
+    overlayEditing: false,
+    overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
   };
   const listeners = new Set<(s: EngineSnapshot) => void>();
@@ -261,13 +268,13 @@ export function createDemo(): Backend {
     },
     async toggleOverlayControl(device, control) {
       const i = s.overlay.widgets.findIndex((w) => w.type === "control" && w.device === device && w.control.type === control.type && w.control.index === control.index);
-      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "control", device, control, label: null });
+      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "control", device, control, label: null, position: null });
       emit();
       return i < 0;
     },
     async toggleOverlayFunction(id) {
       const i = s.overlay.widgets.findIndex((w) => w.type === "function" && w.function === id);
-      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "function", function: id });
+      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "function", function: id, position: null });
       emit();
       return i < 0;
     },
@@ -296,7 +303,7 @@ export function createDemo(): Backend {
       if (!c.id) {
         c.id = `vc-${nextVc++}`;
         s.virtualControls.push({ ...c, active: null, activeName: null });
-        s.overlay.widgets.push({ type: "virtualControl", control: c.id });
+        s.overlay.widgets.push({ type: "radio", control: c.id, layout: "vertical", position: null });
       } else {
         const i = s.virtualControls.findIndex((x) => x.id === c.id);
         if (i < 0) throw new Error(`unknown virtual control ${c.id}`);
@@ -309,7 +316,7 @@ export function createDemo(): Backend {
     },
     async removeVirtualControl(id) {
       s.virtualControls = s.virtualControls.filter((c) => c.id !== id);
-      s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "virtualControl" && w.control === id));
+      s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "radio" && w.control === id));
       emit();
     },
     async setRadioActive(id, state) {
@@ -325,12 +332,29 @@ export function createDemo(): Backend {
       emit();
     },
     async toggleOverlayVirtualControl(id) {
-      const i = s.overlay.widgets.findIndex((w) => w.type === "virtualControl" && w.control === id);
-      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "virtualControl", control: id });
+      const i = s.overlay.widgets.findIndex((w) => w.type === "radio" && w.control === id);
+      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "radio", control: id, layout: "vertical", position: null });
       emit();
       return i < 0;
     },
     startLearn: async () => { s.learn = { captured: null }; await ok(); },
     stopLearn: async () => { s.learn = null; await ok(); },
+    listMonitors: async () => DEMO_MONITORS,
+    async setOverlayMonitor(monitor) {
+      s.overlay.monitor = monitor;
+      await ok();
+    },
+    async setOverlayWidget(index, item) {
+      if (!s.overlay.widgets[index]) throw new Error(`overlay widget ${index} does not exist`);
+      s.overlay.widgets[index] = structuredClone(item);
+      await ok();
+    },
+    async setOverlayPositions(positions) {
+      if (positions.length !== s.overlay.widgets.length) throw new Error("widget count changed");
+      const plain: typeof positions = JSON.parse(JSON.stringify(positions));
+      s.overlay.widgets.forEach((w, i) => (w.position = plain[i] ?? null));
+      await ok();
+    },
+    setOverlayEditing: async (editing) => { s.overlayEditing = editing; await ok(); },
   };
 }

@@ -6,6 +6,7 @@
   import type { EngineSnapshot, WidgetPosition } from "./lib/types";
   import { backend, errorText } from "./lib/backend";
   import OverlayWidget from "./components/OverlayWidget.svelte";
+  import { countdown } from "./lib/recording.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
   let error = $state("");
@@ -29,6 +30,8 @@
   });
 
   let editing = $derived(snapshot?.overlayEditing ?? false);
+  let recording = $derived(snapshot?.recorder.phase ?? "idle");
+  const recCountdown = countdown(() => recording === "countdown");
   let items = $derived(snapshot?.overlay.widgets.map((item, index) => ({ item, index })) ?? []);
   let placed = $derived(items.filter(({ item }) => item.position !== null));
   let stacked = $derived(items.filter(({ item }) => item.position === null));
@@ -117,6 +120,11 @@
 
 {#if snapshot}
   <div class="surface" class:editing>
+    {#if recording !== "idle"}
+      <div class="rec" class:live={recording === "recording"}>
+        ● {recording === "countdown" ? `REC in ${recCountdown.left}` : "REC"}
+      </div>
+    {/if}
     {#if editing}
       <div class="toolbar">
         <span>Layout edit mode: drag the widgets.</span>
@@ -170,6 +178,22 @@
   .frame { outline: 2px solid var(--accent); outline-offset: 2px; }
   .placed.frame { cursor: grab; user-select: none; }
   .placed.moving { cursor: grabbing; opacity: 0.85; }
+  .rec {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(12, 15, 19, 0.8);
+    color: #ff4d42;
+    border: 2px solid #ff4d42;
+    border-radius: 14px;
+    padding: 2px 14px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    z-index: 20;
+  }
+  .rec.live { animation: rec-blink 1s steps(2, start) infinite; }
+  @keyframes rec-blink { to { opacity: 0.45; } }
   .toolbar {
     position: absolute;
     top: 16px;

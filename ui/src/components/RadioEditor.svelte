@@ -119,8 +119,8 @@
         <button class="small" disabled={draft.kind.states.length <= 1} onclick={() => removeState(i)}>Delete</button>
       </div>
       <TriggerSlot {snapshot} label="Select this state" bind:triggers={state.select} learning={learnKey === `select:${i}`} onlearn={() => learn(`select:${i}`)} oncancel={cancelLearn} />
-      <ActionList label="On activate" bind:actions={state.onActivate} {keys} />
-      <ActionList label="On deactivate" bind:actions={state.onDeactivate} {keys} />
+      <ActionList label="On activate" bind:actions={state.onActivate} {keys} {snapshot} />
+      <ActionList label="On deactivate" bind:actions={state.onDeactivate} {keys} {snapshot} />
     </div>
   {/each}
   <div class="row">

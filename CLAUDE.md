@@ -44,12 +44,15 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
   `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
-  `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `engine`
+  `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `path`
+  (mouse path simplification, playback schedule, monitor and SendInput coordinates),
+  `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
-  `soundpad.rs` (Soundpad pipe client and worker thread), `overlay.rs` (overlay window, hotkey),
+  `soundpad.rs` (Soundpad pipe client and worker thread), `recorder.rs` (macro recorder:
+  low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
 - `ui/src`: `App.svelte` (main window: Hardware Test and Virtual Controls), `Overlay.svelte`
@@ -63,5 +66,8 @@ or bump `SETUP_SCHEMA_VERSION`.
 ## Testing on Windows
 
 Only the Windows machine can verify: real devices through DirectInput/RawInput, the overlay
-over a borderless game, the global hotkey while the game has focus, and encoder pulse timing.
+over a borderless game, the global hotkey while the game has focus, encoder pulse timing, the
+macro recorder (low-level hooks, Raw Input) and Soundpad. Two ignored tests need such a machine:
+`cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
+without playing anything).
 Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.

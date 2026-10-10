@@ -11,13 +11,18 @@ pub mod engine;
 pub mod event;
 pub mod function;
 pub mod overlay;
+pub mod path;
+pub mod recording;
 pub mod registry;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
 pub mod virtual_control;
 
-pub use action::{Action, InputOp, KeyInfo, KeyStep, MouseButton, MouseStep};
+pub use action::{
+    Action, InputOp, KeyInfo, KeyStep, MouseButton, MouseStep, Movement, PathPoint, Playback,
+    RelPoint,
+};
 pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualDriver};
 pub use encoder::{DetectorConfig, EncoderBinding};
 pub use engine::{Dirty, Engine, EngineError, EngineSnapshot};
@@ -27,6 +32,7 @@ pub use overlay::{
     Anchor, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget, RadioLayout,
     WidgetPosition,
 };
+pub use path::Screens;
 pub use registry::DeviceRegistry;
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};

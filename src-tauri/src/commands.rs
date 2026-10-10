@@ -2,9 +2,11 @@
 
 use crate::soundpad::SoundpadStatus;
 use crate::{Meta, Shared, overlay};
+use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
-    Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo,
-    MonitorRef, OverlayItem, RadioCommand, Sound, VirtualControl, WidgetPosition,
+    Action, ActionRequest, Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId,
+    EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem, Phase, RadioCommand,
+    Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -46,6 +48,12 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_overlay_editing,
         soundpad_status,
         soundpad_sounds,
+        start_recording,
+        stop_recording,
+        cancel_recording,
+        clear_recording,
+        set_recorder_config,
+        test_action,
     ]
 }
 
@@ -336,6 +344,66 @@ async fn soundpad_sounds(shared: State<'_, Arc<Shared>>) -> Res<Vec<Sound>> {
         .map_err(|e| e.to_string())?
 }
 
+/// Starts recording a macro after the countdown. Keyboard macros record keys, mouse macros
+/// buttons, wheel and movement (absolute or relative).
+#[tauri::command]
+fn start_recording(
+    app: AppHandle,
+    shared: State<'_, Arc<Shared>>,
+    kind: RecordKind,
+    movement: Movement,
+) -> Res<()> {
+    shared.recorder.start(&app, &shared, kind, movement)
+}
+
+/// The Stop button: ends the recording and keeps it.
+#[tauri::command]
+fn stop_recording(shared: State<'_, Arc<Shared>>) {
+    shared.recorder.stop();
+}
+
+#[tauri::command]
+fn cancel_recording(shared: State<'_, Arc<Shared>>) {
+    shared.recorder.cancel();
+}
+
+/// The editor took the recording (or dismissed its error).
+#[tauri::command]
+fn clear_recording(shared: State<'_, Arc<Shared>>) -> Res<()> {
+    with(&shared, |e| {
+        e.clear_recording();
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -> Res<()> {
+    with(&shared, |e| e.set_recorder_config(config))
+}
+
+/// Plays an action (e.g. the macro being edited) after the recording countdown, so the user
+/// can switch to the game first.
+#[tauri::command]
+fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
+    action.normalize().map_err(|e| e.to_string())?;
+    let shared = Arc::clone(&shared);
+    std::thread::Builder::new()
+        .name("detent-test-play".into())
+        .spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(
+                detent_core::recording::COUNTDOWN_MS,
+            ));
+            shared.executor.submit(vec![ActionRequest {
+                control: "Test play".into(),
+                state: "editor".into(),
+                phase: Phase::Activate,
+                action,
+            }]);
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! The UI sends these payloads (see ui/src/lib/backend.ts); they must deserialise.
@@ -420,6 +488,34 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sp.radio().states[0].on_deactivate.len(), 5);
+
+        // Recorder and test play.
+        let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
+        let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();
+        let _: Movement = serde_json::from_str(r#""absolute""#).unwrap();
+        let _: Movement = serde_json::from_str(r#""relative""#).unwrap();
+        let config: RecorderConfig = serde_json::from_str(
+            r#"{"stopHotkey":"Ctrl+Shift+F9","tolerance":2.5,"sampleIntervalMs":8}"#,
+        )
+        .unwrap();
+        assert!(config.validate().is_ok());
+        let mut recorded: Action = serde_json::from_str(
+            r#"{"type":"mouseMacro","movement":"absolute",
+                "playback":{"speedPercent":200,"minDelayMs":10,"endpointOnly":true},
+                "monitor":{"name":"\\\\.\\DISPLAY2","x":3440,"y":0,"width":1440,"height":3440},
+                "steps":[{"type":"moveTo","x":0.5,"y":0.5},
+                  {"type":"movePath","points":[{"x":0.1,"y":0.1,"t":0},{"x":0.2,"y":0.3,"t":16}]},
+                  {"type":"moveRelativePath","points":[{"dx":3,"dy":-1,"t":0}]},
+                  {"type":"click","button":"left","holdMs":40},{"type":"delay","ms":120}]}"#,
+        )
+        .unwrap();
+        recorded.normalize().unwrap();
+        let mut keys: Action = serde_json::from_str(
+            r#"{"type":"keyboardMacro","playback":{"speedPercent":100,"minDelayMs":0,"endpointOnly":false},
+                "steps":[{"type":"keyTap","key":"W","holdMs":890}]}"#,
+        )
+        .unwrap();
+        keys.normalize().unwrap();
         for command in [
             r#""increment""#,
             r#""decrement""#,

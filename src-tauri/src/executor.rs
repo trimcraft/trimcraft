@@ -7,24 +7,26 @@
 //! DirectInput or RawInput see them. Other platforms only log what would be sent, so the app
 //! still builds and runs for development.
 
+use crate::overlay;
 use crate::soundpad::Soundpad;
 use detent_core::{Action, ActionRequest, InputOp, Phase};
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tauri::AppHandle;
 
 pub struct Executor {
     queue: Sender<ActionRequest>,
 }
 
 impl Executor {
-    pub fn spawn(soundpad: Arc<Soundpad>) -> Self {
+    pub fn spawn(app: AppHandle, soundpad: Arc<Soundpad>) -> Self {
         let (queue, requests) = channel::<ActionRequest>();
         std::thread::Builder::new()
             .name("detent-actions".into())
             .spawn(move || {
                 for request in requests {
-                    run(&request, &soundpad);
+                    run(&app, &request, &soundpad);
                 }
             })
             .expect("spawn action thread");
@@ -40,7 +42,7 @@ impl Executor {
     }
 }
 
-fn run(request: &ActionRequest, soundpad: &Soundpad) {
+fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad) {
     let phase = match request.phase {
         Phase::Activate => "activate",
         Phase::Deactivate => "deactivate",
@@ -55,17 +57,31 @@ fn run(request: &ActionRequest, soundpad: &Soundpad) {
         soundpad.submit(command.clone());
         return;
     }
-    let (ops, unknown) = request.action.expand();
-    for key in unknown {
-        log::warn!("action: unknown key \"{key}\" skipped");
+    // Absolute moves need the current monitor layout; it is queried per macro, so a changed
+    // arrangement is picked up.
+    let screens = if request.action.needs_screens() {
+        overlay::screens(app)
+    } else {
+        None
+    };
+    let (ops, warnings) = request.action.expand(screens.as_ref());
+    for warning in warnings {
+        log::warn!("action: {warning}");
     }
-    // Consecutive inputs go out in one call, so nothing else can interleave with them.
+    // Consecutive inputs go out in one call, so nothing else can interleave with them. Waits
+    // are measured from the macro's start, so the time spent sending (and the sleep timer's
+    // granularity) does not add up over a long recorded path.
+    let start = Instant::now();
+    let mut due = Duration::ZERO;
     let mut batch = Vec::new();
     for op in ops {
         if let InputOp::Sleep { ms } = op {
             platform::send(&batch);
             batch.clear();
-            std::thread::sleep(Duration::from_millis(u64::from(ms)));
+            due += Duration::from_millis(u64::from(ms));
+            if let Some(wait) = due.checked_sub(start.elapsed()) {
+                std::thread::sleep(wait);
+            }
         } else {
             batch.push(op);
         }
@@ -78,10 +94,10 @@ mod platform {
     use detent_core::{InputOp, MouseButton};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-        KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-        MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-        MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
-        SendInput,
+        KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL,
+        MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT, SendInput,
     };
 
     const XBUTTON1: u32 = 1;
@@ -158,6 +174,12 @@ mod platform {
                 MOUSEEVENTF_WHEEL,
             ),
             InputOp::Move { dx, dy } => mouse(dx, dy, 0, MOUSEEVENTF_MOVE),
+            InputOp::MoveAbsolute { x, y } => mouse(
+                x,
+                y,
+                0,
+                MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+            ),
             InputOp::Sleep { .. } => return None,
         })
     }

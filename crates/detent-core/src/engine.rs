@@ -4,6 +4,7 @@
 //! The engine is driven by backend events one at a time, so every encoder pulse is counted
 //! when it happens, independent of how often the UI or overlay redraws.
 
+use crate::action::{Action, Movement};
 use crate::device::DeviceId;
 use crate::device::DeviceKind;
 use crate::encoder::{
@@ -12,6 +13,9 @@ use crate::encoder::{
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
 use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
+use crate::recording::{
+    RecordKind, RecorderConfig, RecorderError, RecorderPhase, RecorderView, RecordingResult,
+};
 use crate::registry::DeviceRegistry;
 use crate::setup::{ButtonPair, Setup};
 use crate::state::{ButtonEdge, HatEdge};
@@ -60,6 +64,10 @@ pub enum EngineError {
     Spec(#[from] SpecError),
     #[error(transparent)]
     Control(#[from] ControlError),
+    #[error(transparent)]
+    Recorder(#[from] RecorderError),
+    #[error("a recording is already running")]
+    Recording,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -127,6 +135,9 @@ pub struct EngineSnapshot {
     pub learn: Option<LearnView>,
     /// The overlay is interactive so widgets can be dragged.
     pub overlay_editing: bool,
+    /// The macro recorder: countdown, recording, or the last result until the UI takes it.
+    pub recorder: RecorderView,
+    pub recorder_config: RecorderConfig,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
 }
@@ -152,6 +163,7 @@ pub struct Engine {
     actions: Vec<ActionRequest>,
     learn: Learn,
     overlay_editing: bool,
+    recorder: RecorderView,
     dirty: Dirty,
 }
 
@@ -181,6 +193,7 @@ impl Engine {
             actions: Vec::new(),
             learn: Learn::Off,
             overlay_editing: false,
+            recorder: RecorderView::default(),
             dirty: Dirty::default(),
         }
     }
@@ -435,6 +448,8 @@ impl Engine {
                 }),
             },
             overlay_editing: self.overlay_editing,
+            recorder: self.recorder.clone(),
+            recorder_config: self.setup.recorder.clone(),
             overlay: self.setup.overlay.clone(),
             detector: self.setup.detector,
         }
@@ -783,6 +798,83 @@ impl Engine {
         self.learn = Learn::Off;
     }
 
+    // --- Macro recorder -------------------------------------------------------------------
+    //
+    // The app runs the hooks and the countdown; the engine only holds the state the windows
+    // show, and the result until the editor has taken it.
+
+    pub fn recorder(&self) -> &RecorderView {
+        &self.recorder
+    }
+
+    /// Whether a recording is counting down or running.
+    pub fn recording_active(&self) -> bool {
+        self.recorder.phase != RecorderPhase::Idle
+    }
+
+    /// Starts a recording session (in its countdown). Returns the session number.
+    pub fn begin_recording(
+        &mut self,
+        kind: RecordKind,
+        movement: Movement,
+    ) -> Result<u64, EngineError> {
+        if self.recording_active() {
+            return Err(EngineError::Recording);
+        }
+        let session = self.recorder.session + 1;
+        self.recorder = RecorderView {
+            session,
+            phase: RecorderPhase::Countdown,
+            kind: Some(kind),
+            movement,
+            result: None,
+            error: None,
+        };
+        Ok(session)
+    }
+
+    /// Moves `session` to another phase; ignored if that session is over.
+    pub fn set_recording_phase(&mut self, session: u64, phase: RecorderPhase) {
+        if self.recorder.session == session && self.recording_active() {
+            self.recorder.phase = phase;
+        }
+    }
+
+    /// Ends `session` with the recorded macro, or without one (cancelled or failed).
+    pub fn finish_recording(
+        &mut self,
+        session: u64,
+        result: Result<Option<(Action, Vec<String>)>, String>,
+    ) {
+        if self.recorder.session != session {
+            return;
+        }
+        self.recorder.phase = RecorderPhase::Idle;
+        match result {
+            Ok(recorded) => {
+                self.recorder.result = recorded.map(|(action, notes)| RecordingResult {
+                    session,
+                    action,
+                    notes,
+                });
+            }
+            Err(e) => self.recorder.error = Some(e),
+        }
+    }
+
+    /// The editor took the result (or dismissed the error).
+    pub fn clear_recording(&mut self) {
+        self.recorder.result = None;
+        self.recorder.error = None;
+    }
+
+    pub fn set_recorder_config(&mut self, config: RecorderConfig) -> Result<(), EngineError> {
+        config.validate()?;
+        self.setup.recorder = config;
+        self.dirty.setup = true;
+        Ok(())
+    }
+
     fn virtual_control(&self, id: &str) -> Result<&VirtualControl, EngineError> {
         self.setup
             .virtual_controls
@@ -1013,12 +1105,10 @@ mod tests {
     }
 
     fn tap(key: &str) -> Action {
-        Action::KeyboardMacro {
-            steps: vec![KeyStep::KeyTap {
-                key: key.into(),
-                hold_ms: None,
-            }],
-        }
+        Action::keyboard(vec![KeyStep::KeyTap {
+            key: key.into(),
+            hold_ms: None,
+        }])
     }
 
     fn button(index: u16) -> Trigger {
@@ -1088,7 +1178,7 @@ mod tests {
             .take_actions()
             .into_iter()
             .flat_map(|a| match a.action {
-                Action::KeyboardMacro { steps } => steps,
+                Action::KeyboardMacro { steps, .. } => steps,
                 Action::MouseMacro { .. } | Action::Soundpad { .. } => vec![],
             })
             .filter_map(|s| match s {
@@ -1413,6 +1503,58 @@ mod tests {
         assert_eq!(json["learn"]["captured"], serde_json::Value::Null);
         assert_eq!(json["overlay"]["widgets"][0]["type"], "radio");
         assert_eq!(json["overlayEditing"], false);
+        assert_eq!(json["recorder"]["phase"], "idle");
+        assert_eq!(json["recorderConfig"]["stopHotkey"], "Ctrl+Shift+F9");
+    }
+
+    #[test]
+    fn recorder_sessions_hold_their_result_until_taken() {
+        let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
+        let s1 = engine
+            .begin_recording(RecordKind::Keyboard, Movement::Absolute)
+            .unwrap();
+        assert!(engine.recording_active());
+        assert_eq!(
+            engine.begin_recording(RecordKind::Mouse, Movement::Relative),
+            Err(EngineError::Recording)
+        );
+        engine.set_recording_phase(s1, RecorderPhase::Recording);
+        assert_eq!(engine.snapshot().recorder.phase, RecorderPhase::Recording);
+        engine.finish_recording(s1, Ok(Some((tap("A"), vec!["note".into()]))));
+        let view = engine.snapshot().recorder;
+        assert_eq!(view.phase, RecorderPhase::Idle);
+        let result = view.result.unwrap();
+        assert_eq!((result.session, result.action), (s1, tap("A")));
+        // A late message from an old session changes nothing.
+        let s2 = engine
+            .begin_recording(RecordKind::Mouse, Movement::Relative)
+            .unwrap();
+        assert!(engine.recorder().result.is_none());
+        engine.finish_recording(s1, Err("old".into()));
+        engine.set_recording_phase(s1, RecorderPhase::Idle);
+        assert_eq!(engine.recorder().phase, RecorderPhase::Countdown);
+        engine.finish_recording(s2, Err("hooks failed".into()));
+        assert_eq!(engine.recorder().error.as_deref(), Some("hooks failed"));
+        engine.clear_recording();
+        assert_eq!(engine.recorder().error, None);
+        // Settings are validated and saved.
+        assert!(
+            engine
+                .set_recorder_config(RecorderConfig {
+                    stop_hotkey: "Ctrl+Nope".into(),
+                    ..RecorderConfig::default()
+                })
+                .is_err()
+        );
+        engine.take_dirty();
+        engine
+            .set_recorder_config(RecorderConfig {
+                stop_hotkey: "Alt+F12".into(),
+                ..RecorderConfig::default()
+            })
+            .unwrap();
+        assert!(engine.take_dirty().setup);
+        assert_eq!(engine.setup().recorder.stop_hotkey, "Alt+F12");
     }
 
     #[test]

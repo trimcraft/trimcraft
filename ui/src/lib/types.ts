@@ -164,6 +164,8 @@ export interface EngineSnapshot {
   /** Null unless learn mode is on or just captured something. */
   learn: LearnView | null;
   overlayEditing: boolean;
+  recorder: RecorderView;
+  recorderConfig: RecorderConfig;
   overlay: OverlayConfig;
   detector: DetectorConfig;
 }
@@ -201,12 +203,77 @@ export type MouseStep =
   | { type: "click"; button: MouseButton; holdMs: number | null }
   | { type: "wheel"; delta: number }
   | { type: "moveRelative"; dx: number; dy: number }
+  /** Jump to a position, as fractions of the macro's monitor. */
+  | { type: "moveTo"; x: number; y: number }
+  /** Recorded absolute movement. */
+  | { type: "movePath"; points: PathPoint[] }
+  /** Recorded relative movement (mouse-look). */
+  | { type: "moveRelativePath"; points: RelPoint[] }
   | { type: "delay"; ms: number };
 
-export type Action =
-  | { type: "keyboardMacro"; steps: KeyStep[] }
-  | { type: "mouseMacro"; steps: MouseStep[] }
-  | { type: "soundpad"; command: SoundpadCommand };
+/** Fractions of the macro's monitor; `t` in ms after the path starts. */
+export interface PathPoint {
+  x: number;
+  y: number;
+  t: number;
+}
+
+/** Offset in mickeys from where the path starts; `t` in ms after the path starts. */
+export interface RelPoint {
+  dx: number;
+  dy: number;
+  t: number;
+}
+
+/** How a mouse macro records movement. */
+export type Movement = "absolute" | "relative";
+
+export interface Playback {
+  /** 100 = recorded speed; scales waits and paths, not hold times. */
+  speedPercent: number;
+  /** Waits shorter than this are skipped. */
+  minDelayMs: number;
+  /** Absolute paths jump straight to their end. */
+  endpointOnly: boolean;
+}
+
+export type KeyboardMacro = { type: "keyboardMacro"; steps: KeyStep[]; playback: Playback };
+export type MouseMacro = {
+  type: "mouseMacro";
+  steps: MouseStep[];
+  playback: Playback;
+  movement: Movement;
+  /** Monitor absolute positions refer to; null = primary. */
+  monitor: MonitorRef | null;
+};
+
+export type Action = KeyboardMacro | MouseMacro | { type: "soundpad"; command: SoundpadCommand };
+
+// --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
+
+export type RecordKind = "keyboard" | "mouse";
+
+export interface RecorderConfig {
+  stopHotkey: string;
+  /** Pixels (mickeys for relative movement) a simplified path may deviate. */
+  tolerance: number;
+  sampleIntervalMs: number;
+}
+
+export interface RecordingResult {
+  session: number;
+  action: KeyboardMacro | MouseMacro;
+  notes: string[];
+}
+
+export interface RecorderView {
+  session: number;
+  phase: "idle" | "countdown" | "recording";
+  kind: RecordKind | null;
+  movement: Movement;
+  result: RecordingResult | null;
+  error: string | null;
+}
 
 // --- Soundpad (detent-core: soundpad.rs) ------------------------------------------------------
 

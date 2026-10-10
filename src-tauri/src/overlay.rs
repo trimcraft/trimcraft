@@ -81,6 +81,20 @@ pub fn monitors(app: &AppHandle) -> Result<Vec<MonitorInfo>, String> {
         .collect())
 }
 
+/// The connected monitors, for absolute mouse positions in macros.
+pub fn screens(app: &AppHandle) -> Option<detent_core::Screens> {
+    match monitors(app) {
+        Ok(list) => Some(detent_core::Screens {
+            primary: list.iter().position(|m| m.primary),
+            monitors: list.into_iter().map(|m| m.monitor).collect(),
+        }),
+        Err(e) => {
+            log::warn!("could not query monitors: {e}");
+            None
+        }
+    }
+}
+
 /// Moves the overlay window over the saved monitor, or the primary one if none is saved or
 /// the saved one is not connected.
 pub fn cover_monitor(app: &AppHandle, saved: Option<&MonitorRef>) {
@@ -119,18 +133,28 @@ pub fn cover_monitor(app: &AppHandle, saved: Option<&MonitorRef>) {
     );
 }
 
-fn editing(app: &AppHandle) -> bool {
-    app.state::<Arc<Shared>>().engine().overlay_editing()
+/// Layout edit mode, and whether a macro recording is counting down or running.
+fn modes(app: &AppHandle) -> (bool, bool) {
+    let shared = app.state::<Arc<Shared>>();
+    let engine = shared.engine();
+    (engine.overlay_editing(), engine.recording_active())
 }
 
-/// Shows the overlay window when `visible` or in layout edit mode. It only takes the mouse
-/// in edit mode; otherwise clicks go through to the game.
+/// Applies the saved visibility again, e.g. after a recording started or ended.
+pub fn refresh_visibility(app: &AppHandle) {
+    let visible = app.state::<Arc<Shared>>().engine().setup().overlay.visible;
+    set_visible(app, visible);
+}
+
+/// Shows the overlay window when `visible`, in layout edit mode, or while a macro is being
+/// recorded (it shows the recording indicator). It only takes the mouse in edit mode;
+/// otherwise clicks go through to the game.
 pub fn set_visible(app: &AppHandle, visible: bool) {
     let Some(window) = app.get_webview_window(LABEL) else {
         return;
     };
-    let editing = editing(app);
-    let result = if visible || editing {
+    let (editing, recording) = modes(app);
+    let result = if visible || editing || recording {
         window
             .show()
             .and_then(|()| window.set_always_on_top(true))

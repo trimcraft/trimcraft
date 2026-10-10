@@ -8,6 +8,8 @@
   import FunctionPanel from "./components/FunctionPanel.svelte";
   import OverlayPanel from "./components/OverlayPanel.svelte";
   import VirtualControlsView from "./components/VirtualControlsView.svelte";
+  import RecorderSettings from "./components/RecorderSettings.svelte";
+  import RecordingBanner from "./components/RecordingBanner.svelte";
 
   type Section = "hardware" | "controls";
   const sections: [Section, string][] = [
@@ -55,6 +57,7 @@
     <span class="muted mono">v{meta.version} · input: {meta.backend}</span>
     {#if !isTauri}<span class="badge warn">browser demo, not connected to devices</span>{/if}
   {/if}
+  {#if snapshot}<RecordingBanner {snapshot} />{/if}
   <nav>
     {#each sections as [value, text] (value)}
       <button class:current={section === value} onclick={() => show(value)}>{text}</button>
@@ -87,6 +90,7 @@
     <main class="single">
       <div class="content">
         <VirtualControlsView {snapshot} />
+        <RecorderSettings {snapshot} />
         <OverlayPanel {snapshot} />
       </div>
     </main>

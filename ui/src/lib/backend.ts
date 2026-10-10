@@ -2,6 +2,7 @@
 // falls back to a small in-page demo so the UI can be developed and checked without the app.
 
 import type {
+  Action,
   AppMeta,
   ButtonPair,
   ControlRef,
@@ -12,9 +13,12 @@ import type {
   KeyInfo,
   MonitorInfo,
   MonitorRef,
+  Movement,
   OverlayConfig,
   OverlayItem,
   RadioCommand,
+  RecordKind,
+  RecorderConfig,
   Sound,
   SoundpadStatus,
   VirtualControlDef,
@@ -59,6 +63,14 @@ export interface Backend {
   soundpadStatus(): Promise<SoundpadStatus>;
   /** Soundpad's live sound list; fails when Soundpad is not reachable. */
   soundpadSounds(): Promise<Sound[]>;
+  /** Records into the snapshot's `recorder.result` after a countdown. */
+  startRecording(kind: RecordKind, movement: Movement): Promise<void>;
+  stopRecording(): Promise<void>;
+  cancelRecording(): Promise<void>;
+  clearRecording(): Promise<void>;
+  setRecorderConfig(config: RecorderConfig): Promise<void>;
+  /** Plays the action after the countdown. */
+  testAction(action: Action): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -104,6 +116,12 @@ async function tauriBackend(): Promise<Backend> {
     setOverlayEditing: (editing) => invoke("set_overlay_editing", { editing }),
     soundpadStatus: () => invoke("soundpad_status"),
     soundpadSounds: () => invoke("soundpad_sounds"),
+    startRecording: (kind, movement) => invoke("start_recording", { kind, movement }),
+    stopRecording: () => invoke("stop_recording"),
+    cancelRecording: () => invoke("cancel_recording"),
+    clearRecording: () => invoke("clear_recording"),
+    setRecorderConfig: (config) => invoke("set_recorder_config", { config }),
+    testAction: (action) => invoke("test_action", { action }),
   };
 }
 

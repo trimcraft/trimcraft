@@ -86,7 +86,7 @@ pub enum Startup {
     Empty,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RadioState {
     pub id: String,
@@ -97,7 +97,7 @@ pub struct RadioState {
     pub on_deactivate: Vec<Action>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Radio {
     pub states: Vec<RadioState>,
@@ -113,13 +113,13 @@ pub struct Radio {
     pub startup: Startup,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum VirtualControlKind {
     Radio(Radio),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VirtualControl {
     pub id: String,
@@ -147,7 +147,7 @@ pub enum Phase {
 }
 
 /// An action to run, with where it came from (for the log).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActionRequest {
     pub control: String,
     pub state: String,
@@ -430,12 +430,10 @@ mod tests {
     use crate::action::KeyStep;
 
     fn key(name: &str) -> Action {
-        Action::KeyboardMacro {
-            steps: vec![KeyStep::KeyTap {
-                key: name.into(),
-                hold_ms: None,
-            }],
-        }
+        Action::keyboard(vec![KeyStep::KeyTap {
+            key: name.into(),
+            hold_ms: None,
+        }])
     }
 
     fn state(id: &str) -> RadioState {

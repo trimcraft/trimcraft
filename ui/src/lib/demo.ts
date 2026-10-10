@@ -9,10 +9,15 @@ import type {
   FunctionView,
   HatDirection,
   KeyInfo,
+  KeyboardMacro,
   MonitorInfo,
+  MouseMacro,
+  MouseStep,
+  Movement,
   PulseStats,
-  Sound,
   Radio,
+  RecordKind,
+  Sound,
   Trigger,
   VirtualControlView,
 } from "./types";
@@ -46,6 +51,58 @@ const DEMO_MONITORS: MonitorInfo[] = [
 const DEMO_SOUNDS: Sound[] = ["Siren", "Dog barking", "Duck quack", "Applause", "Drum roll", "Sad trombone"].map(
   (title, i) => ({ index: i + 1, title, path: `C:\\Sounds\\${title.toLowerCase().replace(/ /g, "-")}.mp3`, duration: `0:0${i + 1}` }),
 );
+
+/** What the demo "records": a few keys, or a click-drag along a curve (absolute) or a turn (relative). */
+function demoRecording(kind: RecordKind, movement: Movement): KeyboardMacro | MouseMacro {
+  const playback = { speedPercent: 100, minDelayMs: 0, endpointOnly: false };
+  if (kind === "keyboard") {
+    return {
+      type: "keyboardMacro",
+      playback,
+      steps: [
+        { type: "keyTap", key: "W", holdMs: 640 },
+        { type: "delay", ms: 210 },
+        { type: "keyDown", key: "LeftShift" },
+        { type: "delay", ms: 90 },
+        { type: "keyTap", key: "E", holdMs: 70 },
+        { type: "delay", ms: 40 },
+        { type: "keyUp", key: "LeftShift" },
+      ],
+    };
+  }
+  const n = 14;
+  const steps: MouseStep[] =
+    movement === "absolute"
+      ? [
+          { type: "moveTo", x: 0.3, y: 0.6 },
+          { type: "delay", ms: 400 },
+          { type: "buttonDown", button: "left" },
+          { type: "delay", ms: 30 },
+          {
+            type: "movePath",
+            points: Array.from({ length: n }, (_, i) => ({
+              x: 0.3 + (0.4 * i) / (n - 1),
+              y: 0.6 - 0.3 * Math.sin((Math.PI * i) / (n - 1)),
+              t: i * 40,
+            })),
+          },
+          { type: "delay", ms: 60 },
+          { type: "buttonUp", button: "left" },
+        ]
+      : [
+          {
+            type: "moveRelativePath",
+            points: Array.from({ length: n }, (_, i) => ({
+              dx: Math.round(600 * Math.sin((Math.PI * i) / (2 * (n - 1)))),
+              dy: Math.round(-80 * Math.sin((Math.PI * i) / (n - 1))),
+              t: i * 25,
+            })),
+          },
+          { type: "delay", ms: 120 },
+          { type: "click", button: "left", holdMs: 60 },
+        ];
+  return { type: "mouseMacro", playback, movement, monitor: null, steps };
+}
 
 function device(id: string, name: string, vid: number, pid: number, axes: number, buttons: number, hats: number, virt = false): DeviceSnapshot {
   return {
@@ -84,6 +141,8 @@ export function createDemo(): Backend {
     virtualControls: [],
     learn: null,
     overlayEditing: false,
+    recorder: { session: 0, phase: "idle", kind: null, movement: "absolute", result: null, error: null },
+    recorderConfig: { stopHotkey: "Ctrl+Shift+F9", tolerance: 2, sampleIntervalMs: 8 },
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
   };
@@ -383,5 +442,31 @@ export function createDemo(): Backend {
     setOverlayEditing: async (editing) => { s.overlayEditing = editing; await ok(); },
     soundpadStatus: async () => ({ alive: true, error: null, lastWarning: null }),
     soundpadSounds: async () => structuredClone(DEMO_SOUNDS),
+    async startRecording(kind, movement) {
+      if (s.recorder.phase !== "idle") throw new Error("a recording is already running");
+      const session = s.recorder.session + 1;
+      s.recorder = { session, phase: "countdown", kind, movement, result: null, error: null };
+      setTimeout(() => {
+        if (s.recorder.session === session && s.recorder.phase === "countdown") s.recorder.phase = "recording";
+        emit();
+      }, 3000);
+      emit();
+    },
+    async stopRecording() {
+      const r = s.recorder;
+      if (r.phase === "recording" && r.kind) r.result = { session: r.session, action: demoRecording(r.kind, r.movement), notes: ["demo recording"] };
+      r.phase = "idle";
+      emit();
+    },
+    cancelRecording: async () => { s.recorder.phase = "idle"; await ok(); },
+    clearRecording: async () => { s.recorder.result = null; s.recorder.error = null; await ok(); },
+    async setRecorderConfig(config) {
+      if (!config.stopHotkey.trim() || /esc/i.test(config.stopHotkey)) throw new Error(`hotkey "${config.stopHotkey}" is not valid`);
+      s.recorderConfig = structuredClone(config);
+      await ok();
+    },
+    async testAction(action) {
+      setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
+    },
   };
 }

@@ -38,9 +38,10 @@ A virtual control is built from physical inputs and can run actions. The first k
   none was active yet); this also works after a restart.
 - Each state has actions on activate and on deactivate. Switching from A to B runs A's
   deactivate actions, then B's activate actions.
-- Actions are keyboard macros (key down, key up, tap with hold time, wait) and mouse macros
-  (button down, up, click, wheel, relative move, wait). Keys are sent as scan codes so games
-  that read DirectInput or RawInput see them. Every executed action is logged.
+- Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
+  (button down, up, click, wheel, relative move, move to a position, recorded paths, wait) and
+  Soundpad commands. Keys are sent as scan codes so games that read DirectInput or RawInput see
+  them. Every executed action is logged.
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
   stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
@@ -51,8 +52,39 @@ A virtual control is built from physical inputs and can run actions. The first k
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
   active state highlighted.
 
+### Recording macros
+
+Every keyboard and mouse macro has a **● Record** button. After a 3-second countdown (switch
+to the game now) Detent records into that macro until you press the stop hotkey (default
+`Ctrl+Shift+F9`, configurable under *Macro recorder*) or **Stop**; **Esc** cancels. While
+recording, the main window shows a red banner and the overlay a red **REC** badge. The recording
+is appended to the steps or replaces them, as chosen next to the button. The stop hotkey's keys
+and the click on Stop are not recorded; Detent's own playback never is (injected input is
+ignored). Esc cannot be recorded; add it by hand if a macro needs it.
+
+- A keyboard macro records keys (as scan codes, like playback); a mouse macro records buttons,
+  wheel and movement. Gaps become waits, and press-wait-release becomes a tap or click.
+- Mouse movement is **absolute** (cursor positions, stored relative to the monitor the
+  recording started on, like overlay positions; for menus and maps) or **relative** (raw mouse
+  deltas via Raw Input; for mouse-look, where the game keeps the cursor centred). Set it per
+  macro before recording.
+- Movement is stored as paths of waypoints: thinned to the sample interval and simplified
+  (Ramer–Douglas–Peucker on position and time, so pauses and changes of speed survive) within
+  the tolerance. Playback interpolates between waypoints at 125 Hz.
+- Playback options per macro: speed (original, 0.25× to 4×; scales waits and paths, not hold
+  times), skipping waits shorter than a threshold, and for absolute paths "endpoint only",
+  which jumps straight to where each path ends.
+- The editor has a step list (select several to delete, drag ⋮⋮ to reorder, + inserts a step,
+  everything editable in place) and, for mouse macros, a preview of the movement on the
+  monitor outline where waypoints can be dragged. **▶ Test play** plays the macro as edited
+  after the same countdown.
+
+Relative moves are sent as relative mouse input: games that read raw input see exactly the
+recorded deltas, while the Windows desktop applies its pointer speed and acceleration to them.
+
 Windows does not deliver synthesised input to programs running with higher privileges: if a
-game runs as administrator, Detent must too for its macros to reach the game.
+game runs as administrator, Detent must too for its macros to reach the game (and for the
+recorder to see input while the game has focus).
 
 Mapping to a virtual joystick and per-game profiles come in later stages.
 
@@ -80,8 +112,8 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 
 Settings live in the app config directory (`%APPDATA%\cloud.breu.detent` on Windows,
 `~/Library/Application Support/cloud.breu.detent` on macOS): `devices.json` (known devices and
-labels), `setup.json` (encoders, counters, virtual controls, overlay), `values.json` (current counter
-values), `control-states.json` (active radio states).
+labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder), `values.json`
+(current counter values), `control-states.json` (active radio states).
 
 ## CI
 

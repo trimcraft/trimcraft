@@ -3,6 +3,7 @@
 mod commands;
 mod executor;
 mod overlay;
+mod recorder;
 mod soundpad;
 mod storage;
 
@@ -44,6 +45,7 @@ pub struct Shared {
     storage: Storage,
     executor: Executor,
     soundpad: Arc<Soundpad>,
+    recorder: recorder::Recorder,
     meta: Meta,
 }
 
@@ -167,8 +169,9 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(soundpad.clone()),
+        executor: Executor::spawn(app.clone(), soundpad.clone()),
         soundpad,
+        recorder: recorder::Recorder::default(),
         meta,
     })
 }

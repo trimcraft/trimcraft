@@ -7,6 +7,7 @@ use crate::device::DeviceId;
 use crate::encoder::{DetectorConfig, EncoderBinding};
 use crate::function::Function;
 use crate::overlay::OverlayConfig;
+use crate::recording::RecorderConfig;
 use crate::virtual_control::VirtualControl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -31,6 +32,8 @@ pub struct Setup {
     pub virtual_controls: Vec<VirtualControl>,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
+    /// Macro recorder settings. Missing in files from before the recorder.
+    pub recorder: RecorderConfig,
     /// Encoder suggestions the user rejected; not suggested again.
     pub dismissed_suggestions: Vec<ButtonPair>,
 }
@@ -44,6 +47,7 @@ impl Default for Setup {
             virtual_controls: Vec::new(),
             overlay: OverlayConfig::default(),
             detector: DetectorConfig::default(),
+            recorder: RecorderConfig::default(),
             dismissed_suggestions: Vec::new(),
         }
     }
@@ -107,6 +111,31 @@ mod tests {
         let s = Setup::from_json(json).unwrap();
         assert!(s.virtual_controls.is_empty());
         assert_eq!(s.encoders.len(), 1);
+    }
+
+    #[test]
+    fn file_from_stage_1_loads_with_default_playback_and_recorder() {
+        let json = r#"{
+            "schemaVersion": 1,
+            "virtualControls": [{"id":"vc-1","name":"Comms","kind":{"type":"radio","states":[
+                {"id":"st-1","name":"A","select":[],
+                 "onActivate":[{"type":"keyboardMacro","steps":[{"type":"keyTap","key":"F1","holdMs":null}]}],
+                 "onDeactivate":[{"type":"mouseMacro","steps":[{"type":"moveRelative","dx":5,"dy":0}]}]}],
+                "increment":[],"decrement":[],"clear":[],"toggleOff":[],
+                "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}]
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert_eq!(s.recorder, RecorderConfig::default());
+        let state = &s.virtual_controls[0].radio().states[0];
+        let crate::action::Action::MouseMacro {
+            playback, movement, ..
+        } = &state.on_deactivate[0]
+        else {
+            panic!("mouse macro expected");
+        };
+        assert_eq!(playback.speed_percent, 100);
+        assert_eq!(*movement, crate::action::Movement::Absolute);
+        assert_eq!(Setup::from_json(&s.to_json()).unwrap(), s);
     }
 
     #[test]

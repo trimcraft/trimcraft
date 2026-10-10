@@ -105,6 +105,9 @@ export function keyStepText(s: KeyStep): string {
   }
 }
 
+/** A fraction as a percentage, e.g. "50.0%". */
+export const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
 export function mouseStepText(s: MouseStep): string {
   switch (s.type) {
     case "buttonDown":
@@ -117,6 +120,12 @@ export function mouseStepText(s: MouseStep): string {
       return `wheel ${s.delta > 0 ? "+" : ""}${s.delta}`;
     case "moveRelative":
       return `move ${s.dx}, ${s.dy}`;
+    case "moveTo":
+      return `to ${pct(s.x)}, ${pct(s.y)}`;
+    case "movePath":
+      return `path (${s.points.length} points, ${s.points.at(-1)?.t ?? 0} ms)`;
+    case "moveRelativePath":
+      return `relative path (${s.points.length} points, ${s.points.at(-1)?.t ?? 0} ms)`;
     case "delay":
       return `wait ${s.ms} ms`;
   }
@@ -145,5 +154,6 @@ export function soundpadText(c: SoundpadCommand): string {
 export function actionText(a: Action): string {
   if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
   const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
-  return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}: ${steps.join(", ") || "no steps"}`;
+  const speed = a.playback.speedPercent === 100 ? "" : ` (${a.playback.speedPercent}%)`;
+  return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}${speed}: ${steps.join(", ") || "no steps"}`;
 }

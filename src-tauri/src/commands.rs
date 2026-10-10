@@ -3,7 +3,7 @@
 use crate::{Meta, Shared, overlay};
 use detent_core::{
     Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo,
-    RadioCommand, VirtualControl,
+    MonitorRef, OverlayItem, RadioCommand, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -38,6 +38,11 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         toggle_overlay_virtual_control,
         start_learn,
         stop_learn,
+        list_monitors,
+        set_overlay_monitor,
+        set_overlay_widget,
+        set_overlay_positions,
+        set_overlay_editing,
     ]
 }
 
@@ -259,6 +264,54 @@ fn stop_learn(shared: State<'_, Arc<Shared>>) -> Res<()> {
     })
 }
 
+#[tauri::command]
+fn list_monitors(app: AppHandle) -> Res<Vec<overlay::MonitorInfo>> {
+    overlay::monitors(&app)
+}
+
+#[tauri::command]
+fn set_overlay_monitor(
+    app: AppHandle,
+    shared: State<'_, Arc<Shared>>,
+    monitor: Option<MonitorRef>,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_overlay_monitor(monitor.clone());
+        Ok(())
+    })?;
+    overlay::cover_monitor(&app, monitor.as_ref());
+    Ok(())
+}
+
+#[tauri::command]
+fn set_overlay_widget(shared: State<'_, Arc<Shared>>, index: usize, item: OverlayItem) -> Res<()> {
+    with(&shared, |e| e.set_overlay_widget(index, item))
+}
+
+#[tauri::command]
+fn set_overlay_positions(
+    shared: State<'_, Arc<Shared>>,
+    positions: Vec<Option<WidgetPosition>>,
+) -> Res<()> {
+    with(&shared, |e| e.set_overlay_positions(positions))
+}
+
+/// Layout edit mode: the overlay takes the mouse (and is shown even if hidden) so widgets
+/// can be dragged; leaving it restores click-through and the saved visibility.
+#[tauri::command]
+fn set_overlay_editing(app: AppHandle, shared: State<'_, Arc<Shared>>, editing: bool) -> Res<()> {
+    let visible = with(&shared, |e| {
+        e.set_overlay_editing(editing);
+        Ok(e.setup().overlay.visible)
+    })?;
+    overlay::set_visible(&app, visible);
+    log::info!(
+        "overlay layout edit mode {}",
+        if editing { "on" } else { "off" }
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! The UI sends these payloads (see ui/src/lib/backend.ts); they must deserialise.
@@ -309,6 +362,23 @@ mod tests {
         .unwrap();
         assert_eq!(c.radio().states[0].on_activate.len(), 1);
         assert_eq!(c.radio().startup, detent_core::Startup::Empty);
+        let item: OverlayItem = serde_json::from_str(
+            r#"{"type":"radio","control":"vc-1","layout":"horizontal","position":{"x":0.25,"y":0.5}}"#,
+        )
+        .unwrap();
+        assert_eq!(item.position, Some(WidgetPosition { x: 0.25, y: 0.5 }));
+        let _: OverlayItem = serde_json::from_str(
+            r#"{"type":"control","device":"d","control":{"type":"hat","index":0},"label":null,"position":null}"#,
+        )
+        .unwrap();
+        let positions: Vec<Option<WidgetPosition>> =
+            serde_json::from_str(r#"[{"x":0.1,"y":0.9},null]"#).unwrap();
+        assert_eq!(positions.len(), 2);
+        let _: Option<MonitorRef> = serde_json::from_str(
+            r#"{"name":"\\\\.\\DISPLAY2","x":-2560,"y":0,"width":2560,"height":1440}"#,
+        )
+        .unwrap();
+        let _: Option<MonitorRef> = serde_json::from_str("null").unwrap();
         for command in [r#""increment""#, r#""decrement""#, r#""clear""#] {
             let _: UiRadioCommand = serde_json::from_str(command).unwrap();
         }

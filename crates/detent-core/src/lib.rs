@@ -22,7 +22,10 @@ pub use encoder::{DetectorConfig, EncoderBinding};
 pub use engine::{Dirty, Engine, EngineError, EngineSnapshot};
 pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
-pub use overlay::{Anchor, ControlRef, OverlayConfig, OverlayWidget};
+pub use overlay::{
+    Anchor, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget, RadioLayout,
+    WidgetPosition,
+};
 pub use registry::DeviceRegistry;
 pub use setup::{ButtonPair, Setup};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};

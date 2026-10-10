@@ -11,7 +11,7 @@ use crate::encoder::{
 };
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
-use crate::overlay::{ControlRef, OverlayConfig};
+use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
 use crate::registry::DeviceRegistry;
 use crate::setup::{ButtonPair, Setup};
 use crate::state::{ButtonEdge, HatEdge};
@@ -50,6 +50,12 @@ pub enum EngineError {
     UnknownControl(String),
     #[error("unknown state {0}")]
     UnknownState(String),
+    #[error("overlay widget {0} does not exist")]
+    UnknownWidget(usize),
+    #[error("expected {expected} widget positions, got {got}")]
+    WidgetCount { expected: usize, got: usize },
+    #[error("a widget cannot change its type or what it shows")]
+    WidgetKind,
     #[error(transparent)]
     Spec(#[from] SpecError),
     #[error(transparent)]
@@ -119,6 +125,8 @@ pub struct EngineSnapshot {
     pub virtual_controls: Vec<VirtualControlView>,
     /// `None` unless learn mode is on or just captured something.
     pub learn: Option<LearnView>,
+    /// The overlay is interactive so widgets can be dragged.
+    pub overlay_editing: bool,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
 }
@@ -143,6 +151,7 @@ pub struct Engine {
     /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
     actions: Vec<ActionRequest>,
     learn: Learn,
+    overlay_editing: bool,
     dirty: Dirty,
 }
 
@@ -171,6 +180,7 @@ impl Engine {
             active: HashMap::new(),
             actions: Vec::new(),
             learn: Learn::Off,
+            overlay_editing: false,
             dirty: Dirty::default(),
         }
     }
@@ -419,6 +429,7 @@ impl Engine {
                     captured: Some(t.clone()),
                 }),
             },
+            overlay_editing: self.overlay_editing,
             overlay: self.setup.overlay.clone(),
             detector: self.setup.detector,
         }
@@ -597,6 +608,61 @@ impl Engine {
     pub fn set_overlay_visible(&mut self, visible: bool) {
         self.setup.overlay.visible = visible;
         self.dirty.setup = true;
+    }
+
+    /// Replaces one widget's settings (position, radio layout, label). What it shows stays.
+    pub fn set_overlay_widget(
+        &mut self,
+        index: usize,
+        mut item: OverlayItem,
+    ) -> Result<(), EngineError> {
+        let slot = self
+            .setup
+            .overlay
+            .widgets
+            .get_mut(index)
+            .ok_or(EngineError::UnknownWidget(index))?;
+        if !slot.widget.same_target(&item.widget) {
+            return Err(EngineError::WidgetKind);
+        }
+        item.position = item.position.map(WidgetPosition::clamped);
+        *slot = item;
+        self.dirty.setup = true;
+        Ok(())
+    }
+
+    /// Sets the positions of all widgets at once, in widget order.
+    pub fn set_overlay_positions(
+        &mut self,
+        positions: Vec<Option<WidgetPosition>>,
+    ) -> Result<(), EngineError> {
+        let widgets = &mut self.setup.overlay.widgets;
+        if positions.len() != widgets.len() {
+            return Err(EngineError::WidgetCount {
+                expected: widgets.len(),
+                got: positions.len(),
+            });
+        }
+        for (w, p) in widgets.iter_mut().zip(positions) {
+            w.position = p.map(WidgetPosition::clamped);
+        }
+        self.dirty.setup = true;
+        Ok(())
+    }
+
+    /// `None` is the primary monitor.
+    pub fn set_overlay_monitor(&mut self, monitor: Option<MonitorRef>) {
+        self.setup.overlay.monitor = monitor;
+        self.dirty.setup = true;
+    }
+
+    /// Layout edit mode: the overlay window takes the mouse so widgets can be dragged.
+    pub fn set_overlay_editing(&mut self, editing: bool) {
+        self.overlay_editing = editing;
+    }
+
+    pub fn overlay_editing(&self) -> bool {
+        self.overlay_editing
     }
 
     pub fn set_detector_config(&mut self, config: DetectorConfig) {
@@ -1336,6 +1402,69 @@ mod tests {
         assert_eq!(vc["active"], serde_json::Value::Null);
         assert_eq!(vc["activeName"], serde_json::Value::Null);
         assert_eq!(json["learn"]["captured"], serde_json::Value::Null);
-        assert_eq!(json["overlay"]["widgets"][0]["type"], "virtualControl");
+        assert_eq!(json["overlay"]["widgets"][0]["type"], "radio");
+        assert_eq!(json["overlayEditing"], false);
+    }
+
+    #[test]
+    fn overlay_widgets_can_be_placed_and_configured() {
+        use crate::overlay::{OverlayWidget, RadioLayout};
+        let (mut engine, id) = engine_with_radio(|_| {});
+        let f = engine.setup().functions[0].id.clone();
+        engine.toggle_overlay_function(&f).unwrap();
+        let p = |x, y| Some(WidgetPosition { x, y });
+
+        engine
+            .set_overlay_positions(vec![p(0.1, 0.2), p(2.0, -1.0)])
+            .unwrap();
+        let widgets = &engine.setup().overlay.widgets;
+        assert_eq!(widgets[0].position, p(0.1, 0.2));
+        assert_eq!(widgets[1].position, p(1.0, 0.0));
+        assert_eq!(
+            engine.set_overlay_positions(vec![None]),
+            Err(EngineError::WidgetCount {
+                expected: 2,
+                got: 1
+            })
+        );
+
+        let mut radio = engine.setup().overlay.widgets[0].clone();
+        radio.widget = OverlayWidget::Radio {
+            control: id.clone(),
+            layout: RadioLayout::Horizontal,
+        };
+        radio.position = None;
+        engine.set_overlay_widget(0, radio.clone()).unwrap();
+        assert_eq!(engine.setup().overlay.widgets[0], radio);
+
+        let other = OverlayItem::from(OverlayWidget::Function {
+            function: "fn-9".into(),
+        });
+        assert_eq!(
+            engine.set_overlay_widget(0, other.clone()),
+            Err(EngineError::WidgetKind)
+        );
+        assert_eq!(
+            engine.set_overlay_widget(5, other),
+            Err(EngineError::UnknownWidget(5))
+        );
+    }
+
+    #[test]
+    fn overlay_monitor_and_edit_mode() {
+        let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
+        let monitor = MonitorRef {
+            name: Some("LG".into()),
+            x: 1920,
+            y: 0,
+            width: 2560,
+            height: 1440,
+        };
+        engine.set_overlay_monitor(Some(monitor.clone()));
+        assert_eq!(engine.setup().overlay.monitor, Some(monitor));
+        assert!(engine.take_dirty().setup);
+        engine.set_overlay_editing(true);
+        assert!(engine.snapshot().overlay_editing);
+        assert!(!engine.take_dirty().setup); // edit mode is not persisted
     }
 }

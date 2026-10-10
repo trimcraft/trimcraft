@@ -1,4 +1,10 @@
 //! Overlay layout: which inputs, functions and virtual controls are shown, and where.
+//!
+//! Each widget has its own position, stored as fractions of the overlay monitor's width and
+//! height so it survives resolution changes. Widgets without a position (all widgets from
+//! setups older than free positioning, and newly added ones until they are placed) are
+//! stacked in the anchored corner as before; entering layout edit mode fixes their measured
+//! positions.
 
 use crate::device::DeviceId;
 use serde::{Deserialize, Serialize};
@@ -21,6 +27,14 @@ pub enum Anchor {
     BottomRight,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RadioLayout {
+    #[default]
+    Vertical,
+    Horizontal,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum OverlayWidget {
@@ -33,14 +47,117 @@ pub enum OverlayWidget {
     },
     /// The current value of a stateful function, e.g. "Channel 3".
     Function { function: String },
-    /// A virtual control and its state, e.g. "Comms  Guard".
-    VirtualControl { control: String },
+    /// A radio with all its states, the active one highlighted.
+    Radio {
+        control: String,
+        #[serde(default)]
+        layout: RadioLayout,
+    },
 }
 
 impl OverlayWidget {
     pub fn is_control(&self, device: &DeviceId, control: ControlRef) -> bool {
         matches!(self, Self::Control { device: d, control: c, .. } if d == device && *c == control)
     }
+
+    /// Shows the same thing (same input, function or control), settings aside.
+    pub fn same_target(&self, other: &OverlayWidget) -> bool {
+        match (self, other) {
+            (
+                Self::Control {
+                    device, control, ..
+                },
+                other,
+            ) => other.is_control(device, *control),
+            (Self::Function { function }, other) => other.is_function(function),
+            (Self::Radio { control, .. }, other) => other.is_radio(control),
+        }
+    }
+
+    fn is_radio(&self, id: &str) -> bool {
+        matches!(self, Self::Radio { control, .. } if control == id)
+    }
+
+    fn is_function(&self, id: &str) -> bool {
+        matches!(self, Self::Function { function } if function == id)
+    }
+}
+
+/// Top-left corner of a widget, as fractions (0..=1) of the monitor's width and height.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WidgetPosition {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl WidgetPosition {
+    /// Clamped into the monitor; non-finite values become 0.
+    pub fn clamped(self) -> Self {
+        let c = |v: f32| {
+            if v.is_finite() {
+                v.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            x: c(self.x),
+            y: c(self.y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayItem {
+    #[serde(flatten)]
+    pub widget: OverlayWidget,
+    /// `None`: stacked in the anchored corner.
+    #[serde(default)]
+    pub position: Option<WidgetPosition>,
+}
+
+impl From<OverlayWidget> for OverlayItem {
+    fn from(widget: OverlayWidget) -> Self {
+        Self {
+            widget,
+            position: None,
+        }
+    }
+}
+
+/// A monitor as the OS reports it; also how the chosen overlay monitor is remembered.
+/// Position and size are in physical pixels of the virtual desktop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorRef {
+    pub name: Option<String>,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Finds the saved monitor among the available ones: same name and position first, then
+/// the only monitor with that name (it moved in the arrangement), then whatever monitor is
+/// at the saved position (it was renamed, e.g. by a driver update). `None` if none fits.
+pub fn find_monitor(saved: &MonitorRef, available: &[MonitorRef]) -> Option<usize> {
+    let same_pos = |m: &MonitorRef| m.x == saved.x && m.y == saved.y;
+    if saved.name.is_some() {
+        if let Some(i) = available
+            .iter()
+            .position(|m| m.name == saved.name && same_pos(m))
+        {
+            return Some(i);
+        }
+        let named: Vec<usize> = (0..available.len())
+            .filter(|&i| available[i].name == saved.name)
+            .collect();
+        if let [only] = named[..] {
+            return Some(only);
+        }
+    }
+    available.iter().position(same_pos)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -49,11 +166,14 @@ pub struct OverlayConfig {
     pub visible: bool,
     /// Global hotkey that shows and hides the overlay, in Tauri accelerator syntax.
     pub hotkey: String,
+    /// The monitor the overlay covers; `None` is the primary monitor.
+    pub monitor: Option<MonitorRef>,
+    /// Corner where widgets without a position are stacked.
     pub anchor: Anchor,
-    /// Distance from the anchored screen corner, in logical pixels.
+    /// Distance of that stack from the corner, in logical pixels.
     pub margin: u32,
     pub scale: f32,
-    pub widgets: Vec<OverlayWidget>,
+    pub widgets: Vec<OverlayItem>,
 }
 
 impl Default for OverlayConfig {
@@ -61,6 +181,7 @@ impl Default for OverlayConfig {
         Self {
             visible: true,
             hotkey: "Ctrl+Shift+F10".into(),
+            monitor: None,
             anchor: Anchor::default(),
             margin: 32,
             scale: 1.0,
@@ -70,65 +191,58 @@ impl Default for OverlayConfig {
 }
 
 impl OverlayConfig {
-    /// Adds the control if it is not shown yet, removes it otherwise. Returns whether it is
-    /// shown afterwards.
-    pub fn toggle_control(&mut self, device: &DeviceId, control: ControlRef) -> bool {
-        if let Some(pos) = self
-            .widgets
-            .iter()
-            .position(|w| w.is_control(device, control))
-        {
+    /// Adds the widget if `is_it` matches none, removes the match otherwise. Returns whether
+    /// it is shown afterwards.
+    fn toggle(&mut self, is_it: impl Fn(&OverlayWidget) -> bool, new: OverlayWidget) -> bool {
+        if let Some(pos) = self.widgets.iter().position(|w| is_it(&w.widget)) {
             self.widgets.remove(pos);
             false
         } else {
-            self.widgets.push(OverlayWidget::Control {
+            self.widgets.push(new.into());
+            true
+        }
+    }
+
+    pub fn toggle_control(&mut self, device: &DeviceId, control: ControlRef) -> bool {
+        self.toggle(
+            |w| w.is_control(device, control),
+            OverlayWidget::Control {
                 device: device.clone(),
                 control,
                 label: None,
-            });
-            true
-        }
+            },
+        )
     }
 
     pub fn toggle_function(&mut self, function: &str) -> bool {
-        let is_it = |w: &OverlayWidget| matches!(w, OverlayWidget::Function { function: f } if f == function);
-        if let Some(pos) = self.widgets.iter().position(is_it) {
-            self.widgets.remove(pos);
-            false
-        } else {
-            self.widgets.push(OverlayWidget::Function {
+        self.toggle(
+            |w| w.is_function(function),
+            OverlayWidget::Function {
                 function: function.into(),
-            });
-            true
-        }
+            },
+        )
     }
 
     pub fn remove_function(&mut self, function: &str) {
-        self.widgets
-            .retain(|w| !matches!(w, OverlayWidget::Function { function: f } if f == function));
+        self.widgets.retain(|w| !w.widget.is_function(function));
     }
 
     pub fn has_virtual_control(&self, control: &str) -> bool {
-        self.widgets
-            .iter()
-            .any(|w| matches!(w, OverlayWidget::VirtualControl { control: c } if c == control))
+        self.widgets.iter().any(|w| w.widget.is_radio(control))
     }
 
     pub fn toggle_virtual_control(&mut self, control: &str) -> bool {
-        if self.has_virtual_control(control) {
-            self.remove_virtual_control(control);
-            false
-        } else {
-            self.widgets.push(OverlayWidget::VirtualControl {
+        self.toggle(
+            |w| w.is_radio(control),
+            OverlayWidget::Radio {
                 control: control.into(),
-            });
-            true
-        }
+                layout: RadioLayout::default(),
+            },
+        )
     }
 
     pub fn remove_virtual_control(&mut self, control: &str) {
-        self.widgets
-            .retain(|w| !matches!(w, OverlayWidget::VirtualControl { control: c } if c == control));
+        self.widgets.retain(|w| !w.widget.is_radio(control));
     }
 }
 
@@ -145,18 +259,90 @@ mod tests {
         assert_eq!(cfg.widgets.len(), 2);
         assert!(!cfg.toggle_control(&dev, ControlRef::Axis { index: 2 }));
         assert_eq!(cfg.widgets.len(), 1);
+        assert!(cfg.toggle_virtual_control("vc-1"));
+        assert!(cfg.has_virtual_control("vc-1"));
+        cfg.remove_virtual_control("vc-1");
+        assert!(!cfg.has_virtual_control("vc-1"));
     }
 
     #[test]
     fn widget_json_shape_is_stable() {
-        let w = OverlayWidget::Control {
+        let w: OverlayItem = OverlayWidget::Control {
             device: DeviceId("231d:0200#1".into()),
             control: ControlRef::Button { index: 4 },
             label: None,
-        };
+        }
+        .into();
         assert_eq!(
             serde_json::to_string(&w).unwrap(),
-            r#"{"type":"control","device":"231d:0200#1","control":{"type":"button","index":4},"label":null}"#
+            r#"{"type":"control","device":"231d:0200#1","control":{"type":"button","index":4},"label":null,"position":null}"#
         );
+        let radio = OverlayItem {
+            widget: OverlayWidget::Radio {
+                control: "vc-1".into(),
+                layout: RadioLayout::Horizontal,
+            },
+            position: Some(WidgetPosition { x: 0.5, y: 0.25 }),
+        };
+        assert_eq!(
+            serde_json::to_string(&radio).unwrap(),
+            r#"{"type":"radio","control":"vc-1","layout":"horizontal","position":{"x":0.5,"y":0.25}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<OverlayItem>(&serde_json::to_string(&radio).unwrap()).unwrap(),
+            radio
+        );
+    }
+
+    #[test]
+    fn old_layout_loads_with_widgets_stacked_at_the_anchor() {
+        let cfg: OverlayConfig = serde_json::from_str(
+            r#"{"visible":true,"hotkey":"Ctrl+Shift+F10","anchor":"topRight","margin":40,
+                "scale":1.5,"widgets":[{"type":"function","function":"fn-1"},
+                {"type":"control","device":"d","control":{"type":"axis","index":0}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.anchor, Anchor::TopRight);
+        assert_eq!(cfg.monitor, None);
+        assert_eq!(cfg.widgets.len(), 2);
+        assert!(cfg.widgets.iter().all(|w| w.position.is_none()));
+    }
+
+    #[test]
+    fn positions_are_clamped() {
+        let p = WidgetPosition {
+            x: -0.5,
+            y: f32::NAN,
+        }
+        .clamped();
+        assert_eq!(p, WidgetPosition { x: 0.0, y: 0.0 });
+        assert_eq!(
+            WidgetPosition { x: 1.5, y: 0.3 }.clamped(),
+            WidgetPosition { x: 1.0, y: 0.3 }
+        );
+    }
+
+    fn mon(name: &str, x: i32) -> MonitorRef {
+        MonitorRef {
+            name: Some(name.into()),
+            x,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        }
+    }
+
+    #[test]
+    fn monitors_are_found_by_name_and_position() {
+        let available = [mon("DELL", 0), mon("LG", 1920), mon("LG", 3840)];
+        assert_eq!(find_monitor(&mon("LG", 3840), &available), Some(2));
+        // Only one with that name: found although it moved.
+        assert_eq!(find_monitor(&mon("DELL", -1920), &available), Some(0));
+        // Two with that name, none at the saved position: ambiguous, fall back to position.
+        assert_eq!(find_monitor(&mon("LG", 0), &available), Some(0));
+        // Renamed, same position.
+        assert_eq!(find_monitor(&mon("Generic", 1920), &available), Some(1));
+        // Gone.
+        assert_eq!(find_monitor(&mon("Old", 7680), &available), None);
     }
 }

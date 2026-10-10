@@ -20,7 +20,7 @@
     oncancel: () => void;
   } = $props();
 
-  /** Which trigger slot is learning: "increment", "decrement", "clear" or "select:<state index>". */
+  /** Which trigger slot is learning: "increment", "decrement", "clear", "toggleOff" or "select:<state index>". */
   let learnKey = $state<string | null>(null);
 
   function slot(key: string): Trigger[] | undefined {
@@ -28,6 +28,7 @@
     if (key === "increment") return r.increment;
     if (key === "decrement") return r.decrement;
     if (key === "clear") return r.clear;
+    if (key === "toggleOff") return r.toggleOff;
     return r.states[Number(key.slice("select:".length))]?.select;
   }
 
@@ -103,6 +104,8 @@
   <TriggerSlot {snapshot} label="Next state" bind:triggers={draft.kind.increment} learning={learnKey === "increment"} onlearn={() => learn("increment")} oncancel={cancelLearn} />
   <TriggerSlot {snapshot} label="Previous state" bind:triggers={draft.kind.decrement} learning={learnKey === "decrement"} onlearn={() => learn("decrement")} oncancel={cancelLearn} />
   <TriggerSlot {snapshot} label="All off" bind:triggers={draft.kind.clear} learning={learnKey === "clear"} onlearn={() => learn("clear")} oncancel={cancelLearn} />
+  <TriggerSlot {snapshot} label="Toggle off" bind:triggers={draft.kind.toggleOff} learning={learnKey === "toggleOff"} onlearn={() => learn("toggleOff")} oncancel={cancelLearn} />
+  <p class="hint muted">Toggle off turns the active state off, or brings back the state that was active last.</p>
 
   <h3>States</h3>
   {#each draft.kind.states as state, i (i)}
@@ -143,5 +146,6 @@
   .sname { min-width: 14em; font-weight: 600; }
   .spacer { flex: 1; }
   .footer { margin-top: 8px; }
+  .hint { font-size: 11px; margin: 0 0 0 9em; padding-left: 8px; }
   .small { font-size: 12px; }
 </style>

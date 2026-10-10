@@ -105,6 +105,8 @@ pub struct Radio {
     pub decrement: Vec<Trigger>,
     /// Deactivates whatever state is active.
     pub clear: Vec<Trigger>,
+    /// Deactivates the active state, or reactivates the most recently active one if none is.
+    pub toggle_off: Vec<Trigger>,
     pub end: EndBehavior,
     /// Selecting the active state again deactivates it.
     pub toggle_on_reselect: bool,
@@ -133,6 +135,8 @@ pub enum RadioCommand {
     /// Index into [`Radio::states`].
     Select(usize),
     Clear,
+    /// Off if a state is active, otherwise back to the most recently active state.
+    ToggleOff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -151,6 +155,59 @@ pub struct ActionRequest {
     pub action: Action,
 }
 
+/// What is remembered per radio between transitions and across restarts (control-states.json).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", from = "SavedMemory")]
+pub struct RadioMemory {
+    /// Id of the active state.
+    pub active: Option<String>,
+    /// Id of the most recently active state, for [`RadioCommand::ToggleOff`].
+    pub last: Option<String>,
+}
+
+/// control-states.json entries: a plain state id in files from before toggle off.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SavedMemory {
+    Active(String),
+    Full {
+        #[serde(default)]
+        active: Option<String>,
+        #[serde(default)]
+        last: Option<String>,
+    },
+}
+
+impl From<SavedMemory> for RadioMemory {
+    fn from(saved: SavedMemory) -> Self {
+        match saved {
+            SavedMemory::Active(active) => Self {
+                active: Some(active),
+                last: None,
+            },
+            SavedMemory::Full { active, last } => Self { active, last },
+        }
+    }
+}
+
+impl RadioMemory {
+    pub fn is_empty(&self) -> bool {
+        self.active.is_none() && self.last.is_none()
+    }
+
+    /// Forgets states the radio no longer has.
+    pub fn retain_existing(&mut self, radio: &Radio) {
+        for slot in [&mut self.active, &mut self.last] {
+            if slot
+                .as_deref()
+                .is_some_and(|id| radio.index_of(id).is_none())
+            {
+                *slot = None;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ControlError {
     #[error("a radio needs at least one state")]
@@ -166,8 +223,14 @@ impl Radio {
         self.states.iter().position(|s| s.id == state_id)
     }
 
-    /// The active state after `command`, given the active state before.
-    pub fn next(&self, active: Option<usize>, command: RadioCommand) -> Option<usize> {
+    /// The active state after `command`, given the active state before and the most recently
+    /// active one (`recent`, for [`RadioCommand::ToggleOff`]).
+    pub fn next(
+        &self,
+        active: Option<usize>,
+        recent: Option<usize>,
+        command: RadioCommand,
+    ) -> Option<usize> {
         let len = self.states.len();
         if len == 0 {
             return None;
@@ -195,8 +258,42 @@ impl Radio {
                 }
             }
             (RadioCommand::Select(i), _) => Some(i),
-            (RadioCommand::Clear, _) => None,
+            (RadioCommand::Clear | RadioCommand::ToggleOff, Some(_)) => None,
+            (RadioCommand::Clear, None) => None,
+            // Nothing remembered (or it no longer exists): the first state.
+            (RadioCommand::ToggleOff, None) => Some(recent.filter(|&r| r <= last).unwrap_or(0)),
         }
+    }
+
+    /// Runs `command`: updates `memory` and returns the actions to run, or `None` if the
+    /// active state does not change. A state that is left becomes the remembered one.
+    pub fn apply(
+        &self,
+        control: &str,
+        memory: &mut RadioMemory,
+        command: RadioCommand,
+    ) -> Option<Vec<ActionRequest>> {
+        let from = memory.active.as_deref().and_then(|id| self.index_of(id));
+        let recent = memory.last.as_deref().and_then(|id| self.index_of(id));
+        let to = self.next(from, recent, command);
+        if from == to {
+            return None;
+        }
+        let actions = self.transition_actions(control, from, to);
+        self.set(memory, to);
+        Some(actions)
+    }
+
+    /// Sets the active state without actions; the state left (if any) is remembered.
+    pub fn set(&self, memory: &mut RadioMemory, to: Option<usize>) {
+        let from = memory.active.as_deref().and_then(|id| self.index_of(id));
+        if from == to {
+            return;
+        }
+        if let Some(f) = from {
+            memory.last = Some(self.states[f].id.clone());
+        }
+        memory.active = to.map(|i| self.states[i].id.clone());
     }
 
     /// Actions for switching from `from` to `to`: the old state's `on_deactivate`, then the
@@ -231,7 +328,7 @@ impl Radio {
     }
 
     /// Commands `fired` triggers, in a fixed order: increment, decrement, per-state select
-    /// (in state order), clear.
+    /// (in state order), clear, toggle off.
     pub fn commands_for(&self, fired: &Trigger) -> Vec<RadioCommand> {
         let mut out = Vec::new();
         if self.increment.contains(fired) {
@@ -248,13 +345,21 @@ impl Radio {
         if self.clear.contains(fired) {
             out.push(RadioCommand::Clear);
         }
+        if self.toggle_off.contains(fired) {
+            out.push(RadioCommand::ToggleOff);
+        }
         out
     }
 
     pub fn triggers_mut(&mut self) -> impl Iterator<Item = &mut Vec<Trigger>> {
-        [&mut self.increment, &mut self.decrement, &mut self.clear]
-            .into_iter()
-            .chain(self.states.iter_mut().map(|s| &mut s.select))
+        [
+            &mut self.increment,
+            &mut self.decrement,
+            &mut self.clear,
+            &mut self.toggle_off,
+        ]
+        .into_iter()
+        .chain(self.states.iter_mut().map(|s| &mut s.select))
     }
 
     pub fn triggers(&self) -> impl Iterator<Item = &Trigger> {
@@ -262,6 +367,7 @@ impl Radio {
             .iter()
             .chain(&self.decrement)
             .chain(&self.clear)
+            .chain(&self.toggle_off)
             .chain(self.states.iter().flat_map(|s| &s.select))
     }
 
@@ -355,49 +461,49 @@ mod tests {
     #[test]
     fn increment_and_decrement_from_nothing() {
         let r = radio(EndBehavior::Wrap);
-        assert_eq!(r.next(None, Increment), Some(0));
-        assert_eq!(r.next(None, Decrement), Some(2));
+        assert_eq!(r.next(None, None, Increment), Some(0));
+        assert_eq!(r.next(None, None, Decrement), Some(2));
     }
 
     #[test]
     fn wrap_goes_round() {
         let r = radio(EndBehavior::Wrap);
-        assert_eq!(r.next(Some(0), Increment), Some(1));
-        assert_eq!(r.next(Some(2), Increment), Some(0));
-        assert_eq!(r.next(Some(0), Decrement), Some(2));
-        assert_eq!(r.next(Some(1), Decrement), Some(0));
+        assert_eq!(r.next(Some(0), None, Increment), Some(1));
+        assert_eq!(r.next(Some(2), None, Increment), Some(0));
+        assert_eq!(r.next(Some(0), None, Decrement), Some(2));
+        assert_eq!(r.next(Some(1), None, Decrement), Some(0));
     }
 
     #[test]
     fn clamp_stops_at_ends() {
         let r = radio(EndBehavior::Clamp);
-        assert_eq!(r.next(Some(2), Increment), Some(2));
-        assert_eq!(r.next(Some(0), Decrement), Some(0));
+        assert_eq!(r.next(Some(2), None, Increment), Some(2));
+        assert_eq!(r.next(Some(0), None, Decrement), Some(0));
     }
 
     #[test]
     fn select_and_reselect() {
         let mut r = radio(EndBehavior::Wrap);
-        assert_eq!(r.next(None, Select(1)), Some(1));
-        assert_eq!(r.next(Some(0), Select(1)), Some(1));
-        assert_eq!(r.next(Some(1), Select(1)), Some(1));
+        assert_eq!(r.next(None, None, Select(1)), Some(1));
+        assert_eq!(r.next(Some(0), None, Select(1)), Some(1));
+        assert_eq!(r.next(Some(1), None, Select(1)), Some(1));
         r.toggle_on_reselect = true;
-        assert_eq!(r.next(Some(1), Select(1)), None);
-        assert_eq!(r.next(Some(0), Select(1)), Some(1));
-        assert_eq!(r.next(Some(0), Select(7)), Some(0));
+        assert_eq!(r.next(Some(1), None, Select(1)), None);
+        assert_eq!(r.next(Some(0), None, Select(1)), Some(1));
+        assert_eq!(r.next(Some(0), None, Select(7)), Some(0));
     }
 
     #[test]
     fn clear() {
         let r = radio(EndBehavior::Wrap);
-        assert_eq!(r.next(Some(1), Clear), None);
-        assert_eq!(r.next(None, Clear), None);
+        assert_eq!(r.next(Some(1), None, Clear), None);
+        assert_eq!(r.next(None, None, Clear), None);
     }
 
     #[test]
     fn no_states_means_nothing_active() {
         let r = Radio::default();
-        assert_eq!(r.next(None, Increment), None);
+        assert_eq!(r.next(None, None, Increment), None);
     }
 
     #[test]
@@ -526,5 +632,114 @@ mod tests {
         .unwrap();
         assert_eq!(minimal.radio().startup, Startup::RestoreLast);
         assert!(!minimal.radio().toggle_on_reselect);
+    }
+
+    fn memory(active: Option<&str>, last: Option<&str>) -> RadioMemory {
+        RadioMemory {
+            active: active.map(Into::into),
+            last: last.map(Into::into),
+        }
+    }
+
+    /// Phases and states of the actions, e.g. ["-A", "+B"].
+    fn trace(actions: Option<Vec<ActionRequest>>) -> Vec<String> {
+        actions
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| {
+                let sign = if a.phase == Phase::Activate { '+' } else { '-' };
+                format!("{sign}{}", a.state)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn toggle_off_deactivates_and_reactivates_the_last_state() {
+        let r = radio(EndBehavior::Wrap);
+        let mut m = memory(Some("b"), None);
+        assert_eq!(trace(r.apply("radio", &mut m, ToggleOff)), ["-B"]);
+        assert_eq!(m, memory(None, Some("b")));
+        assert_eq!(trace(r.apply("radio", &mut m, ToggleOff)), ["+B"]);
+        assert_eq!(m, memory(Some("b"), Some("b")));
+    }
+
+    #[test]
+    fn toggle_off_without_memory_activates_the_first_state() {
+        let r = radio(EndBehavior::Wrap);
+        let mut m = RadioMemory::default();
+        assert_eq!(trace(r.apply("radio", &mut m, ToggleOff)), ["+A"]);
+        // A remembered state that no longer exists counts as nothing remembered.
+        let mut m = memory(None, Some("gone"));
+        assert_eq!(trace(r.apply("radio", &mut m, ToggleOff)), ["+A"]);
+        assert_eq!(r.next(None, Some(9), ToggleOff), Some(0));
+    }
+
+    #[test]
+    fn every_deactivation_is_remembered() {
+        let mut r = radio(EndBehavior::Wrap);
+        // Switching from A to B remembers A.
+        let mut m = memory(Some("a"), None);
+        assert_eq!(trace(r.apply("radio", &mut m, Select(1))), ["-A", "+B"]);
+        assert_eq!(m, memory(Some("b"), Some("a")));
+        // All off.
+        assert_eq!(trace(r.apply("radio", &mut m, Clear)), ["-B"]);
+        assert_eq!(m, memory(None, Some("b")));
+        assert_eq!(trace(r.apply("radio", &mut m, ToggleOff)), ["+B"]);
+        // Reselect with toggle_on_reselect.
+        r.toggle_on_reselect = true;
+        let mut m = memory(Some("c"), Some("a"));
+        assert_eq!(trace(r.apply("radio", &mut m, Select(2))), ["-C"]);
+        assert_eq!(m, memory(None, Some("c")));
+        // Increment and decrement too.
+        let mut m = memory(Some("c"), None);
+        r.apply("radio", &mut m, Increment);
+        assert_eq!(m, memory(Some("a"), Some("c")));
+        // A silent set as well.
+        r.set(&mut m, None);
+        assert_eq!(m, memory(None, Some("a")));
+        // Nothing changes, nothing is remembered.
+        assert!(r.apply("radio", &mut m, Clear).is_none());
+        assert_eq!(m, memory(None, Some("a")));
+    }
+
+    #[test]
+    fn memory_forgets_deleted_states() {
+        let r = radio(EndBehavior::Wrap);
+        let mut m = memory(Some("x"), Some("b"));
+        m.retain_existing(&r);
+        assert_eq!(m, memory(None, Some("b")));
+        let mut m = memory(Some("a"), Some("y"));
+        m.retain_existing(&r);
+        assert_eq!(m, memory(Some("a"), None));
+    }
+
+    #[test]
+    fn memory_file_shape_and_old_entries() {
+        let m = memory(None, Some("st-2"));
+        let json = serde_json::to_string(&m).unwrap();
+        assert_eq!(json, r#"{"active":null,"last":"st-2"}"#);
+        assert_eq!(serde_json::from_str::<RadioMemory>(&json).unwrap(), m);
+        // Files written before toggle off hold just the active state id.
+        assert_eq!(
+            serde_json::from_str::<RadioMemory>(r#""st-1""#).unwrap(),
+            memory(Some("st-1"), None)
+        );
+        assert_eq!(
+            serde_json::from_str::<RadioMemory>(r#"{"active":"st-3"}"#).unwrap(),
+            memory(Some("st-3"), None)
+        );
+    }
+
+    #[test]
+    fn toggle_off_trigger_comes_last() {
+        let t = Trigger::Button {
+            device: DeviceId("d".into()),
+            index: 1,
+        };
+        let mut r = radio(EndBehavior::Wrap);
+        r.toggle_off.push(t.clone());
+        r.clear.push(t.clone());
+        assert_eq!(r.commands_for(&t), [Clear, ToggleOff]);
+        assert!(r.triggers().any(|x| *x == t));
     }
 }

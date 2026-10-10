@@ -231,6 +231,7 @@ enum UiRadioCommand {
     Increment,
     Decrement,
     Clear,
+    ToggleOff,
 }
 
 #[tauri::command]
@@ -239,6 +240,7 @@ fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: UiRadioCom
         UiRadioCommand::Increment => RadioCommand::Increment,
         UiRadioCommand::Decrement => RadioCommand::Decrement,
         UiRadioCommand::Clear => RadioCommand::Clear,
+        UiRadioCommand::ToggleOff => RadioCommand::ToggleOff,
     };
     with(&shared, |e| e.command_radio(&id, command))
 }
@@ -357,6 +359,7 @@ mod tests {
                 "increment":[{"type":"encoderStep","encoder":"enc-1","direction":"increment"}],
                 "decrement":[{"type":"encoderStep","encoder":"enc-1","direction":"decrement"}],
                 "clear":[{"type":"hat","device":"f00d:0001#1","index":0,"direction":"upLeft"}],
+                "toggleOff":[{"type":"button","device":"f00d:0001#1","index":7}],
                 "end":"clamp","toggleOnReselect":true,"startup":"empty"}}"#,
         )
         .unwrap();
@@ -379,7 +382,13 @@ mod tests {
         )
         .unwrap();
         let _: Option<MonitorRef> = serde_json::from_str("null").unwrap();
-        for command in [r#""increment""#, r#""decrement""#, r#""clear""#] {
+        assert_eq!(c.radio().toggle_off.len(), 1);
+        for command in [
+            r#""increment""#,
+            r#""decrement""#,
+            r#""clear""#,
+            r#""toggleOff""#,
+        ] {
             let _: UiRadioCommand = serde_json::from_str(command).unwrap();
         }
     }

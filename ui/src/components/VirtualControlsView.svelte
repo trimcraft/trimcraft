@@ -26,6 +26,7 @@
       increment: [],
       decrement: [],
       clear: [],
+      toggleOff: [],
       end: "wrap",
       toggleOnReselect: false,
       startup: "restoreLast",
@@ -85,6 +86,7 @@
         <button class="small" title="Previous state (runs actions)" onclick={() => command(c.id, "decrement")}>◀</button>
         <button class="small" title="Next state (runs actions)" onclick={() => command(c.id, "increment")}>▶</button>
         <button class="small" title="All off (runs actions)" onclick={() => command(c.id, "clear")}>Off</button>
+        <button class="small" title="Toggle off: off, or back to the last active state (runs actions)" onclick={() => command(c.id, "toggleOff")}>Toggle</button>
         <button class="small" class:active={onOverlay(c.id)} onclick={() => run(async () => (await backend()).toggleOverlayVirtualControl(c.id))}>
           {onOverlay(c.id) ? "On overlay" : "Show on overlay"}
         </button>
@@ -106,7 +108,7 @@
   {:else}
     <div class="row new">
       <button onclick={() => (draft = blank())}>New radio</button>
-      <span class="muted small">◀ ▶ Off run actions like a trigger; clicking a state sets it silently.</span>
+      <span class="muted small">◀ ▶ Off Toggle run actions like a trigger; clicking a state sets it silently.</span>
     </div>
   {/if}
 </section>

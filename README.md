@@ -32,8 +32,10 @@ A virtual control is built from physical inputs and can run actions. The first k
 **radio**: several states of which at most one is active, like the preset buttons of a car radio.
 
 - Triggers: a button press, a hat direction being entered, or one encoder detent. Next state,
-  previous state, "all off" and "select this state" each take any number of triggers. Assign
-  them by pressing the control ("learn") or pick them from a list.
+  previous state, "all off", "toggle off" and "select this state" each take any number of
+  triggers. Assign them by pressing the control ("learn") or pick them from a list. Toggle off
+  turns the active state off, or brings back the most recently active one (the first state if
+  none was active yet); this also works after a restart.
 - Each state has actions on activate and on deactivate. Switching from A to B runs A's
   deactivate actions, then B's activate actions.
 - Actions are keyboard macros (key down, key up, tap with hold time, wait) and mouse macros

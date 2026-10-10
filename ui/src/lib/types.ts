@@ -222,6 +222,8 @@ export interface Radio {
   increment: Trigger[];
   decrement: Trigger[];
   clear: Trigger[];
+  /** Off if a state is active, otherwise back to the most recently active state. */
+  toggleOff: Trigger[];
   end: EndBehavior;
   toggleOnReselect: boolean;
   startup: Startup;
@@ -250,4 +252,4 @@ export interface KeyInfo {
 }
 
 /** Radio commands the UI can run; they fire actions like a trigger would. */
-export type RadioCommand = "increment" | "decrement" | "clear";
+export type RadioCommand = "increment" | "decrement" | "clear" | "toggleOff";

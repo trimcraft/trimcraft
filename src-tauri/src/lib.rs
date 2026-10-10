@@ -138,7 +138,7 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         })
         .unwrap_or_default();
     let values: BTreeMap<String, f64> = storage.load_json(VALUES_FILE).unwrap_or_default();
-    let control_states: BTreeMap<String, String> =
+    let control_states: BTreeMap<String, detent_core::RadioMemory> =
         storage.load_json(CONTROL_STATES_FILE).unwrap_or_default();
     let meta = Meta {
         version: app.package_info().version.to_string(),

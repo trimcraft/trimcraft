@@ -17,7 +17,7 @@ import type {
 } from "./types";
 import { actionText, sameTrigger } from "./format";
 
-type Cmd = { type: "increment" | "decrement" | "clear" } | { type: "select"; index: number };
+type Cmd = { type: "increment" | "decrement" | "clear" | "toggleOff" } | { type: "select"; index: number };
 
 const HAT_MASKS: Record<number, HatDirection> = {
   1: "up", 3: "upRight", 2: "right", 6: "downRight", 4: "down", 12: "downLeft", 8: "left", 9: "upLeft",
@@ -90,7 +90,9 @@ export function createDemo(): Backend {
 
   // Virtual controls: same semantics as detent-core's virtual_control.rs, without actions
   // (they are only logged to the console).
-  const nextState = (r: Radio, active: number | null, cmd: Cmd): number | null => {
+  /** Most recently active state per control, for toggle off. */
+  const lastActive = new Map<string, string>();
+  const nextState = (r: Radio, active: number | null, recent: number | null, cmd: Cmd): number | null => {
     const last = r.states.length - 1;
     if (last < 0) return null;
     switch (cmd.type) {
@@ -103,18 +105,28 @@ export function createDemo(): Backend {
         return active === cmd.index ? (r.toggleOnReselect ? null : active) : cmd.index;
       case "clear":
         return null;
+      case "toggleOff":
+        return active !== null ? null : recent !== null && recent <= last ? recent : 0;
     }
+  };
+  const indexOf = (r: Radio, id: string | null | undefined) => {
+    const i = r.states.findIndex((st) => st.id === id);
+    return i >= 0 ? i : null;
+  };
+  /** Sets the active state; the state left is remembered. */
+  const setActive = (c: VirtualControlView, to: number | null) => {
+    if (c.active !== null && indexOf(c.kind, c.active) !== to) lastActive.set(c.id, c.active);
+    c.active = to === null ? null : c.kind.states[to]!.id;
+    c.activeName = to === null ? null : c.kind.states[to]!.name;
   };
   const runCommand = (c: VirtualControlView, cmd: Cmd) => {
     const r = c.kind;
-    const fromIndex = r.states.findIndex((st) => st.id === c.active);
-    const from = fromIndex >= 0 ? fromIndex : null;
-    const to = nextState(r, from, cmd);
+    const from = indexOf(r, c.active);
+    const to = nextState(r, from, indexOf(r, lastActive.get(c.id)), cmd);
     if (from === to) return;
     if (from !== null) r.states[from]!.onDeactivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[from]!.name} deactivate:`, actionText(a)));
     if (to !== null) r.states[to]!.onActivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[to]!.name} activate:`, actionText(a)));
-    c.active = to === null ? null : r.states[to]!.id;
-    c.activeName = to === null ? null : r.states[to]!.name;
+    setActive(c, to);
   };
   const fire = (t: Trigger) => {
     for (const c of s.virtualControls) {
@@ -124,6 +136,7 @@ export function createDemo(): Backend {
       if (has(r.decrement)) runCommand(c, { type: "decrement" });
       r.states.forEach((st, index) => { if (has(st.select)) runCommand(c, { type: "select", index }); });
       if (has(r.clear)) runCommand(c, { type: "clear" });
+      if (has(r.toggleOff)) runCommand(c, { type: "toggleOff" });
     }
   };
   const findControl = (id: string) => {
@@ -236,6 +249,7 @@ export function createDemo(): Backend {
         r.increment = r.increment.filter(keep);
         r.decrement = r.decrement.filter(keep);
         r.clear = r.clear.filter(keep);
+        r.toggleOff = r.toggleOff.filter(keep);
         for (const st of r.states) st.select = st.select.filter(keep);
       }
       emit();
@@ -310,11 +324,13 @@ export function createDemo(): Backend {
         const old = s.virtualControls[i]!;
         const still = r.states.find((st) => st.id === old.active);
         s.virtualControls[i] = { ...c, active: still?.id ?? null, activeName: still?.name ?? null };
+        if (!r.states.some((st) => st.id === lastActive.get(c.id))) lastActive.delete(c.id);
       }
       emit();
       return c.id;
     },
     async removeVirtualControl(id) {
+      lastActive.delete(id);
       s.virtualControls = s.virtualControls.filter((c) => c.id !== id);
       s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "radio" && w.control === id));
       emit();
@@ -323,8 +339,7 @@ export function createDemo(): Backend {
       const c = findControl(id);
       const st = c.kind.states.find((x) => x.id === state);
       if (state !== null && !st) throw new Error(`unknown state ${state}`);
-      c.active = st?.id ?? null;
-      c.activeName = st?.name ?? null;
+      setActive(c, indexOf(c.kind, st?.id));
       emit();
     },
     async commandRadio(id, command) {

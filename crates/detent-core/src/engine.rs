@@ -17,8 +17,8 @@ use crate::setup::{ButtonPair, Setup};
 use crate::state::{ButtonEdge, HatEdge};
 use crate::state::{LiveState, Snapshot};
 use crate::virtual_control::{
-    ActionRequest, ControlError, HatDirection, RadioCommand, Startup, StepDirection, Trigger,
-    VirtualControl,
+    ActionRequest, ControlError, HatDirection, RadioCommand, RadioMemory, Startup, StepDirection,
+    Trigger, VirtualControl,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -146,8 +146,8 @@ pub struct Engine {
     detector: EncoderDetector,
     positions: HashMap<String, i64>,
     steps: HashMap<(String, bool), u64>,
-    /// Active state id per virtual control.
-    active: HashMap<String, String>,
+    /// Active and most recently active state per virtual control.
+    memory: HashMap<String, RadioMemory>,
     /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
     actions: Vec<ActionRequest>,
     learn: Learn,
@@ -177,7 +177,7 @@ impl Engine {
             live: LiveState::default(),
             positions,
             steps: HashMap::new(),
-            active: HashMap::new(),
+            memory: HashMap::new(),
             actions: Vec::new(),
             learn: Learn::Off,
             overlay_editing: false,
@@ -185,19 +185,22 @@ impl Engine {
         }
     }
 
-    /// Restores the active states saved at the last run (control id to state id), without
-    /// running any actions. Controls set to start empty, and states that no longer exist,
-    /// are skipped.
-    pub fn restore_active_states(&mut self, saved: &BTreeMap<String, String>) {
+    /// Restores what was saved at the last run (active and most recently active state per
+    /// control), without running any actions. States that no longer exist are dropped. A
+    /// control set to start empty starts with nothing active but remembers the state that
+    /// was active, so toggle off brings it back.
+    pub fn restore_active_states(&mut self, saved: &BTreeMap<String, RadioMemory>) {
         for control in &self.setup.virtual_controls {
             let radio = control.radio();
-            if radio.startup == Startup::Empty {
+            let Some(mut memory) = saved.get(&control.id).cloned() else {
                 continue;
+            };
+            memory.retain_existing(radio);
+            if radio.startup == Startup::Empty {
+                memory.last = memory.active.take().or(memory.last);
             }
-            if let Some(state) = saved.get(&control.id)
-                && radio.index_of(state).is_some()
-            {
-                self.active.insert(control.id.clone(), state.clone());
+            if !memory.is_empty() {
+                self.memory.insert(control.id.clone(), memory);
             }
         }
     }
@@ -279,7 +282,7 @@ impl Engine {
         for control in &self.setup.virtual_controls {
             for command in control.radio().commands_for(trigger) {
                 self.dirty.controls |=
-                    run_radio_command(control, command, &mut self.active, &mut self.actions);
+                    run_radio_command(control, command, &mut self.memory, &mut self.actions);
             }
         }
     }
@@ -331,19 +334,21 @@ impl Engine {
             .collect()
     }
 
-    /// Active state per virtual control (control id to state id), for persisting.
-    pub fn active_states(&self) -> BTreeMap<String, String> {
-        self.active
+    /// Active and most recently active state per virtual control, for persisting.
+    pub fn active_states(&self) -> BTreeMap<String, RadioMemory> {
+        self.memory
             .iter()
-            .map(|(c, s)| (c.clone(), s.clone()))
+            .filter(|(_, m)| !m.is_empty())
+            .map(|(c, m)| (c.clone(), m.clone()))
             .collect()
     }
 
     fn control_view(&self, control: &VirtualControl) -> VirtualControlView {
         let radio = control.radio();
         let active = self
-            .active
+            .memory
             .get(&control.id)
+            .and_then(|m| m.active.as_deref())
             .and_then(|id| radio.index_of(id));
         VirtualControlView {
             control: control.clone(),
@@ -707,11 +712,10 @@ impl Engine {
                 .find(|c| c.id == control.id)
                 .ok_or_else(|| EngineError::UnknownControl(control.id.clone()))?;
             *slot = control.clone();
-            if let Some(state) = self.active.get(&control.id)
-                && control.radio().index_of(state).is_none()
-            {
-                self.active.remove(&control.id);
-                self.dirty.controls = true;
+            if let Some(memory) = self.memory.get_mut(&control.id) {
+                let before = memory.clone();
+                memory.retain_existing(control.radio());
+                self.dirty.controls |= *memory != before;
             }
         }
         self.dirty.setup = true;
@@ -722,7 +726,7 @@ impl Engine {
         self.virtual_control(id)?;
         self.setup.virtual_controls.retain(|c| c.id != id);
         self.setup.overlay.remove_virtual_control(id);
-        self.active.remove(id);
+        self.memory.remove(id);
         self.dirty.setup = true;
         self.dirty.controls = true;
         Ok(())
@@ -730,18 +734,22 @@ impl Engine {
 
     /// Sets the active state (or none) without running actions, e.g. to match the game.
     pub fn set_radio_active(&mut self, id: &str, state: Option<String>) -> Result<(), EngineError> {
-        let radio = self.virtual_control(id)?.radio();
-        match state {
-            Some(state) => {
-                if radio.index_of(&state).is_none() {
-                    return Err(EngineError::UnknownState(state));
-                }
-                self.active.insert(id.into(), state);
-            }
-            None => {
-                self.active.remove(id);
-            }
-        }
+        let radio = self
+            .setup
+            .virtual_controls
+            .iter()
+            .find(|c| c.id == id)
+            .ok_or_else(|| EngineError::UnknownControl(id.into()))?
+            .radio();
+        let to = match state {
+            Some(state) => Some(
+                radio
+                    .index_of(&state)
+                    .ok_or(EngineError::UnknownState(state))?,
+            ),
+            None => None,
+        };
+        radio.set(self.memory.entry(id.into()).or_default(), to);
         self.dirty.controls = true;
         Ok(())
     }
@@ -755,7 +763,7 @@ impl Engine {
             .find(|c| c.id == id)
             .ok_or_else(|| EngineError::UnknownControl(id.into()))?;
         self.dirty.controls |=
-            run_radio_command(control, command, &mut self.active, &mut self.actions);
+            run_radio_command(control, command, &mut self.memory, &mut self.actions);
         Ok(())
     }
 
@@ -800,26 +808,22 @@ impl Engine {
     }
 }
 
-/// Applies `command` to a radio: updates its entry in `active` and queues the transition's
-/// actions. Returns whether the active state changed.
+/// Applies `command` to a radio: updates its memory and queues the transition's actions.
+/// Returns whether the active state changed.
 fn run_radio_command(
     control: &VirtualControl,
     command: RadioCommand,
-    active: &mut HashMap<String, String>,
+    memory: &mut HashMap<String, RadioMemory>,
     actions: &mut Vec<ActionRequest>,
 ) -> bool {
-    let radio = control.radio();
-    let from = active.get(&control.id).and_then(|s| radio.index_of(s));
-    let to = radio.next(from, command);
-    if from == to {
-        return false;
+    let memory = memory.entry(control.id.clone()).or_default();
+    match control.radio().apply(&control.name, memory, command) {
+        Some(emitted) => {
+            actions.extend(emitted);
+            true
+        }
+        None => false,
     }
-    actions.extend(radio.transition_actions(&control.name, from, to));
-    match to {
-        Some(i) => active.insert(control.id.clone(), radio.states[i].id.clone()),
-        None => active.remove(&control.id),
-    };
-    true
 }
 
 fn next_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
@@ -1194,7 +1198,7 @@ mod tests {
         press(&mut engine, 0, 0);
         engine.take_actions();
         let saved = engine.active_states();
-        assert_eq!(saved.get(&id).map(String::as_str), Some("st-2"));
+        assert_eq!(saved[&id].active.as_deref(), Some("st-2"));
 
         let mut restarted = Engine::new(
             engine.registry().clone(),
@@ -1217,7 +1221,12 @@ mod tests {
             engine.setup().clone(),
             &BTreeMap::new(),
         );
-        gone.restore_active_states(&BTreeMap::from([(id.clone(), "st-99".to_string())]));
+        let stale = RadioMemory {
+            active: Some("st-99".into()),
+            last: None,
+        };
+        gone.restore_active_states(&BTreeMap::from([(id.clone(), stale)]));
+        assert!(gone.active_states().is_empty());
         assert_eq!(active(&gone, &id), None);
     }
 
@@ -1466,5 +1475,91 @@ mod tests {
         engine.set_overlay_editing(true);
         assert!(engine.snapshot().overlay_editing);
         assert!(!engine.take_dirty().setup); // edit mode is not persisted
+    }
+
+    fn restart(engine: &Engine, setup: Setup) -> Engine {
+        let mut restarted = Engine::new(engine.registry().clone(), setup, &BTreeMap::new());
+        restarted.restore_active_states(&engine.active_states());
+        restarted.apply(BackendEvent::Initial(vec![raw()]));
+        restarted
+    }
+
+    #[test]
+    fn toggle_off_trigger_turns_off_and_back_on() {
+        let (mut engine, id) = engine_with_radio(|r| r.toggle_off.push(button(5)));
+        // Nothing ever active: the first state.
+        press(&mut engine, 5, 0);
+        assert_eq!(active(&engine, &id).as_deref(), Some("A"));
+        assert_eq!(keys(&mut engine), ["F1"]);
+        press(&mut engine, 0, 100); // select B, remembers A
+        engine.take_actions();
+        press(&mut engine, 5, 200);
+        assert_eq!(active(&engine, &id), None);
+        assert_eq!(keys(&mut engine), ["F4"]);
+        press(&mut engine, 5, 300);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        assert_eq!(keys(&mut engine), ["F3"]);
+        // All off is remembered as well.
+        hat(&mut engine, HatState::UP, 400);
+        engine.take_actions();
+        press(&mut engine, 5, 500);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        // The UI button does the same.
+        engine.command_radio(&id, RadioCommand::ToggleOff).unwrap();
+        assert_eq!(active(&engine, &id), None);
+    }
+
+    #[test]
+    fn toggle_off_works_after_restart() {
+        let (mut engine, id) = engine_with_radio(|r| r.toggle_off.push(button(5)));
+        press(&mut engine, 0, 0); // B
+        press(&mut engine, 5, 100); // off, remembers B
+        engine.take_actions();
+        assert_eq!(
+            engine.active_states()[&id],
+            RadioMemory {
+                active: None,
+                last: Some("st-2".into())
+            }
+        );
+        let mut restarted = restart(&engine, engine.setup().clone());
+        assert_eq!(active(&restarted, &id), None);
+        press(&mut restarted, 5, 0);
+        assert_eq!(active(&restarted, &id).as_deref(), Some("B"));
+        assert_eq!(keys(&mut restarted), ["F3"]);
+
+        // Starting empty: the state active at shutdown is the one toggle off brings back.
+        let mut setup = engine.setup().clone();
+        setup.virtual_controls[0].radio_mut().startup = Startup::Empty;
+        let mut before = restart(&engine, engine.setup().clone());
+        press(&mut before, 5, 0); // B active at shutdown
+        let mut empty = restart(&before, setup);
+        assert_eq!(active(&empty, &id), None);
+        press(&mut empty, 5, 0);
+        assert_eq!(active(&empty, &id).as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn deleting_the_remembered_state_forgets_it() {
+        let (mut engine, id) = engine_with_radio(|r| r.toggle_off.push(button(5)));
+        press(&mut engine, 0, 0); // B
+        press(&mut engine, 5, 100); // off, remembers B
+        let mut control = engine.setup().virtual_controls[0].clone();
+        control.radio_mut().states.remove(1);
+        engine.save_virtual_control(control).unwrap();
+        assert!(!engine.active_states().contains_key(&id));
+        engine.take_actions();
+        press(&mut engine, 5, 200);
+        assert_eq!(active(&engine, &id).as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn silent_set_is_remembered_too() {
+        let (mut engine, id) = engine_with_radio(|r| r.toggle_off.push(button(5)));
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        engine.set_radio_active(&id, None).unwrap();
+        assert!(engine.take_actions().is_empty());
+        press(&mut engine, 5, 0);
+        assert_eq!(active(&engine, &id).as_deref(), Some("C"));
     }
 }

@@ -30,6 +30,6 @@ pub use registry::DeviceRegistry;
 pub use setup::{ButtonPair, Setup};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};
 pub use virtual_control::{
-    ActionRequest, HatDirection, Phase, Radio, RadioCommand, RadioState, Startup, StepDirection,
-    Trigger, VirtualControl, VirtualControlKind,
+    ActionRequest, HatDirection, Phase, Radio, RadioCommand, RadioMemory, RadioState, Startup,
+    StepDirection, Trigger, VirtualControl, VirtualControlKind,
 };

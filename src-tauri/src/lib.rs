@@ -1,10 +1,12 @@
 //! Detent desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod commands;
+mod executor;
 mod overlay;
 mod storage;
 
 use detent_core::{DeviceRegistry, Engine, Setup};
+use executor::Executor;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,10 +18,12 @@ use tauri::{AppHandle, Emitter, Manager};
 const DEVICES_FILE: &str = "devices.json";
 const SETUP_FILE: &str = "setup.json";
 const VALUES_FILE: &str = "values.json";
+/// Active state per virtual control.
+const CONTROL_STATES_FILE: &str = "control-states.json";
 
 /// UI refresh: at most this often. Input itself is processed as it arrives.
 const FRAME: Duration = Duration::from_millis(16);
-/// Function values (counters) are saved at most this often while they change.
+/// Function values (counters) and active states are saved at most this often while they change.
 const SAVE_VALUES_EVERY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +40,7 @@ pub struct Shared {
     engine: Mutex<Engine>,
     changed: AtomicBool,
     storage: Storage,
+    executor: Executor,
     meta: Meta,
 }
 
@@ -45,10 +50,20 @@ impl Shared {
         self.engine.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// Saves whatever the engine marked as changed and asks the UI to redraw.
+    /// Runs queued actions, saves whatever the engine marked as changed and asks the UI to
+    /// redraw.
     pub fn commit(&self, engine: &mut Engine) {
+        self.dispatch(engine);
         self.save(engine);
         self.changed.store(true, Ordering::Relaxed);
+    }
+
+    /// Hands the actions the engine emitted to the executor thread, in order.
+    fn dispatch(&self, engine: &mut Engine) {
+        let actions = engine.take_actions();
+        if !actions.is_empty() {
+            self.executor.submit(actions);
+        }
     }
 
     fn save(&self, engine: &mut Engine) {
@@ -62,6 +77,10 @@ impl Shared {
         }
         if dirty.values {
             self.storage.save_json(VALUES_FILE, &engine.values());
+        }
+        if dirty.controls {
+            self.storage
+                .save_json(CONTROL_STATES_FILE, &engine.active_states());
         }
     }
 }
@@ -119,6 +138,8 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         })
         .unwrap_or_default();
     let values: BTreeMap<String, f64> = storage.load_json(VALUES_FILE).unwrap_or_default();
+    let control_states: BTreeMap<String, String> =
+        storage.load_json(CONTROL_STATES_FILE).unwrap_or_default();
     let meta = Meta {
         version: app.package_info().version.to_string(),
         backend: backend.into(),
@@ -136,10 +157,13 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         meta.platform,
         meta.backend
     );
+    let mut engine = Engine::new(registry, setup, &values);
+    engine.restore_active_states(&control_states);
     Ok(Shared {
-        engine: Mutex::new(Engine::new(registry, setup, &values)),
+        engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
+        executor: Executor::spawn(),
         meta,
     })
 }
@@ -164,11 +188,13 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                             if engine.apply(event) {
                                 shared.changed.store(true, Ordering::Relaxed);
                             }
+                            shared.dispatch(&mut engine);
                             // Drain whatever else is queued before taking the next frame decision.
                             while let Ok(event) = backend.events.try_recv() {
                                 if engine.apply(event) {
                                     shared.changed.store(true, Ordering::Relaxed);
                                 }
+                                shared.dispatch(&mut engine);
                             }
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

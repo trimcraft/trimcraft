@@ -2,7 +2,8 @@
 
 use crate::{Meta, Shared, overlay};
 use detent_core::{
-    Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId, EngineSnapshot, Function,
+    Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo,
+    RadioCommand, VirtualControl,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -29,6 +30,14 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_overlay_visible,
         set_hotkey,
         set_detector_config,
+        get_keys,
+        save_virtual_control,
+        remove_virtual_control,
+        set_radio_active,
+        command_radio,
+        toggle_overlay_virtual_control,
+        start_learn,
+        stop_learn,
     ]
 }
 
@@ -190,6 +199,66 @@ fn set_detector_config(shared: State<'_, Arc<Shared>>, config: DetectorConfig) -
     })
 }
 
+#[tauri::command]
+fn get_keys() -> &'static [KeyInfo] {
+    detent_core::action::KEYS
+}
+
+#[tauri::command]
+fn save_virtual_control(shared: State<'_, Arc<Shared>>, control: VirtualControl) -> Res<String> {
+    with(&shared, |e| e.save_virtual_control(control))
+}
+
+#[tauri::command]
+fn remove_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
+    with(&shared, |e| e.remove_virtual_control(&id))
+}
+
+#[tauri::command]
+fn set_radio_active(shared: State<'_, Arc<Shared>>, id: String, state: Option<String>) -> Res<()> {
+    with(&shared, |e| e.set_radio_active(&id, state))
+}
+
+/// Radio commands the UI can run, as if a trigger had fired.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum UiRadioCommand {
+    Increment,
+    Decrement,
+    Clear,
+}
+
+#[tauri::command]
+fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: UiRadioCommand) -> Res<()> {
+    let command = match command {
+        UiRadioCommand::Increment => RadioCommand::Increment,
+        UiRadioCommand::Decrement => RadioCommand::Decrement,
+        UiRadioCommand::Clear => RadioCommand::Clear,
+    };
+    with(&shared, |e| e.command_radio(&id, command))
+}
+
+#[tauri::command]
+fn toggle_overlay_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<bool> {
+    with(&shared, |e| e.toggle_overlay_virtual_control(&id))
+}
+
+#[tauri::command]
+fn start_learn(shared: State<'_, Arc<Shared>>) -> Res<()> {
+    with(&shared, |e| {
+        e.start_learn();
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn stop_learn(shared: State<'_, Arc<Shared>>) -> Res<()> {
+    with(&shared, |e| {
+        e.stop_learn();
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     //! The UI sends these payloads (see ui/src/lib/backend.ts); they must deserialise.
@@ -213,6 +282,44 @@ mod tests {
         )
         .unwrap();
         assert_eq!(f.encoder(), Some("enc-1"));
+
+        let c: VirtualControl = serde_json::from_str(
+            r#"{"id":"","name":"Comms","kind":{"type":"radio",
+                "states":[
+                  {"id":"","name":"Guard",
+                   "select":[{"type":"button","device":"f00d:0001#1","index":3}],
+                   "onActivate":[{"type":"keyboardMacro","steps":[
+                      {"type":"keyDown","key":"LeftCtrl"},
+                      {"type":"keyTap","key":"F1","holdMs":null},
+                      {"type":"keyTap","key":"F2","holdMs":80},
+                      {"type":"delay","ms":100},
+                      {"type":"keyUp","key":"LeftCtrl"}]}],
+                   "onDeactivate":[{"type":"mouseMacro","steps":[
+                      {"type":"buttonDown","button":"left"},
+                      {"type":"buttonUp","button":"left"},
+                      {"type":"click","button":"x1","holdMs":null},
+                      {"type":"wheel","delta":-1},
+                      {"type":"moveRelative","dx":5,"dy":-5},
+                      {"type":"delay","ms":10}]}]}],
+                "increment":[{"type":"encoderStep","encoder":"enc-1","direction":"increment"}],
+                "decrement":[{"type":"encoderStep","encoder":"enc-1","direction":"decrement"}],
+                "clear":[{"type":"hat","device":"f00d:0001#1","index":0,"direction":"upLeft"}],
+                "end":"clamp","toggleOnReselect":true,"startup":"empty"}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.radio().states[0].on_activate.len(), 1);
+        assert_eq!(c.radio().startup, detent_core::Startup::Empty);
+        for command in [r#""increment""#, r#""decrement""#, r#""clear""#] {
+            let _: UiRadioCommand = serde_json::from_str(command).unwrap();
+        }
+    }
+
+    #[test]
+    fn key_list_serialises_for_the_ui() {
+        let json = serde_json::to_value(detent_core::action::KEYS).unwrap();
+        assert_eq!(json[0]["name"], "A");
+        assert_eq!(json[0]["scan"], 0x1E);
+        assert_eq!(json[0]["extended"], false);
     }
 
     #[test]

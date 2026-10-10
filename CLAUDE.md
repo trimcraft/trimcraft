@@ -35,17 +35,24 @@ npm run dev                        # UI in a browser with the in-page demo (ui/s
 cargo run -p detent-input --example probe -- 30
 ```
 
+On Windows, a checkout in a deep path (e.g. a worktree under `.claude/worktrees`) makes the SDL3
+CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a short directory.
+
 ## Layout
 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
-  `setup` (persisted config, schema-versioned), `engine` (ties it together, UI commands).
+  `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
+  `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops), `engine`
+  (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
-- `src-tauri`: `lib.rs` (engine thread, persistence), `overlay.rs` (overlay window, hotkey),
-  `commands.rs` (IPC; payload shapes are tested), `storage.rs` (atomic JSON files).
-- `ui/src`: `App.svelte` (main window), `Overlay.svelte` (overlay window), `lib/types.ts` mirrors
-  the Rust JSON, `lib/backend.ts` switches between Tauri IPC and the browser demo.
+- `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
+  `overlay.rs` (overlay window, hotkey), `commands.rs` (IPC; payload shapes are tested),
+  `storage.rs` (atomic JSON files).
+- `ui/src`: `App.svelte` (main window: Hardware Test and Virtual Controls), `Overlay.svelte`
+  (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload
 test in `src-tauri/src/commands.rs`. When changing `Setup`, keep old files loading (serde defaults)

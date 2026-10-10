@@ -20,13 +20,33 @@ with an in-game overlay.
 The overlay never touches the game process. It works over games in windowed or borderless
 fullscreen mode, not exclusive fullscreen.
 
-Mapping to keys or a virtual joystick and per-game profiles come in later stages.
+## Virtual controls
+
+The main window has two sections: **Hardware Test** (everything above) and **Virtual Controls**.
+A virtual control is built from physical inputs and can run actions. The first kind is the
+**radio**: several states of which at most one is active, like the preset buttons of a car radio.
+
+- Triggers: a button press, a hat direction being entered, or one encoder detent. Next state,
+  previous state, "all off" and "select this state" each take any number of triggers. Assign
+  them by pressing the control ("learn") or pick them from a list.
+- Each state has actions on activate and on deactivate. Switching from A to B runs A's
+  deactivate actions, then B's activate actions.
+- Actions are keyboard macros (key down, key up, tap with hold time, wait) and mouse macros
+  (button down, up, click, wheel, relative move, wait). Keys are sent as scan codes so games
+  that read DirectInput or RawInput see them. Every executed action is logged.
+- At the ends a radio wraps around or stops; selecting the active state again can turn it off;
+  at startup the last state is restored (without running actions) or none is active.
+
+Windows does not deliver synthesised input to programs running with higher privileges: if a
+game runs as administrator, Detent must too for its macros to reach the game.
+
+Mapping to a virtual joystick and per-game profiles come in later stages.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `crates/detent-core` | Platform-independent model: device identity, live state, encoders, counters, overlay layout. All logic is here and unit-tested. |
+| `crates/detent-core` | Platform-independent model: device identity, live state, encoders, counters, virtual controls, actions, overlay layout. All logic is here and unit-tested. |
 | `crates/detent-input` | Input backends: SDL3 (Windows, macOS) and a mock with synthetic devices. |
 | `src-tauri` | Desktop app (Tauri 2): engine thread, windows, hotkey, persistence. |
 | `ui` | Svelte 5 + TypeScript frontend: main window and overlay window. |
@@ -46,7 +66,8 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 
 Settings live in the app config directory (`%APPDATA%\cloud.breu.detent` on Windows,
 `~/Library/Application Support/cloud.breu.detent` on macOS): `devices.json` (known devices and
-labels), `setup.json` (encoders, counters, overlay), `values.json` (current counter values).
+labels), `setup.json` (encoders, counters, virtual controls, overlay), `values.json` (current counter
+values), `control-states.json` (active radio states).
 
 ## CI
 

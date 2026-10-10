@@ -1,11 +1,15 @@
 //! Runs actions (keyboard and mouse macros) on a worker thread of its own, so a macro with
 //! delays never blocks the engine thread. Requests run strictly in the order they arrive.
+//! Soundpad commands are handed on to the Soundpad thread, so a slow or missing Soundpad
+//! never holds up the queue.
 //!
 //! On Windows input is synthesised with `SendInput`, keys as scan codes so games reading
 //! DirectInput or RawInput see them. Other platforms only log what would be sent, so the app
 //! still builds and runs for development.
 
-use detent_core::{ActionRequest, InputOp, Phase};
+use crate::soundpad::Soundpad;
+use detent_core::{Action, ActionRequest, InputOp, Phase};
+use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::time::Duration;
 
@@ -14,13 +18,13 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn spawn() -> Self {
+    pub fn spawn(soundpad: Arc<Soundpad>) -> Self {
         let (queue, requests) = channel::<ActionRequest>();
         std::thread::Builder::new()
             .name("detent-actions".into())
             .spawn(move || {
                 for request in requests {
-                    run(&request);
+                    run(&request, &soundpad);
                 }
             })
             .expect("spawn action thread");
@@ -36,7 +40,7 @@ impl Executor {
     }
 }
 
-fn run(request: &ActionRequest) {
+fn run(request: &ActionRequest, soundpad: &Soundpad) {
     let phase = match request.phase {
         Phase::Activate => "activate",
         Phase::Deactivate => "deactivate",
@@ -47,6 +51,10 @@ fn run(request: &ActionRequest) {
         request.state,
         request.action.describe()
     );
+    if let Action::Soundpad { command } = &request.action {
+        soundpad.submit(command.clone());
+        return;
+    }
     let (ops, unknown) = request.action.expand();
     for key in unknown {
         log::warn!("action: unknown key \"{key}\" skipped");

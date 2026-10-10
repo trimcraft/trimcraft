@@ -15,6 +15,8 @@ import type {
   OverlayConfig,
   OverlayItem,
   RadioCommand,
+  Sound,
+  SoundpadStatus,
   VirtualControlDef,
   WidgetPosition,
 } from "./types";
@@ -54,6 +56,9 @@ export interface Backend {
   setOverlayWidget(index: number, item: OverlayItem): Promise<void>;
   setOverlayPositions(positions: (WidgetPosition | null)[]): Promise<void>;
   setOverlayEditing(editing: boolean): Promise<void>;
+  soundpadStatus(): Promise<SoundpadStatus>;
+  /** Soundpad's live sound list; fails when Soundpad is not reachable. */
+  soundpadSounds(): Promise<Sound[]>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -97,6 +102,8 @@ async function tauriBackend(): Promise<Backend> {
     setOverlayWidget: (index, item) => invoke("set_overlay_widget", { index, item }),
     setOverlayPositions: (positions) => invoke("set_overlay_positions", { positions }),
     setOverlayEditing: (editing) => invoke("set_overlay_editing", { editing }),
+    soundpadStatus: () => invoke("soundpad_status"),
+    soundpadSounds: () => invoke("soundpad_sounds"),
   };
 }
 

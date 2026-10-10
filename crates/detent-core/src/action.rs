@@ -1,12 +1,14 @@
-//! Actions: what Detent does when a virtual control changes, e.g. press a key.
+//! Actions: what Detent does when a virtual control changes, e.g. press a key or play a
+//! Soundpad sound.
 //!
-//! The core only describes actions and expands them into low-level [`InputOp`]s. Executing
-//! them (Windows `SendInput`) happens in the app, on its own thread, so the engine never
-//! blocks and stays free of OS calls.
+//! The core only describes actions and expands macros into low-level [`InputOp`]s. Executing
+//! them (Windows `SendInput`, the Soundpad pipe) happens in the app, on its own thread, so the
+//! engine never blocks and stays free of OS calls.
 //!
 //! Keys are stored by name (see [`KEYS`]) and sent as keyboard scan codes, not virtual-key
 //! codes: games that read DirectInput or RawInput only see scan codes.
 
+use crate::soundpad::SoundpadCommand;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -25,8 +27,16 @@ pub const MAX_STEPS: usize = 200;
     tag = "type"
 )]
 pub enum Action {
-    KeyboardMacro { steps: Vec<KeyStep> },
-    MouseMacro { steps: Vec<MouseStep> },
+    KeyboardMacro {
+        steps: Vec<KeyStep>,
+    },
+    MouseMacro {
+        steps: Vec<MouseStep>,
+    },
+    /// A remote control command for Soundpad.
+    Soundpad {
+        command: SoundpadCommand,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +138,8 @@ pub enum ActionError {
     TooLong,
     #[error("a macro can have at most {MAX_STEPS} steps")]
     TooManySteps,
+    #[error("choose a Soundpad sound to play")]
+    NoSound,
 }
 
 /// A key Detent can send: stable name and its set-1 scan code.
@@ -328,12 +340,22 @@ impl Action {
                     }
                 }
             }
+            Action::Soundpad { command } => {
+                if let SoundpadCommand::Play { sound, .. } = command {
+                    if sound.is_empty() {
+                        return Err(ActionError::NoSound);
+                    }
+                    sound.title = sound.title.trim().to_owned();
+                    sound.path = sound.path.trim().to_owned();
+                }
+            }
         }
         Ok(())
     }
 
     /// Expands the action into input operations, in order. Unknown keys (only possible in a
-    /// hand-edited setup file) are skipped and reported in the second value.
+    /// hand-edited setup file) are skipped and reported in the second value. Soundpad
+    /// commands send no input and expand to nothing.
     pub fn expand(&self) -> (Vec<InputOp>, Vec<String>) {
         let mut ops = Vec::new();
         let mut unknown = Vec::new();
@@ -396,6 +418,7 @@ impl Action {
                     }
                 }
             }
+            Action::Soundpad { .. } => {}
         }
         (ops, unknown)
     }
@@ -404,6 +427,7 @@ impl Action {
     pub fn describe(&self) -> String {
         let hold = |h: &Option<u32>| h.map(|ms| format!(" {ms}ms")).unwrap_or_default();
         let parts: Vec<String> = match self {
+            Action::Soundpad { command } => return format!("soundpad: {}", command.describe()),
             Action::KeyboardMacro { steps } => steps
                 .iter()
                 .map(|s| match s {
@@ -429,7 +453,7 @@ impl Action {
         };
         let kind = match self {
             Action::KeyboardMacro { .. } => "keys",
-            Action::MouseMacro { .. } => "mouse",
+            _ => "mouse",
         };
         format!("{kind}: {}", parts.join(", "))
     }
@@ -606,5 +630,27 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.describe(), "mouse: click X2, move 1,2, wheel 1");
+        let sp: Action = serde_json::from_str(
+            r#"{"type":"soundpad","command":{"type":"play","sound":{"title":"Siren","path":"C:\\s.mp3"},"output":"mic"}}"#,
+        )
+        .unwrap();
+        assert_eq!(sp.describe(), r#"soundpad: play "Siren" (mic)"#);
+        assert!(sp.expand().0.is_empty());
+    }
+
+    #[test]
+    fn soundpad_play_needs_a_sound() {
+        use crate::soundpad::{SoundOutput, SoundRef};
+        let mut a = Action::Soundpad {
+            command: SoundpadCommand::Play {
+                sound: SoundRef::default(),
+                output: SoundOutput::Both,
+            },
+        };
+        assert_eq!(a.normalize(), Err(ActionError::NoSound));
+        let mut stop = Action::Soundpad {
+            command: SoundpadCommand::Stop,
+        };
+        assert_eq!(stop.normalize(), Ok(()));
     }
 }

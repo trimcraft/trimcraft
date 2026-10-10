@@ -3,12 +3,17 @@
   import type { EngineSnapshot, KeyInfo, RadioCommand, VirtualControlDef, VirtualControlView } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
   import RadioEditor from "./RadioEditor.svelte";
+  import SoundpadStatusBadge from "./SoundpadStatusBadge.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
   let draft = $state<VirtualControlDef | null>(null);
   let error = $state("");
   let keys = $state<KeyInfo[]>([]);
+
+  let usesSoundpad = $derived(
+    snapshot.virtualControls.some((c) => c.kind.states.some((s) => [...s.onActivate, ...s.onDeactivate].some((a) => a.type === "soundpad"))),
+  );
 
   onMount(() => {
     backend()
@@ -76,6 +81,7 @@
     directions or encoder detents switch states; entering and leaving a state can press keys or mouse buttons.
   </p>
   {#if error}<p class="error">{error}</p>{/if}
+  {#if usesSoundpad}<div class="row soundpad"><SoundpadStatusBadge /></div>{/if}
 
   {#each snapshot.virtualControls as c (c.id)}
     <div class="control" class:editing={draft?.id === c.id}>
@@ -124,4 +130,5 @@
   .state { font-size: 12px; border-radius: 12px; padding: 2px 10px; }
   .state.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 600; }
   .new { margin-top: 8px; }
+  .soundpad { margin-bottom: 6px; }
 </style>

@@ -205,7 +205,42 @@ export type MouseStep =
 
 export type Action =
   | { type: "keyboardMacro"; steps: KeyStep[] }
-  | { type: "mouseMacro"; steps: MouseStep[] };
+  | { type: "mouseMacro"; steps: MouseStep[] }
+  | { type: "soundpad"; command: SoundpadCommand };
+
+// --- Soundpad (detent-core: soundpad.rs) ------------------------------------------------------
+
+/** A sound as stored in actions: by title and path, never by index (indices shift). */
+export interface SoundRef {
+  title: string;
+  path: string;
+}
+
+/** Speakers (you hear it), mic (others hear it) or both. */
+export type SoundOutput = "both" | "speakers" | "mic";
+
+export type SoundpadCommand =
+  | { type: "play"; sound: SoundRef; output: SoundOutput }
+  | { type: "playRandom"; output: SoundOutput }
+  | { type: "playNext" }
+  | { type: "playPrevious" }
+  | { type: "stop" }
+  | { type: "togglePause" };
+
+/** An entry of Soundpad's live sound list. */
+export interface Sound {
+  index: number;
+  title: string;
+  path: string;
+  duration: string;
+}
+
+export interface SoundpadStatus {
+  alive: boolean;
+  error: string | null;
+  /** Last problem running a Soundpad action, until one succeeds again. */
+  lastWarning: string | null;
+}
 
 export interface RadioState {
   id: string;

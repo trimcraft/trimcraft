@@ -3,11 +3,13 @@
 mod commands;
 mod executor;
 mod overlay;
+mod soundpad;
 mod storage;
 
 use detent_core::{DeviceRegistry, Engine, Setup};
 use executor::Executor;
 use serde::Serialize;
+use soundpad::Soundpad;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -41,6 +43,7 @@ pub struct Shared {
     changed: AtomicBool,
     storage: Storage,
     executor: Executor,
+    soundpad: Arc<Soundpad>,
     meta: Meta,
 }
 
@@ -159,11 +162,13 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
     );
     let mut engine = Engine::new(registry, setup, &values);
     engine.restore_active_states(&control_states);
+    let soundpad = Arc::new(Soundpad::spawn());
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(),
+        executor: Executor::spawn(soundpad.clone()),
+        soundpad,
         meta,
     })
 }

@@ -41,6 +41,11 @@ A virtual control is built from physical inputs and can run actions. The first k
 - Actions are keyboard macros (key down, key up, tap with hold time, wait) and mouse macros
   (button down, up, click, wheel, relative move, wait). Keys are sent as scan codes so games
   that read DirectInput or RawInput see them. Every executed action is logged.
+- **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
+  play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
+  stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
+  (full version, with its remote control) must be running; the editor shows whether it is
+  reachable, and a missing sound or Soundpad is logged and shown in Virtual Controls.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the

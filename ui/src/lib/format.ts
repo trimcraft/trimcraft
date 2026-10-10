@@ -7,6 +7,8 @@ import type {
   IdentityConfidence,
   KeyStep,
   MouseStep,
+  SoundOutput,
+  SoundpadCommand,
   Trigger,
 } from "./types";
 
@@ -120,8 +122,28 @@ export function mouseStepText(s: MouseStep): string {
   }
 }
 
+const OUTPUT_TEXT: Record<SoundOutput, string> = { both: "", speakers: " (speakers)", mic: " (mic)" };
+
+export function soundpadText(c: SoundpadCommand): string {
+  switch (c.type) {
+    case "play":
+      return `play “${c.sound.title || "no sound chosen"}”${OUTPUT_TEXT[c.output]}`;
+    case "playRandom":
+      return `play random${OUTPUT_TEXT[c.output]}`;
+    case "playNext":
+      return "play next";
+    case "playPrevious":
+      return "play previous";
+    case "stop":
+      return "stop";
+    case "togglePause":
+      return "pause / resume";
+  }
+}
+
 /** One-line summary, e.g. "Keys: ↓ LeftCtrl, F1, ↑ LeftCtrl". */
 export function actionText(a: Action): string {
+  if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
   const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
   return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}: ${steps.join(", ") || "no steps"}`;
 }

@@ -1089,7 +1089,7 @@ mod tests {
             .into_iter()
             .flat_map(|a| match a.action {
                 Action::KeyboardMacro { steps } => steps,
-                Action::MouseMacro { .. } => vec![],
+                Action::MouseMacro { .. } | Action::Soundpad { .. } => vec![],
             })
             .filter_map(|s| match s {
                 KeyStep::KeyTap { key, .. } => Some(key),

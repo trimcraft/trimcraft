@@ -11,6 +11,7 @@ import type {
   KeyInfo,
   MonitorInfo,
   PulseStats,
+  Sound,
   Radio,
   Trigger,
   VirtualControlView,
@@ -41,6 +42,10 @@ const DEMO_MONITORS: MonitorInfo[] = [
   { name: "DEMO-1", x: 0, y: 0, width: 2560, height: 1440, primary: true, scale: 1 },
   { name: "DEMO-2", x: 2560, y: 0, width: 1920, height: 1080, primary: false, scale: 1 },
 ];
+
+const DEMO_SOUNDS: Sound[] = ["Siren", "Dog barking", "Duck quack", "Applause", "Drum roll", "Sad trombone"].map(
+  (title, i) => ({ index: i + 1, title, path: `C:\\Sounds\\${title.toLowerCase().replace(/ /g, "-")}.mp3`, duration: `0:0${i + 1}` }),
+);
 
 function device(id: string, name: string, vid: number, pid: number, axes: number, buttons: number, hats: number, virt = false): DeviceSnapshot {
   return {
@@ -308,6 +313,11 @@ export function createDemo(): Backend {
           step.key = known;
         }
       }
+      for (const a of r.states.flatMap((st) => [...st.onActivate, ...st.onDeactivate])) {
+        if (a.type === "soundpad" && a.command.type === "play" && !a.command.sound.title.trim() && !a.command.sound.path.trim()) {
+          throw new Error("choose a Soundpad sound to play");
+        }
+      }
       let nextState = Math.max(0, ...r.states.map((st) => Number(st.id.replace("st-", "")) || 0)) + 1;
       r.states.forEach((st, i) => {
         if (!st.id) st.id = `st-${nextState++}`;
@@ -371,5 +381,7 @@ export function createDemo(): Backend {
       await ok();
     },
     setOverlayEditing: async (editing) => { s.overlayEditing = editing; await ok(); },
+    soundpadStatus: async () => ({ alive: true, error: null, lastWarning: null }),
+    soundpadSounds: async () => structuredClone(DEMO_SOUNDS),
   };
 }

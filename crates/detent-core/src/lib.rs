@@ -13,6 +13,7 @@ pub mod function;
 pub mod overlay;
 pub mod registry;
 pub mod setup;
+pub mod soundpad;
 pub mod state;
 pub mod virtual_control;
 
@@ -28,6 +29,7 @@ pub use overlay::{
 };
 pub use registry::DeviceRegistry;
 pub use setup::{ButtonPair, Setup};
+pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};
 pub use virtual_control::{
     ActionRequest, HatDirection, Phase, Radio, RadioCommand, RadioMemory, RadioState, Startup,

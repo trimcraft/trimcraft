@@ -2,6 +2,7 @@
   // Edits a list of actions (keyboard and mouse macros) and their steps.
   import type { Action, KeyInfo, KeyStep, MouseButton, MouseStep } from "../lib/types";
   import { actionText } from "../lib/format";
+  import SoundpadEditor from "./SoundpadEditor.svelte";
 
   let { label, actions = $bindable(), keys }: { label: string; actions: Action[]; keys: KeyInfo[] } = $props();
 
@@ -28,12 +29,19 @@
     return keys.length === 0 || keys.some((k) => k.name.toLowerCase() === n);
   }
 
+  function newAction(type: Action["type"]): Action {
+    switch (type) {
+      case "keyboardMacro":
+        return { type, steps: [{ type: "keyTap", key: "F1", holdMs: null }] };
+      case "mouseMacro":
+        return { type, steps: [{ type: "click", button: "left", holdMs: null }] };
+      case "soundpad":
+        return { type, command: { type: "play", sound: { title: "", path: "" }, output: "both" } };
+    }
+  }
+
   function addAction(type: Action["type"]) {
-    actions.push(
-      type === "keyboardMacro"
-        ? { type, steps: [{ type: "keyTap", key: "F1", holdMs: null }] }
-        : { type, steps: [{ type: "click", button: "left", holdMs: null }] },
-    );
+    actions.push(newAction(type));
     open = actions.length - 1;
   }
 
@@ -115,7 +123,7 @@
                 </div>
               {/each}
               <button class="small" onclick={() => action.steps.push({ type: "keyTap", key: "", holdMs: null })}>Add step</button>
-            {:else}
+            {:else if action.type === "mouseMacro"}
               {#each action.steps as step, si (si)}
                 <div class="row step">
                   <span class="n muted">{si + 1}</span>
@@ -144,6 +152,8 @@
                 </div>
               {/each}
               <button class="small" onclick={() => action.steps.push({ type: "click", button: "left", holdMs: null })}>Add step</button>
+            {:else}
+              <SoundpadEditor bind:command={action.command} />
             {/if}
           </div>
         {/if}
@@ -154,6 +164,7 @@
     <div class="row">
       <button class="small" onclick={() => addAction("keyboardMacro")}>+ Keyboard macro</button>
       <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
+      <button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>
     </div>
   </div>
 </div>

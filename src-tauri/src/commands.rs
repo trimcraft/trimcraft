@@ -1,9 +1,10 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
+use crate::soundpad::SoundpadStatus;
 use crate::{Meta, Shared, overlay};
 use detent_core::{
     Anchor, ButtonPair, ControlRef, DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo,
-    MonitorRef, OverlayItem, RadioCommand, VirtualControl, WidgetPosition,
+    MonitorRef, OverlayItem, RadioCommand, Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -43,6 +44,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_overlay_widget,
         set_overlay_positions,
         set_overlay_editing,
+        soundpad_status,
+        soundpad_sounds,
     ]
 }
 
@@ -314,6 +317,25 @@ fn set_overlay_editing(app: AppHandle, shared: State<'_, Arc<Shared>>, editing: 
     Ok(())
 }
 
+/// Whether Soundpad is reachable, plus the last problem running a Soundpad action. Async:
+/// the pipe round trip must not block the UI thread.
+#[tauri::command]
+async fn soundpad_status(shared: State<'_, Arc<Shared>>) -> Res<SoundpadStatus> {
+    let soundpad = shared.soundpad.clone();
+    tauri::async_runtime::spawn_blocking(move || soundpad.status())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Soundpad's sound list ("All sounds"), for the sound picker.
+#[tauri::command]
+async fn soundpad_sounds(shared: State<'_, Arc<Shared>>) -> Res<Vec<Sound>> {
+    let soundpad = shared.soundpad.clone();
+    tauri::async_runtime::spawn_blocking(move || soundpad.sounds())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     //! The UI sends these payloads (see ui/src/lib/backend.ts); they must deserialise.
@@ -383,6 +405,21 @@ mod tests {
         .unwrap();
         let _: Option<MonitorRef> = serde_json::from_str("null").unwrap();
         assert_eq!(c.radio().toggle_off.len(), 1);
+        let sp: VirtualControl = serde_json::from_str(
+            r#"{"id":"vc-1","name":"Sounds","kind":{"type":"radio","states":[
+                {"id":"st-1","name":"Siren","select":[],
+                 "onActivate":[{"type":"soundpad","command":{"type":"play",
+                    "sound":{"title":"siren","path":"C:\\Sounds\\siren.mp3"},"output":"speakers"}}],
+                 "onDeactivate":[{"type":"soundpad","command":{"type":"stop"}},
+                    {"type":"soundpad","command":{"type":"togglePause"}},
+                    {"type":"soundpad","command":{"type":"playRandom","output":"mic"}},
+                    {"type":"soundpad","command":{"type":"playNext"}},
+                    {"type":"soundpad","command":{"type":"playPrevious"}}]}],
+                "increment":[],"decrement":[],"clear":[],"toggleOff":[],
+                "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
+        )
+        .unwrap();
+        assert_eq!(sp.radio().states[0].on_deactivate.len(), 5);
         for command in [
             r#""increment""#,
             r#""decrement""#,

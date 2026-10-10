@@ -43,12 +43,14 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
   `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
-  `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops), `engine`
+  `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
+  `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
-  `overlay.rs` (overlay window, hotkey), `commands.rs` (IPC; payload shapes are tested),
+  `soundpad.rs` (Soundpad pipe client and worker thread), `overlay.rs` (overlay window, hotkey),
+  `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
 - `ui/src`: `App.svelte` (main window: Hardware Test and Virtual Controls), `Overlay.svelte`
   (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between

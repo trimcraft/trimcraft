@@ -17,7 +17,11 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
-pub const SETUP_SCHEMA_VERSION: u32 = 2;
+/// 3: virtual controls of more kinds (toggle, momentary, counter, mode) and triggers with
+/// press kinds, modifiers, conditions and axis zones. Schema 2 files load unchanged (all new
+/// fields have defaults); the bump makes older versions refuse the file instead of failing on
+/// the new kinds.
+pub const SETUP_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -188,6 +192,21 @@ impl Setup {
             .unwrap_or(0)
     }
 
+    /// Every secret the actions of all profiles refer to (HTTP header values).
+    pub fn secret_refs(&self) -> Vec<crate::connection::SecretRef> {
+        let mut refs = Vec::new();
+        for control in self.profiles.iter().flat_map(|p| &p.virtual_controls) {
+            for action in control.actions() {
+                for secret in action.secrets() {
+                    if !refs.contains(secret) {
+                        refs.push(secret.clone());
+                    }
+                }
+            }
+        }
+        refs
+    }
+
     pub fn profile(&self) -> &Profile {
         &self.profiles[self.active_index()]
     }
@@ -259,7 +278,7 @@ mod tests {
         }"#;
         let s = Setup::from_json(json).unwrap();
         assert_eq!(s.recorder, RecorderConfig::default());
-        let state = &s.profile().virtual_controls[0].radio().states[0];
+        let state = &s.profile().virtual_controls[0].radio().unwrap().states[0];
         let crate::action::Action::MouseMacro {
             playback, movement, ..
         } = &state.on_deactivate[0]
@@ -320,7 +339,7 @@ mod tests {
     #[test]
     fn schema_1_becomes_the_default_profile() {
         let s = Setup::from_json(SCHEMA_1).unwrap();
-        assert_eq!(s.schema_version, 2);
+        assert_eq!(s.schema_version, SETUP_SCHEMA_VERSION);
         assert_eq!(s.profiles.len(), 1);
         let p = &s.profiles[0];
         assert_eq!(p.id, DEFAULT_PROFILE_ID);
@@ -358,7 +377,7 @@ mod tests {
         let s = Setup::from_json(SCHEMA_1).unwrap();
         let out = s.to_json();
         let v: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(v["schemaVersion"], 2);
+        assert_eq!(v["schemaVersion"], SETUP_SCHEMA_VERSION);
         assert!(v.get("virtualControls").is_none());
         assert!(v["overlay"].get("widgets").is_none());
         assert_eq!(v["profiles"][0]["overlayWidgets"][0]["type"], "radio");
@@ -452,5 +471,29 @@ mod tests {
     fn ids_continue_after_highest() {
         assert_eq!(next_id("vc", ["vc-1", "vc-7", "x-9"].into_iter()), "vc-8");
         assert_eq!(next_id("profile", std::iter::empty()), "profile-1");
+    }
+
+    #[test]
+    fn schema_2_loads_with_plain_triggers() {
+        let json = r#"{
+            "schemaVersion": 2,
+            "profiles": [{"id": "profile-1", "name": "Default", "virtualControls": [
+                {"id":"vc-1","name":"Comms","kind":{"type":"radio","states":[
+                    {"id":"st-1","name":"A","select":[{"type":"button","device":"d","index":3}]}],
+                 "increment":[{"type":"encoderStep","encoder":"enc-1","direction":"increment"}],
+                 "clear":[{"type":"hat","device":"d","index":0,"direction":"up"}]}}]}],
+            "activeProfile": "profile-1"
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert_eq!(s.schema_version, 3);
+        let control = &s.profile().virtual_controls[0];
+        for t in control.triggers() {
+            assert_eq!(t.press, crate::trigger::PressKind::Press);
+            assert!(t.modifiers.is_empty() && t.conditions.is_empty());
+        }
+        assert_eq!(control.triggers().count(), 3);
+        // Written back as schema 3, read again unchanged.
+        assert_eq!(Setup::from_json(&s.to_json()).unwrap(), s);
+        assert!(Setup::from_json(r#"{"schemaVersion": 4}"#).is_err());
     }
 }

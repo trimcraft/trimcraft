@@ -183,6 +183,7 @@ fn apply_replaced(app: &AppHandle, shared: &Shared, old_hotkey: &str) {
     };
     shared.soundpad.apply(connections.soundpad);
     shared.discord.apply(connections.discord);
+    shared.voicemeeter.apply(connections.voicemeeter);
     if old_hotkey != overlay_config.hotkey {
         overlay::unregister_hotkey(app, old_hotkey);
         if let Err(e) = overlay::register_hotkey(app, &overlay_config.hotkey) {

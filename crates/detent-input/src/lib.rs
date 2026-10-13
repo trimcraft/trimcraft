@@ -14,6 +14,10 @@ pub mod sdl;
 pub trait InputBackend: Send + 'static {
     fn name(&self) -> &'static str;
 
+    /// The clock the event timestamps come from, in nanoseconds; callable from any thread.
+    /// The engine thread uses it to wake up when a long or double press is due.
+    fn clock(&self) -> fn() -> u64;
+
     /// Runs until `stop` is set. Must send [`BackendEvent::Initial`] once before any other
     /// device event, so identities of devices present at startup resolve together.
     fn run(self: Box<Self>, events: Sender<BackendEvent>, stop: Arc<AtomicBool>);
@@ -22,9 +26,17 @@ pub trait InputBackend: Send + 'static {
 /// A running backend thread. Dropping it stops the thread.
 pub struct RunningBackend {
     pub name: &'static str,
+    clock: fn() -> u64,
     pub events: Receiver<BackendEvent>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+impl RunningBackend {
+    /// Now, on the clock of the event timestamps.
+    pub fn now_ns(&self) -> u64 {
+        (self.clock)()
+    }
 }
 
 impl Drop for RunningBackend {
@@ -40,6 +52,7 @@ pub fn spawn(backend: Box<dyn InputBackend>) -> RunningBackend {
     let (tx, rx) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
     let name = backend.name();
+    let clock = backend.clock();
     let thread_stop = stop.clone();
     let thread = std::thread::Builder::new()
         .name(format!("detent-input-{name}"))
@@ -47,6 +60,7 @@ pub fn spawn(backend: Box<dyn InputBackend>) -> RunningBackend {
         .expect("spawn input thread");
     RunningBackend {
         name,
+        clock,
         events: rx,
         stop,
         thread: Some(thread),

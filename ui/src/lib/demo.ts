@@ -28,10 +28,11 @@ import type {
   RecordKind,
   Sound,
   Trigger,
+  VirtualControlDef,
   VirtualControlView,
   VoiceState,
 } from "./types";
-import { actionText, sameTrigger } from "./format";
+import { CONTROL_TYPES, actionText, controlActions, newTrigger, sameInput, triggerLists } from "./format";
 
 type Cmd = { type: "increment" | "decrement" | "clear" | "toggleOff" } | { type: "select"; index: number };
 
@@ -143,8 +144,8 @@ export function createDemo(): Backend {
     ],
     lastActivity: null,
     backendError: null,
-    encoders: [],
-    suggestions: [{ device: "f00d:0003#1", decrement: 10, increment: 11 }],
+    encoders: [{ id: "enc-1", name: "Radio knob", device: "f00d:0003#1", decrement: 10, increment: 11, decrementStats: stats(3), incrementStats: stats(4), stepsDown: 0, stepsUp: 0 }],
+    suggestions: [],
     halfDetected: [],
     buttonStats: [],
     functions: [],
@@ -163,10 +164,12 @@ export function createDemo(): Backend {
     connections: {
       soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 },
       discord: { enabled: false, clientId: "", clientSecret: null },
+      voicemeeter: { enabled: false },
     },
     connectors: [
-      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null },
-      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null },
+      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
+      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null, missing: null },
+      { id: "voicemeeter", name: "Voicemeeter", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
@@ -220,10 +223,19 @@ export function createDemo(): Backend {
     if (a.type === "switchProfile") pendingSwitches.push(a.target);
   };
 
-  // Virtual controls: same semantics as detent-core's virtual_control.rs, without actions
-  // (they are only logged to the console).
-  /** Most recently active state per control, for toggle off. */
+  // Virtual controls: the semantics of detent-core's virtual_control.rs, simplified: triggers
+  // match plain presses and releases (long and double presses, modifiers and axis zones are
+  // not simulated); mode conditions are checked. Actions are only logged to the console.
+  /** Most recently active state per radio, for toggle off. */
   const lastActive = new Map<string, string>();
+  /** Momentary controls: the inputs holding them. Mode shifts: the state to go back to. */
+  const held = new Map<string, Trigger[]>();
+  const shiftBase = new Map<string, string>();
+  const log = (c: VirtualControlView, what: string, actions: Action[]) =>
+    actions.forEach((a) => {
+      console.info(`[demo] ${c.name} / ${what}:`, actionText(a));
+      runAction(a);
+    });
   const nextState = (r: Radio, active: number | null, recent: number | null, cmd: Cmd): number | null => {
     const last = r.states.length - 1;
     if (last < 0) return null;
@@ -241,35 +253,130 @@ export function createDemo(): Backend {
         return active !== null ? null : recent !== null && recent <= last ? recent : 0;
     }
   };
-  const indexOf = (r: Radio, id: string | null | undefined) => {
-    const i = r.states.findIndex((st) => st.id === id);
+  const indexOf = (states: { id: string }[], id: string | null | undefined) => {
+    const i = states.findIndex((st) => st.id === id);
     return i >= 0 ? i : null;
   };
-  /** Sets the active state; the state left is remembered. */
+  /** Sets the active state of a radio or mode; the state left is remembered. */
   const setActive = (c: VirtualControlView, to: number | null) => {
-    if (c.active !== null && indexOf(c.kind, c.active) !== to) lastActive.set(c.id, c.active);
-    c.active = to === null ? null : c.kind.states[to]!.id;
-    c.activeName = to === null ? null : c.kind.states[to]!.name;
+    if (c.kind.type !== "radio" && c.kind.type !== "mode") return;
+    const states = c.kind.states;
+    if (c.active !== null && indexOf(states, c.active) !== to) lastActive.set(c.id, c.active);
+    c.active = to === null ? null : states[to]!.id;
+    c.activeName = to === null ? null : states[to]!.name;
+    c.on = c.kind.type === "mode" || to !== null;
+  };
+  const setCounter = (c: VirtualControlView, value: number) => {
+    if (c.kind.type !== "counter") return;
+    const { spec } = c.kind;
+    const last = Math.floor((spec.max - spec.min) / spec.step + 1e-9);
+    const pos = Math.min(Math.max(Math.round((value - spec.min) / spec.step), 0), last);
+    c.value = spec.min + pos * spec.step;
+    c.display = c.value.toFixed(spec.decimals);
   };
   const runCommand = (c: VirtualControlView, cmd: Cmd) => {
+    if (c.kind.type !== "radio") return;
     const r = c.kind;
-    const from = indexOf(r, c.active);
-    const to = nextState(r, from, indexOf(r, lastActive.get(c.id)), cmd);
+    const from = indexOf(r.states, c.active);
+    const to = nextState(r, from, indexOf(r.states, lastActive.get(c.id)), cmd);
     if (from === to) return;
-    if (from !== null) r.states[from]!.onDeactivate.forEach((a) => { console.info(`[demo] ${c.name} / ${r.states[from]!.name} deactivate:`, actionText(a)); runAction(a); });
-    if (to !== null) r.states[to]!.onActivate.forEach((a) => { console.info(`[demo] ${c.name} / ${r.states[to]!.name} activate:`, actionText(a)); runAction(a); });
+    if (from !== null) log(c, `${r.states[from]!.name} deactivate`, r.states[from]!.onDeactivate);
+    if (to !== null) log(c, `${r.states[to]!.name} activate`, r.states[to]!.onActivate);
     setActive(c, to);
   };
-  const fire = (t: Trigger) => {
+  const setToggle = (c: VirtualControlView, on: boolean) => {
+    if (c.kind.type !== "toggle" || c.on === on) return;
+    c.on = on;
+    c.active = on ? "on" : null;
+    c.activeName = on ? "On" : null;
+    log(c, on ? "on" : "off", on ? c.kind.onOn : c.kind.onOff);
+  };
+  const stepCounter = (c: VirtualControlView, by: number | "reset") => {
+    if (c.kind.type !== "counter") return;
+    const { spec } = c.kind;
+    const last = Math.floor((spec.max - spec.min) / spec.step + 1e-9);
+    const pos = Math.round(((c.value ?? spec.initial) - spec.min) / spec.step);
+    const target = by === "reset" ? Math.round((spec.initial - spec.min) / spec.step) : pos + by;
+    const next = spec.end === "wrap" ? ((target % (last + 1)) + last + 1) % (last + 1) : Math.min(Math.max(target, 0), last);
+    if (next === pos) return;
+    setCounter(c, spec.min + next * spec.step);
+    log(c, `value ${c.display}`, c.kind.onChange);
+  };
+  const goMode = (c: VirtualControlView, to: number) => {
+    if (c.kind.type !== "mode") return;
+    const from = indexOf(c.kind.states, c.active) ?? 0;
+    if (from === to || !c.kind.states[to]) return;
+    log(c, `${c.kind.states[from]!.name} deactivate`, c.kind.states[from]!.onDeactivate);
+    log(c, `${c.kind.states[to]!.name} activate`, c.kind.states[to]!.onActivate);
+    setActive(c, to);
+  };
+  const stepMode = (c: VirtualControlView, by: number) => {
+    if (c.kind.type !== "mode") return;
+    const n = c.kind.states.length;
+    const i = indexOf(c.kind.states, c.active) ?? 0;
+    shiftBase.delete(c.id);
+    goMode(c, c.kind.end === "wrap" ? (i + by + n) % n : Math.min(Math.max(i + by, 0), n - 1));
+  };
+  const setMomentary = (c: VirtualControlView, t: Trigger, down: boolean) => {
+    if (c.kind.type !== "momentary") return;
+    const list = held.get(c.id) ?? [];
+    const was = c.on;
+    const rest = list.filter((x) => !sameInput(x, t));
+    held.set(c.id, down ? [...rest, t] : rest);
+    c.on = (held.get(c.id)!.length > 0) !== c.kind.invert;
+    if (c.on !== was) log(c, c.on ? "press" : "release", c.on ? c.kind.onPress : c.kind.onRelease);
+  };
+  const conditionsHold = (b: Trigger) =>
+    b.conditions.every((cond) => {
+      const m = allControls().find((x) => x.id === cond.mode);
+      return m?.kind.type === "mode" && (m.active ?? m.kind.states[0]?.id) === cond.state;
+    });
+  /** A press (`down`) or release of `t` through every control of the active profile. */
+  const fire = (t: Trigger, down = true) => {
+    const matching = (list: Trigger[], kind: "press" | "release" = down ? "press" : "release") =>
+      list.some((b) => sameInput(b, t) && b.press.kind === kind && b.modifiers.length === 0 && conditionsHold(b));
+    // Every match is decided before anything runs, as in the engine.
+    const work: (() => void)[] = [];
     for (const c of s.virtualControls) {
-      const r = c.kind;
-      const has = (list: Trigger[]) => list.some((x) => sameTrigger(x, t));
-      if (has(r.increment)) runCommand(c, { type: "increment" });
-      if (has(r.decrement)) runCommand(c, { type: "decrement" });
-      r.states.forEach((st, index) => { if (has(st.select)) runCommand(c, { type: "select", index }); });
-      if (has(r.clear)) runCommand(c, { type: "clear" });
-      if (has(r.toggleOff)) runCommand(c, { type: "toggleOff" });
+      const k = c.kind;
+      switch (k.type) {
+        case "radio":
+          if (matching(k.increment)) work.push(() => runCommand(c, { type: "increment" }));
+          if (matching(k.decrement)) work.push(() => runCommand(c, { type: "decrement" }));
+          k.states.forEach((st, index) => { if (matching(st.select)) work.push(() => runCommand(c, { type: "select", index })); });
+          if (matching(k.clear)) work.push(() => runCommand(c, { type: "clear" }));
+          if (matching(k.toggleOff)) work.push(() => runCommand(c, { type: "toggleOff" }));
+          break;
+        case "toggle":
+          if (matching(k.toggle)) work.push(() => setToggle(c, !c.on));
+          if (matching(k.on)) work.push(() => setToggle(c, true));
+          if (matching(k.off)) work.push(() => setToggle(c, false));
+          break;
+        case "momentary":
+          if (matching(k.triggers, "press")) work.push(() => setMomentary(c, t, down));
+          else if (!down && (held.get(c.id) ?? []).some((x) => sameInput(x, t))) work.push(() => setMomentary(c, t, false));
+          break;
+        case "counter":
+          if (matching(k.increment)) work.push(() => stepCounter(c, 1));
+          if (matching(k.decrement)) work.push(() => stepCounter(c, -1));
+          if (matching(k.reset)) work.push(() => stepCounter(c, "reset"));
+          break;
+        case "mode":
+          if (matching(k.next)) work.push(() => stepMode(c, 1));
+          if (matching(k.previous)) work.push(() => stepMode(c, -1));
+          k.states.forEach((st, index) => {
+            if (matching(st.select)) work.push(() => { shiftBase.delete(c.id); goMode(c, index); });
+            if (down && matching(st.shift, "press")) work.push(() => { if (!shiftBase.has(c.id)) shiftBase.set(c.id, c.active ?? k.states[0]!.id); c.shifted = true; goMode(c, index); });
+            if (!down && st.shift.some((b) => sameInput(b, t)) && shiftBase.has(c.id)) work.push(() => {
+              goMode(c, indexOf(k.states, shiftBase.get(c.id)) ?? 0);
+              shiftBase.delete(c.id);
+              c.shifted = false;
+            });
+          });
+          break;
+      }
     }
+    work.forEach((w) => w());
     runSwitches();
   };
   const findControl = (id: string) => {
@@ -277,6 +384,15 @@ export function createDemo(): Backend {
     if (!c) throw new Error(`unknown virtual control ${id}`);
     return c;
   };
+
+  /** A view of a new control: nothing active, a counter at its initial value, a mode in its first state. */
+  function viewOf(def: VirtualControlDef): VirtualControlView {
+    const v: VirtualControlView = { ...def, active: null, activeName: null, on: false, value: null, display: null, shifted: false };
+    if (def.kind.type === "counter") setCounter(v, def.kind.spec.initial);
+    if (def.kind.type === "mode") setActive(v, 0);
+    if (def.kind.type === "momentary") v.on = def.kind.invert;
+    return v;
+  }
 
   // Profiles: the active one's controls and widgets live in the snapshot, the others here.
   // Control ids are unique across profiles, as in the app.
@@ -300,11 +416,46 @@ export function createDemo(): Backend {
         },
         active: "st-2",
         activeName: "VHF",
+        on: true,
+        value: null,
+        display: null,
+        shifted: false,
       },
+      viewOf({ id: "vc-2", name: "Master arm", kind: { type: "toggle", toggle: [newTrigger({ type: "button", device: "f00d:0002#1", index: 3 })], on: [], off: [], onOn: [], onOff: [], startup: "restoreLast" } }),
+      viewOf({
+        id: "vc-3",
+        name: "COM1",
+        kind: {
+          type: "counter",
+          spec: { min: 118, max: 136.975, step: 0.025, initial: 124.5, end: "wrap", decimals: 3 },
+          increment: [newTrigger({ type: "encoderStep", encoder: "enc-1", direction: "increment" })],
+          decrement: [newTrigger({ type: "encoderStep", encoder: "enc-1", direction: "decrement" })],
+          reset: [{ ...newTrigger({ type: "button", device: "f00d:0003#1", index: 2 }), press: { kind: "long", ms: 800 } }],
+          onChange: [],
+          startup: "restoreLast",
+        },
+      }),
+      viewOf({
+        id: "vc-4",
+        name: "Layer",
+        kind: {
+          type: "mode",
+          states: ["Nav", "Combat"].map((n, i) => ({ ...demoState(n), id: `st-${i + 1}`, shift: i === 1 ? [newTrigger({ type: "button", device: "f00d:0002#1", index: 5 })] : [] })),
+          next: [],
+          previous: [],
+          end: "wrap",
+          startup: "restoreLast",
+        },
+      }),
+      viewOf({ id: "vc-5", name: "PTT", kind: { type: "momentary", triggers: [newTrigger({ type: "button", device: "f00d:0001#1", index: 0 })], onPress: [], onRelease: [], invert: false } }),
     ],
     widgets: [
       { type: "profileName", position: { x: 0.45, y: 0.02 } },
       { type: "radio", control: "vc-1", layout: "horizontal", position: null },
+      { type: "radio", control: "vc-2", layout: "vertical", position: null },
+      { type: "radio", control: "vc-3", layout: "vertical", position: null },
+      { type: "radio", control: "vc-4", layout: "horizontal", position: null },
+      { type: "radio", control: "vc-5", layout: "vertical", position: null },
     ],
   });
   const allControls = () => [...s.virtualControls, ...[...stash.values()].flatMap((p) => p.controls)];
@@ -375,12 +526,17 @@ export function createDemo(): Backend {
     stick!.state.axes[1] = Math.cos(t * 1.3) * 0.6;
     throttle1!.state.axes[2] = Math.sin(t * 0.2);
     throttle2!.state.axes[2] = Math.cos(t * 0.25);
-    const edges: Trigger[] = [];
+    // Input edges: a trigger and whether it is a press (or a release).
+    const edges: [Trigger, boolean][] = [];
     const pressed = Math.floor(tick / 30) % 2 === 1;
-    if (pressed && !stick!.state.buttons[0]) edges.push({ type: "button", device: stick!.id, index: 0 });
+    if (pressed !== stick!.state.buttons[0]) edges.push([newTrigger({ type: "button", device: stick!.id, index: 0 }), pressed]);
     stick!.state.buttons[0] = pressed;
     const hat = [0, 1, 2, 4, 8][Math.floor(tick / 45) % 5]!;
-    if (hat !== stick!.state.hats[0] && HAT_MASKS[hat]) edges.push({ type: "hat", device: stick!.id, index: 0, direction: HAT_MASKS[hat]! });
+    const oldHat = stick!.state.hats[0]!;
+    if (hat !== oldHat) {
+      if (HAT_MASKS[oldHat]) edges.push([newTrigger({ type: "hat", device: stick!.id, index: 0, direction: HAT_MASKS[oldHat]! }), false]);
+      if (HAT_MASKS[hat]) edges.push([newTrigger({ type: "hat", device: stick!.id, index: 0, direction: HAT_MASKS[hat]! }), true]);
+    }
     stick!.state.hats[0] = hat;
     // Encoder: a run of 5 detents every 4 s, alternating direction.
     const phase = tick % 120;
@@ -392,15 +548,16 @@ export function createDemo(): Backend {
       for (const e of s.encoders) {
         if (e.device !== panel!.id) continue;
         const button = up ? 11 : 10;
-        if (button === e.increment) { e.stepsUp++; step(e.id, 1); edges.push({ type: "encoderStep", encoder: e.id, direction: "increment" }); }
-        if (button === e.decrement) { e.stepsDown++; step(e.id, -1); edges.push({ type: "encoderStep", encoder: e.id, direction: "decrement" }); }
+        if (button === e.increment) { e.stepsUp++; step(e.id, 1); edges.push([newTrigger({ type: "encoderStep", encoder: e.id, direction: "increment" }), true]); }
+        if (button === e.decrement) { e.stepsDown++; step(e.id, -1); edges.push([newTrigger({ type: "encoderStep", encoder: e.id, direction: "decrement" }), true]); }
       }
-      edges.push({ type: "button", device: panel!.id, index: up ? 11 : 10 });
+      edges.push([newTrigger({ type: "button", device: panel!.id, index: up ? 11 : 10 }), true]);
       s.lastActivity = { device: panel!.id, control: { type: "button", index: up ? 11 : 10 }, timeNs: tick };
     }
     if (edges.length) {
-      if (s.learn && !s.learn.captured) s.learn.captured = edges[0]!;
-      else edges.forEach(fire);
+      const press = edges.find(([, down]) => down);
+      if (s.learn && !s.learn.captured) { if (press) s.learn.captured = press[0]; }
+      else edges.forEach(([t, down]) => fire(t, down));
     }
     emit();
   }, 33);
@@ -479,9 +636,9 @@ export function createDemo(): Backend {
     return info;
   }
 
-  let nextEnc = 1;
+  let nextEnc = 2;
   let nextFn = 1;
-  let nextVc = 2;
+  let nextVc = 6;
   const ok = async () => emit();
 
   return {
@@ -518,14 +675,7 @@ export function createDemo(): Backend {
       s.encoders = s.encoders.filter((e) => e.id !== id);
       for (const f of s.functions) if (f.kind.input.type === "encoder" && f.kind.input.encoder === id) f.kind.input = { type: "none" };
       const keep = (t: Trigger) => !(t.type === "encoderStep" && t.encoder === id);
-      for (const c of allControls()) {
-        const r = c.kind;
-        r.increment = r.increment.filter(keep);
-        r.decrement = r.decrement.filter(keep);
-        r.clear = r.clear.filter(keep);
-        r.toggleOff = r.toggleOff.filter(keep);
-        for (const st of r.states) st.select = st.select.filter(keep);
-      }
+      for (const c of allControls()) for (const list of triggerLists(c.kind)) list.splice(0, list.length, ...list.filter(keep));
       emit();
     },
     async dismissSuggestion(pair) {
@@ -576,58 +726,93 @@ export function createDemo(): Backend {
     keys: async () => DEMO_KEYS,
     async saveVirtualControl(control) {
       const c = structuredClone(control);
-      const r = c.kind;
-      if (!r.states.length) throw new Error("a radio needs at least one state");
-      for (const step of r.states.flatMap((st) => [...st.onActivate, ...st.onDeactivate]).flatMap((a) => (a.type === "keyboardMacro" ? a.steps : []))) {
+      const k = c.kind;
+      const states = k.type === "radio" || k.type === "mode" ? k.states : [];
+      if ((k.type === "radio" || k.type === "mode") && !states.length) throw new Error("a radio needs at least one state");
+      if (k.type === "counter" && !(k.spec.step > 0)) throw new Error("step must be greater than zero");
+      if (k.type === "counter" && !(k.spec.max > k.spec.min)) throw new Error("maximum must be greater than minimum");
+      const actions = controlActions(k);
+      for (const step of actions.flatMap((a) => (a.type === "keyboardMacro" ? a.steps : []))) {
         if ("key" in step) {
-          const known = KEY_NAMES.find((k) => k.toLowerCase() === step.key.trim().toLowerCase());
+          const known = KEY_NAMES.find((n) => n.toLowerCase() === step.key.trim().toLowerCase());
           if (!known) throw new Error(`unknown key "${step.key}"`);
           step.key = known;
         }
       }
-      for (const a of r.states.flatMap((st) => [...st.onActivate, ...st.onDeactivate])) {
+      for (const a of actions) {
         if (a.type === "soundpad" && a.command.type === "play" && !a.command.sound.title.trim() && !a.command.sound.path.trim()) {
           throw new Error("choose a Soundpad sound to play");
         }
         if (a.type === "switchProfile" && a.target.type === "profile") findProfile(a.target.profile);
       }
-      let nextState = Math.max(0, ...r.states.map((st) => Number(st.id.replace("st-", "")) || 0)) + 1;
-      r.states.forEach((st, i) => {
+      const held = k.type === "momentary" ? k.triggers : k.type === "mode" ? k.states.flatMap((st) => st.shift) : [];
+      if (held.some((t) => t.type === "encoderStep" || t.press.kind === "release")) {
+        throw new Error("held controls (momentary, mode shift) need a button, hat or axis zone pressed, not a release or encoder");
+      }
+      let nextState = Math.max(0, ...states.map((st) => Number(st.id.replace("st-", "")) || 0)) + 1;
+      states.forEach((st, i) => {
         if (!st.id) st.id = `st-${nextState++}`;
         st.name = st.name.trim() || `State ${i + 1}`;
       });
-      c.name = c.name.trim() || "Radio";
+      c.name = c.name.trim() || CONTROL_TYPES.find(([t]) => t === k.type)![1];
       if (!c.id) {
         c.id = `vc-${nextVc++}`;
-        s.virtualControls.push({ ...c, active: null, activeName: null });
+        s.virtualControls.push(viewOf(c));
         s.overlay.widgets.push({ type: "radio", control: c.id, layout: "vertical", position: null });
       } else {
         const i = s.virtualControls.findIndex((x) => x.id === c.id);
         if (i < 0) throw new Error(`unknown virtual control ${c.id}`);
         const old = s.virtualControls[i]!;
-        const still = r.states.find((st) => st.id === old.active);
-        s.virtualControls[i] = { ...c, active: still?.id ?? null, activeName: still?.name ?? null };
-        if (!r.states.some((st) => st.id === lastActive.get(c.id))) lastActive.delete(c.id);
+        const v = viewOf(c);
+        // Editing keeps the state where it still exists and never runs actions.
+        if (k.type === "radio" || k.type === "mode") {
+          const still = states.findIndex((st) => st.id === old.active);
+          if (still >= 0 || k.type === "radio") setActive(v, still >= 0 ? still : null);
+        }
+        if (k.type === "toggle") Object.assign(v, { on: old.on, active: old.active, activeName: old.activeName });
+        if (k.type === "counter" && old.value !== null) setCounter(v, old.value);
+        s.virtualControls[i] = v;
+        if (!states.some((st) => st.id === lastActive.get(c.id))) lastActive.delete(c.id);
+        shiftBase.delete(c.id);
       }
       emit();
       return c.id;
     },
     async removeVirtualControl(id) {
       lastActive.delete(id);
+      shiftBase.delete(id);
       s.virtualControls = s.virtualControls.filter((c) => c.id !== id);
       s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "radio" && w.control === id));
       emit();
     },
     async setRadioActive(id, state) {
       const c = findControl(id);
-      const st = c.kind.states.find((x) => x.id === state);
-      if (state !== null && !st) throw new Error(`unknown state ${state}`);
-      setActive(c, indexOf(c.kind, st?.id));
+      if (c.kind.type === "toggle") {
+        Object.assign(c, { on: state !== null, active: state === null ? null : "on", activeName: state === null ? null : "On" });
+      } else if (c.kind.type === "radio" || c.kind.type === "mode") {
+        const i = indexOf(c.kind.states, state);
+        if (state !== null && i === null) throw new Error(`unknown state ${state}`);
+        setActive(c, c.kind.type === "mode" ? (i ?? 0) : i);
+        shiftBase.delete(id);
+        c.shifted = false;
+      } else throw new Error("this command does not apply to this kind of control");
       emit();
     },
     async commandRadio(id, command) {
-      runCommand(findControl(id), { type: command });
+      const c = findControl(id);
+      const k = c.kind;
+      if (k.type === "radio" && (command === "increment" || command === "decrement" || command === "clear" || command === "toggleOff")) runCommand(c, { type: command });
+      else if (k.type === "toggle" && (command === "toggle" || command === "on" || command === "off")) setToggle(c, command === "toggle" ? !c.on : command === "on");
+      else if (k.type === "counter" && (command === "increment" || command === "decrement" || command === "reset")) stepCounter(c, command === "reset" ? "reset" : command === "increment" ? 1 : -1);
+      else if (k.type === "mode" && (command === "increment" || command === "decrement")) stepMode(c, command === "increment" ? 1 : -1);
+      else throw new Error("this command does not apply to this kind of control");
       runSwitches();
+      emit();
+    },
+    async setControlValue(id, value) {
+      const c = findControl(id);
+      if (c.kind.type !== "counter" || !Number.isFinite(value)) throw new Error("this command does not apply to this kind of control");
+      setCounter(c, value);
       emit();
     },
     async toggleOverlayVirtualControl(id) {
@@ -672,11 +857,16 @@ export function createDemo(): Backend {
           emit();
         }, 800);
       }
+      // Voicemeeter: "installed" and running in the demo.
+      const vm = s.connectors.find((x) => x.id === "voicemeeter")!;
+      vm.enabled = connections.voicemeeter.enabled;
+      Object.assign(vm, vm.enabled ? { status: { state: "connected" }, detail: "Voicemeeter Banana (demo)" } : { status: { state: "notConfigured" }, detail: null });
       discordStatus();
       emit();
     },
     async testConnection(id) {
       if (id === "soundpad") return `Connected, ${DEMO_SOUNDS.length} sounds (demo)`;
+      if (id === "voicemeeter") return "Connected to Voicemeeter Banana (demo)";
       const creds = discordView().credentials!;
       if (!s.connections.discord.clientId || !creds.secretSaved) {
         discordStatus(null, true);
@@ -849,7 +1039,19 @@ export function createDemo(): Backend {
     },
     listProcessWindows: async () => structuredClone(DEMO_WINDOWS),
     async testAction(action) {
-      setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
+      const macro = action.type === "keyboardMacro" || action.type === "mouseMacro";
+      setTimeout(() => console.info("[demo] test play:", actionText(action)), macro ? 3000 : 0);
+    },
+    listVoices: async () => [
+      { id: "demo/zira", name: "Microsoft Zira Desktop - English (United States)" },
+      { id: "demo/hedda", name: "Microsoft Hedda - German (Germany)" },
+    ],
+    listSoundDevices: async () => ["Speakers (Realtek Audio)", "Headphones (Demo Headset)"],
+    listAudioPrograms: async () => ["chrome.exe", "Discord.exe", "DCS.exe"],
+    async storeHttpSecret(value) {
+      if (!value) throw new Error("enter the secret value");
+      // The demo keeps no secrets; only the reference comes back.
+      return { store: "windowsCredentialManager", target: `detent/http/demo-${Date.now().toString(16)}` };
     },
     // --- Backup and transfer: files go through the browser (download / file picker) ----------
     async exportSetup(ids) {

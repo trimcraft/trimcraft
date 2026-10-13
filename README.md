@@ -49,8 +49,9 @@ A virtual control is built from physical inputs and can run actions. The first k
   deactivate actions, then B's activate actions.
 - Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
   (button down, up, click, wheel, relative move, move to a position, recorded paths, wait),
-  Soundpad commands, Discord mute/deafen and switching the profile (see Profiles). Keys are sent as scan codes so games that read
-  DirectInput or RawInput see them. Every executed action is logged.
+  Soundpad commands, Discord mute/deafen, switching the profile (see Profiles), and the actions
+  below. Keys are sent as scan codes so games that read DirectInput or RawInput see them. Every
+  executed action is logged. Add actions with **+ Add action…**.
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
   stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
@@ -60,10 +61,73 @@ A virtual control is built from physical inputs and can run actions. The first k
   set the state (nothing is sent when it already holds); the toggles go by Discord's live state,
   so muting by hand in Discord is taken into account. Discord must be running and the Discord
   connection enabled under **Connections**.
+- **Speak text**: Windows speech with a voice of your choice (the installed Windows voices),
+  rate and volume. A new speech interrupts the one still speaking.
+- **Play sound file**: wav, mp3, ogg or flac, with volume, on the default or a chosen output
+  device; optionally stops the sounds still playing first.
+- **Audio volume**: the master volume of the default output device, or a program's volume (by
+  executable name, e.g. `Discord.exe`, like the Windows volume mixer; the list offers programs
+  that have an audio session now): set to %, change by ±%, mute, unmute, toggle mute.
+- **Media key**: play/pause, next, previous, stop, volume up/down, mute, as a keyboard's media
+  keys.
+- **Launch**: start a program (path, arguments, working folder, optionally only if it is not
+  running yet), open a web page (http/https only) or a file or folder with its default app.
+  Programs are started directly, never through a command prompt.
+- **HTTP request** (webhook): method, address, headers and body, timeout (default 5 s). Header
+  values can be stored as **secret**: they go to the Windows Credential Manager
+  (`detent/http/…`) and never into `setup.json` or the log. The status and duration go to the
+  event log.
+- **Voicemeeter** (a connection, see below): set or change the gain of a strip or bus, mute,
+  unmute or toggle it.
+- Texts of speech and HTTP requests can contain placeholders: `{control}`, `{state}`,
+  `{profile}` and `{value}` (the control's value, for controls that have one; empty for
+  radios). In an HTTP address their values are URL-encoded.
+- Actions run one after the other, in order. Speech, sound files, launch and HTTP requests start
+  in the background and the next action runs at once, unless **Wait until finished** is ticked
+  (it waits at most 10 minutes). Their result, and any failure with its reason, goes to the event
+  log; a failing action never stops the ones after it. **▶ Test** runs an action as edited.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
   active state highlighted.
+
+### More control kinds
+
+**New …** offers five kinds; each lives in a profile, can go on the overlay and keeps its state
+across restarts (unless set to start empty).
+
+- **Toggle**: on or off. Triggers toggle, switch on, switch off; actions on switching on and off.
+  Overlay: name and an ON/OFF lamp.
+- **Momentary**: on only while a trigger is held (a button, hat direction or axis zone); off when
+  the last one is released, even if the profile changed meanwhile. Actions on press and on
+  release; **invert** makes it on while nothing is held.
+- **Counter**: a value with minimum, maximum, step, wrap or stop and decimals (like the Hardware
+  Test counters, which stay as they are). Triggers increment, decrement and reset (encoders,
+  buttons, hats, zones); actions on every change can use the new value as `{value}`.
+- **Mode** (layer): like a radio with exactly one state active, the first by default, no "all
+  off". States are selected latching (select, next, previous) or as a **shift**: while a
+  trigger is held the mode is in that state, on release it goes back. A latching change while
+  shifted ends the shift.
+
+### Triggers
+
+Click a trigger in the editor to set more than the input:
+
+- **Press kind** (buttons and hat directions): press (default), release, **long press** (held at
+  least 500 ms, configurable) or **double press** (second press within 300 ms, configurable). If a
+  button has a long or double press trigger in the active profile, its plain presses fire on
+  release instead (a "short press"; with a double press, once the window has passed), so a long
+  press does not also fire the short one. The editor marks such triggers *short*. Momentary
+  controls and shifts always react to the press itself.
+- **Modifiers**: buttons (any device) that must be held. The most specific trigger wins: with
+  `Shift + Button 4` assigned, Button 4 alone does not fire while Shift is held.
+- **Only when**: one or more conditions "Mode X is in state S" (all must hold).
+- **Axis zones**: assign by moving an axis (a quarter of its range); the zone (0–100 %) is set on
+  a live axis bar. It fires on entering, optionally on leaving, with 2 % hysteresis so jitter at
+  the edge does not fire again. Where the axis is at startup counts as the start.
+
+Long and double presses are timed from the input's own timestamps; Detent wakes up exactly when
+one is due instead of polling.
 
 ### Recording macros
 
@@ -132,7 +196,8 @@ visibility are shared by all profiles. A setup from before profiles becomes the 
 
 ## Connections
 
-The **Connections** section lists the programs Detent can control. Soundpad is the first. Each
+The **Connections** section lists the programs Detent can control: Soundpad, Discord and
+Voicemeeter. Each
 connection can be enabled, has its own settings (for Soundpad: timeout per request, how old the
 cached sound list may get), a live status (disabled, connecting, connected, not reachable) and a
 **Test connection** button. While enabled, Detent checks the connection every few seconds and
@@ -143,6 +208,13 @@ connection that is later disabled stay saved, are shown greyed with a link to Co
 are skipped (with a log entry) when they fire. Keyboard and mouse macros need no connection.
 Connection settings are stored in `setup.json`; secrets are kept in the Windows Credential
 Manager (generic credentials `detent/discord/…`), never in the file or the log.
+
+### Voicemeeter
+
+Uses the VoicemeeterRemote API of a local Voicemeeter (Standard, Banana or Potato). Detent loads
+`VoicemeeterRemote64.dll` from the installation folder; without an installation the connection
+says so and its actions are not offered. Voicemeeter must be running; while the connection is
+enabled, Detent checks every few seconds and shows the edition.
 
 ### Discord
 

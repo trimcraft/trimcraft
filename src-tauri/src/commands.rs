@@ -1,13 +1,15 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
 use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
-use detent_core::connection::{DiscordSettings, valid_client_id};
+use crate::{volume, webhook};
+use detent_core::audio::VoiceRef;
+use detent_core::connection::{DiscordSettings, SecretRef, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
     Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
-    DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem,
-    Phase, ProfileSwitching, RadioCommand, Sound, VirtualControl, WidgetPosition,
+    DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, ManualCommand, MonitorRef,
+    Movement, OverlayItem, Phase, ProfileSwitching, Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -39,6 +41,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         remove_virtual_control,
         set_radio_active,
         command_radio,
+        set_control_value,
         toggle_overlay_virtual_control,
         start_learn,
         stop_learn,
@@ -61,6 +64,10 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         clear_recording,
         set_recorder_config,
         test_action,
+        list_voices,
+        list_sound_devices,
+        list_audio_programs,
+        store_http_secret,
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
@@ -252,12 +259,29 @@ fn get_keys() -> &'static [KeyInfo] {
 
 #[tauri::command]
 fn save_virtual_control(shared: State<'_, Arc<Shared>>, control: VirtualControl) -> Res<String> {
-    with(&shared, |e| e.save_virtual_control(control))
+    with_secrets(&shared, |e| e.save_virtual_control(control))
 }
 
 #[tauri::command]
 fn remove_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.remove_virtual_control(&id))
+    with_secrets(&shared, |e| e.remove_virtual_control(&id))
+}
+
+/// Like [`with`], for changes that can drop actions: secret HTTP header values no action
+/// uses any more are deleted from the credential store.
+fn with_secrets<T>(
+    shared: &Shared,
+    f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
+) -> Res<T> {
+    let before = shared.engine().setup().secret_refs();
+    let result = with(shared, f)?;
+    let after = shared.engine().setup().secret_refs();
+    for secret in before.iter().filter(|s| !after.contains(s)) {
+        if let Err(e) = webhook::delete_secret(secret) {
+            log::warn!("{e}");
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -265,25 +289,17 @@ fn set_radio_active(shared: State<'_, Arc<Shared>>, id: String, state: Option<St
     with(&shared, |e| e.set_radio_active(&id, state))
 }
 
-/// Radio commands the UI can run, as if a trigger had fired.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum UiRadioCommand {
-    Increment,
-    Decrement,
-    Clear,
-    ToggleOff,
+/// Runs a command on any virtual control as if a trigger had fired (next/previous, clear,
+/// toggle off, toggle/on/off, reset; which ones apply depends on the kind).
+#[tauri::command]
+fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: ManualCommand) -> Res<()> {
+    with(&shared, |e| e.command_control(&id, command))
 }
 
+/// Sets a counter control's value without running actions.
 #[tauri::command]
-fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: UiRadioCommand) -> Res<()> {
-    let command = match command {
-        UiRadioCommand::Increment => RadioCommand::Increment,
-        UiRadioCommand::Decrement => RadioCommand::Decrement,
-        UiRadioCommand::Clear => RadioCommand::Clear,
-        UiRadioCommand::ToggleOff => RadioCommand::ToggleOff,
-    };
-    with(&shared, |e| e.command_radio(&id, command))
+fn set_control_value(shared: State<'_, Arc<Shared>>, id: String, value: f64) -> Res<()> {
+    with(&shared, |e| e.set_control_value(&id, value))
 }
 
 #[tauri::command]
@@ -319,7 +335,7 @@ fn rename_profile(shared: State<'_, Arc<Shared>>, id: String, name: String) -> R
 
 #[tauri::command]
 fn delete_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.delete_profile(&id))
+    with_secrets(&shared, |e| e.delete_profile(&id))
 }
 
 /// Moves a profile to the front: the default profile.
@@ -430,9 +446,11 @@ fn set_connections(shared: State<'_, Arc<Shared>>, mut connections: Connections)
     connections.discord.client_secret = current.client_secret;
     let soundpad = connections.soundpad.clone();
     let discord = connections.discord.clone();
+    let voicemeeter = connections.voicemeeter.clone();
     with(&shared, |e| e.set_connections(connections))?;
     shared.soundpad.apply(soundpad);
     shared.discord.apply(discord);
+    shared.voicemeeter.apply(voicemeeter);
     Ok(())
 }
 
@@ -444,6 +462,7 @@ async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res
     tauri::async_runtime::spawn_blocking(move || match id {
         ConnectorId::Soundpad => shared.soundpad.test(),
         ConnectorId::Discord => shared.discord.test(),
+        ConnectorId::Voicemeeter => shared.voicemeeter.test(),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -586,30 +605,67 @@ fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -
     with(&shared, |e| e.set_recorder_config(config))
 }
 
-/// Plays an action (e.g. the macro being edited) after the recording countdown, so the user
-/// can switch to the game first.
+/// Plays an action being edited. Keyboard and mouse macros wait for the recording countdown,
+/// so the user can switch to the game first; everything else runs at once. Placeholders get
+/// "Test play", "editor" and the active profile.
 #[tauri::command]
 fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     action.normalize().map_err(|e| e.to_string())?;
     if !shared.engine().action_enabled(&action) {
         return Err("this action's connection is disabled; enable it under Connections".into());
     }
+    let countdown = matches!(
+        action,
+        Action::KeyboardMacro { .. } | Action::MouseMacro { .. }
+    );
+    let mut request = ActionRequest::new("Test play", "editor", Phase::Activate, &action);
+    request.profile = shared.engine().setup().profile().name.clone();
     let shared = Arc::clone(&shared);
     std::thread::Builder::new()
         .name("detent-test-play".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(
-                detent_core::recording::COUNTDOWN_MS,
-            ));
-            shared.executor.submit(vec![ActionRequest {
-                control: "Test play".into(),
-                state: "editor".into(),
-                phase: Phase::Activate,
-                action,
-            }]);
+            if countdown {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    detent_core::recording::COUNTDOWN_MS,
+                ));
+            }
+            shared.executor.submit(vec![request]);
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Installed Windows voices, for the speech editor.
+#[tauri::command]
+async fn list_voices(shared: State<'_, Arc<Shared>>) -> Res<Vec<VoiceRef>> {
+    let speech = shared.speech.clone();
+    tauri::async_runtime::spawn_blocking(move || speech.voices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Sound output devices, for the sound file editor.
+#[tauri::command]
+async fn list_sound_devices(shared: State<'_, Arc<Shared>>) -> Res<Vec<String>> {
+    let sound = shared.sound.clone();
+    tauri::async_runtime::spawn_blocking(move || sound.devices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Programs that have an audio session now, for the volume editor.
+#[tauri::command]
+async fn list_audio_programs() -> Res<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(volume::session_programs)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Stores a secret HTTP header value in the credential store; the editor keeps only the
+/// returned reference. Unused ones are deleted when the action is saved without them.
+#[tauri::command]
+fn store_http_secret(value: String) -> Res<SecretRef> {
+    webhook::store_secret(&value)
 }
 
 /// The event log held by the app, oldest first. New entries arrive as `detent://diagnostics`
@@ -710,8 +766,8 @@ mod tests {
                 "end":"clamp","toggleOnReselect":true,"startup":"empty"}}"#,
         )
         .unwrap();
-        assert_eq!(c.radio().states[0].on_activate.len(), 1);
-        assert_eq!(c.radio().startup, detent_core::Startup::Empty);
+        assert_eq!(c.radio().unwrap().states[0].on_activate.len(), 1);
+        assert_eq!(c.radio().unwrap().startup, detent_core::Startup::Empty);
         let item: OverlayItem = serde_json::from_str(
             r#"{"type":"radio","control":"vc-1","layout":"horizontal","position":{"x":0.25,"y":0.5}}"#,
         )
@@ -729,7 +785,7 @@ mod tests {
         )
         .unwrap();
         let _: Option<MonitorRef> = serde_json::from_str("null").unwrap();
-        assert_eq!(c.radio().toggle_off.len(), 1);
+        assert_eq!(c.radio().unwrap().toggle_off.len(), 1);
         let sp: VirtualControl = serde_json::from_str(
             r#"{"id":"vc-1","name":"Sounds","kind":{"type":"radio","states":[
                 {"id":"st-1","name":"Siren","select":[],
@@ -744,7 +800,7 @@ mod tests {
                 "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
         )
         .unwrap();
-        assert_eq!(sp.radio().states[0].on_deactivate.len(), 5);
+        assert_eq!(sp.radio().unwrap().states[0].on_deactivate.len(), 5);
 
         // Connections.
         let connections: Connections = serde_json::from_str(
@@ -774,7 +830,7 @@ mod tests {
                 "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
         )
         .unwrap();
-        assert_eq!(dc.radio().states[0].on_deactivate.len(), 4);
+        assert_eq!(dc.radio().unwrap().states[0].on_deactivate.len(), 4);
         // The setup guide reads these (ui/src/lib/types.ts: DiscordSetup).
         let setup = serde_json::to_value(discord_setup()).unwrap();
         assert_eq!(setup["redirectUri"], discord::REDIRECT_URI);
@@ -788,6 +844,63 @@ mod tests {
         )
         .unwrap();
         assert!(settings.start_with_windows && settings.run_as_admin && !settings.close_to_tray);
+        // More action types, as ActionList.svelte creates them (newAction) and the editors
+        // change them.
+        let more: Vec<Action> = serde_json::from_str(
+            r#"[
+              {"type":"speak","text":"{state}","voice":{"id":"HKEY_LOCAL_MACHINE/x","name":"Zira"},"rate":0,"volume":100,"wait":false},
+              {"type":"playSound","path":"C:/s.wav","volume":100,"device":null,"stopPrevious":false,"wait":true},
+              {"type":"volume","target":{"type":"master"},"command":{"type":"toggleMute"}},
+              {"type":"volume","target":{"type":"app","process":"Discord.exe"},"command":{"type":"set","percent":50}},
+              {"type":"voicemeeter","target":{"kind":"strip","index":0},"command":{"type":"changeGain","deltaDb":3}},
+              {"type":"mediaKey","key":"playPause"},
+              {"type":"launch","target":{"type":"program","path":"C:/a.exe","arguments":"","workingDir":"","onlyIfNotRunning":true},"wait":false},
+              {"type":"launch","target":{"type":"url","url":"https://example.com"},"wait":false},
+              {"type":"http","method":"POST","url":"https://x.test","headers":[
+                {"name":"Authorization","value":"","secret":{"store":"windowsCredentialManager","target":"detent/http/1"}}],
+               "body":"","timeoutMs":5000,"wait":false}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(more.len(), 9);
+        for mut action in more {
+            action.normalize().unwrap();
+        }
+        let connections: Connections = serde_json::from_str(
+            r#"{"soundpad":{"enabled":false,"timeoutMs":500,"listMaxAgeMs":10000},
+                "discord":{"enabled":false,"clientId":"","clientSecret":null},
+                "voicemeeter":{"enabled":true}}"#,
+        )
+        .unwrap();
+        assert!(connections.voicemeeter.enabled);
+        let id: ConnectorId = serde_json::from_str(r#""voicemeeter""#).unwrap();
+        assert_eq!(id, ConnectorId::Voicemeeter);
+        // What the pickers and store_http_secret return (types.ts: VoiceRef, SecretRef).
+        let voice = serde_json::to_value(VoiceRef {
+            id: "a".into(),
+            name: "b".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            (voice["id"].as_str(), voice["name"].as_str()),
+            (Some("a"), Some("b"))
+        );
+        let secret = serde_json::to_value(SecretRef::WindowsCredentialManager {
+            target: "detent/http/1".into(),
+        })
+        .unwrap();
+        assert_eq!(secret["store"], "windowsCredentialManager");
+        let view = serde_json::to_value(detent_core::connection::ConnectorView::new(
+            ConnectorId::Voicemeeter,
+            false,
+            Some(&detent_core::ConnectorState {
+                missing: Some("Voicemeeter is not installed".into()),
+                ..Default::default()
+            }),
+        ))
+        .unwrap();
+        assert_eq!(view["missing"], "Voicemeeter is not installed");
+
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
         let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();
@@ -849,8 +962,50 @@ mod tests {
             r#""decrement""#,
             r#""clear""#,
             r#""toggleOff""#,
+            r#""toggle""#,
+            r#""on""#,
+            r#""off""#,
+            r#""reset""#,
         ] {
-            let _: UiRadioCommand = serde_json::from_str(command).unwrap();
+            let _: ManualCommand = serde_json::from_str(command).unwrap();
+        }
+
+        // Control kinds and triggers as the editors build them.
+        let trigger = r#"{"type":"button","device":"d","index":3,"press":{"kind":"press"},"modifiers":[],"conditions":[]}"#;
+        for kind in [
+            format!(
+                r#"{{"type":"toggle","toggle":[{trigger}],"on":[],"off":[],"onOn":[],"onOff":[],"startup":"restoreLast"}}"#
+            ),
+            format!(
+                r#"{{"type":"momentary","triggers":[{trigger}],"onPress":[],"onRelease":[],"invert":false}}"#
+            ),
+            format!(
+                r#"{{"type":"counter","spec":{{"min":1,"max":20,"step":1,"initial":1,"end":"wrap","decimals":0}},
+                    "increment":[{trigger}],"decrement":[],"reset":[],"onChange":[],"startup":"restoreLast"}}"#
+            ),
+            format!(
+                r#"{{"type":"mode","states":[{{"id":"","name":"Air","select":[],"shift":[{trigger}],
+                    "onActivate":[],"onDeactivate":[]}}],"next":[],"previous":[],"end":"wrap","startup":"restoreLast"}}"#
+            ),
+        ] {
+            let mut c: VirtualControl =
+                serde_json::from_str(&format!(r#"{{"id":"","name":"X","kind":{kind}}}"#)).unwrap();
+            c.normalize().unwrap();
+        }
+        let t: detent_core::Trigger = serde_json::from_str(
+            r#"{"type":"axisZone","device":"d","index":2,"min":80,"max":100,
+                "press":{"kind":"release"},
+                "modifiers":[{"device":"d","index":7}],
+                "conditions":[{"mode":"vc-2","state":"st-1"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.modifiers.len(), 1);
+        for press in [
+            r#"{"kind":"long","ms":500}"#,
+            r#"{"kind":"double","ms":300}"#,
+            r#"{"kind":"release"}"#,
+        ] {
+            let _: detent_core::PressKind = serde_json::from_str(press).unwrap();
         }
     }
 

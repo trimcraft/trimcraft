@@ -84,6 +84,13 @@ pub fn strip_secrets(value: &mut Value) -> Vec<String> {
     stripped
 }
 
+/// A reference to a credential store entry (`{"store": ..., "target": ...}`), whatever the field
+/// is called.
+fn is_credential_ref(v: &Value) -> bool {
+    v.as_object()
+        .is_some_and(|o| o.contains_key("store") && o.get("target").is_some_and(Value::is_string))
+}
+
 fn emptied(v: &Value) -> Value {
     match v {
         Value::String(_) => json!(""),
@@ -118,6 +125,9 @@ fn strip(value: &mut Value, path: &mut String, out: &mut Vec<String>) {
                         out.push(path.clone());
                     }
                     *v = emptied(v);
+                } else if is_credential_ref(v) {
+                    out.push(path.clone());
+                    *v = Value::Null;
                 } else {
                     strip(v, path, out);
                 }
@@ -561,9 +571,8 @@ mod tests {
     use crate::device::DeviceId;
     use crate::encoder::EncoderBinding;
     use crate::function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
-    use crate::virtual_control::{
-        Radio, RadioState, StepDirection, Trigger, VirtualControl, VirtualControlKind,
-    };
+    use crate::trigger::{StepDirection, Trigger, TriggerInput};
+    use crate::virtual_control::{Radio, RadioState, VirtualControl, VirtualControlKind};
 
     const NOW: u64 = 1_791_892_800;
 
@@ -572,10 +581,10 @@ mod tests {
             states: vec![RadioState {
                 id: "st-1".into(),
                 name: "A".into(),
-                select: vec![Trigger::EncoderStep {
+                select: vec![Trigger::from(TriggerInput::EncoderStep {
                     encoder: encoder.into(),
                     direction: StepDirection::Increment,
-                }],
+                })],
                 ..Default::default()
             }],
             ..Default::default()
@@ -843,8 +852,12 @@ mod tests {
         assert_eq!(target.encoders.len(), 2);
         assert_eq!(target.encoders[1].id, "enc-2");
         assert_eq!(target.encoders[1].name, "Knob");
-        let Trigger::EncoderStep { encoder, .. } =
-            &target.profiles[1].virtual_controls[0].radio().states[0].select[0]
+        let TriggerInput::EncoderStep { encoder, .. } = &target.profiles[1].virtual_controls[0]
+            .radio()
+            .unwrap()
+            .states[0]
+            .select[0]
+            .input
         else {
             panic!("expected an encoder trigger");
         };
@@ -889,7 +902,7 @@ mod tests {
                 profile: "profile-2".into(),
             },
         };
-        let VirtualControlKind::Radio(radio) = &mut source.profiles[0].virtual_controls[0].kind;
+        let radio = source.profiles[0].virtual_controls[0].radio_mut().unwrap();
         radio.states[0].on_activate.push(switch);
         let mut target = Setup::default();
         let selected = ["profile-1".to_owned(), "profile-2".to_owned()];
@@ -899,6 +912,102 @@ mod tests {
         assert!(json.contains(r#""profile":"profile-3""#), "{json}");
     }
 
+    fn profile_from(json: Value) -> Profile {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn http_secret_headers_are_stripped_from_an_exported_profile() {
+        let mut s = setup();
+        s.profiles[1] = profile_from(json!({
+            "id": "profile-2", "name": "DCS", "executables": ["DCS.exe"],
+            "virtualControls": [{"id": "vc-2", "name": "Alarm", "kind": {"type": "toggle",
+                "onOn": [{"type": "http", "method": "POST", "url": "https://hooks.test/x", "headers": [
+                    {"name": "Authorization", "value": "", "secret": {"store": "windowsCredentialManager", "target": "detent/http/1"}},
+                    {"name": "X-Custom", "value": "", "secret": {"store": "windowsCredentialManager", "target": "detent/http/2"}},
+                    {"name": "Content-Type", "value": "application/json"}]}]}}]
+        }));
+        let text = export_json(&s, Some(&["profile-2".into()]), NOW, "1").unwrap();
+        assert!(!text.contains("detent/http"), "{text}");
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["credentialsRemoved"], true);
+        let stripped: Vec<&str> = v["strippedFields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(stripped.len(), 2, "{stripped:?}");
+        assert!(
+            stripped.iter().all(|p| p.ends_with(".secret")),
+            "{stripped:?}"
+        );
+        // The import knows credentials are missing, and the headers survive without them.
+        let file = parse_import(&text).unwrap();
+        assert_eq!(file.summary().stripped_fields.len(), 2);
+        let control = &file.setup.profiles[0].virtual_controls[0];
+        let actions = control.actions();
+        let crate::action::Action::Http(request) = actions[0] else {
+            panic!("expected an HTTP action");
+        };
+        assert_eq!(request.headers.len(), 3);
+        assert!(request.headers.iter().all(|h| h.secret.is_none()));
+        assert_eq!(request.headers[2].value, "application/json");
+        assert_eq!(request.headers[0].name, "Authorization");
+    }
+
+    #[test]
+    fn add_profiles_remaps_mode_conditions_and_every_control_type() {
+        // A mode (vc-1) and controls of other types in one profile; a trigger of the radio
+        // listens only while the mode is in state st-2. The target already uses vc-1..vc-2.
+        let trigger = json!({"type": "button", "device": "3344:0001#1", "index": 3,
+            "conditions": [{"mode": "vc-1", "state": "st-2"}]});
+        let imported = profile_from(json!({
+            "id": "profile-1", "name": "Flight",
+            "virtualControls": [
+                {"id": "vc-1", "name": "Mode", "kind": {"type": "mode", "states": [
+                    {"id": "st-1", "name": "A"}, {"id": "st-2", "name": "B"}]}},
+                {"id": "vc-2", "name": "Comms", "kind": {"type": "radio", "states": [
+                    {"id": "st-1", "name": "X", "select": [trigger]}]}},
+                {"id": "vc-3", "name": "Gear", "kind": {"type": "toggle", "toggle": [trigger]}},
+                {"id": "vc-4", "name": "Boost", "kind": {"type": "momentary", "triggers": [trigger]}}
+            ],
+            "overlayWidgets": [{"type": "radio", "control": "vc-2"}]
+        }));
+        let mut source = Setup::default();
+        source.profiles[0] = imported;
+        let mut target = Setup::default();
+        target.profiles[0]
+            .virtual_controls
+            .push(control("vc-1", "A", "enc-1"));
+        target.profiles[0]
+            .virtual_controls
+            .push(control("vc-2", "B", "enc-1"));
+        merge_profiles(&mut target, &source, &["profile-1".into()]).unwrap();
+        let added = &target.profiles[1];
+        let ids: Vec<&str> = added
+            .virtual_controls
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(ids, ["vc-3", "vc-4", "vc-5", "vc-6"]);
+        // Every trigger that names the mode now names its new id; the state id stays.
+        let json = serde_json::to_string(added).unwrap();
+        assert!(!json.contains(r#""mode":"vc-1""#), "{json}");
+        assert_eq!(
+            json.matches(r#"{"mode":"vc-3","state":"st-2"}"#).count(),
+            3,
+            "{json}"
+        );
+        // The overlay widget follows the radio.
+        assert!(
+            serde_json::to_string(&added.overlay_widgets)
+                .unwrap()
+                .contains(r#""control":"vc-4""#)
+        );
+        // The target's own controls are untouched.
+        assert_eq!(target.profiles[0].virtual_controls[0].name, "A");
+    }
     #[test]
     fn a_failed_merge_changes_nothing() {
         let mut target = setup();

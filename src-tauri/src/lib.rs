@@ -7,14 +7,20 @@ mod discord;
 mod elevation;
 mod executor;
 mod foreground;
+mod launch;
 mod overlay;
 mod profile_watch;
 mod recorder;
 mod secrets;
+mod sound;
 mod soundpad;
+mod speech;
 mod storage;
 mod transfer;
 mod tray;
+mod voicemeeter;
+mod volume;
+mod webhook;
 
 use detent_core::diagnostics::action_record;
 use detent_core::settings::{self, AUTOSTART_ARG};
@@ -63,6 +69,9 @@ pub struct Shared {
     diagnostics: Diagnostics,
     soundpad: Arc<Soundpad>,
     discord: Arc<Discord>,
+    voicemeeter: Arc<voicemeeter::Voicemeeter>,
+    speech: Arc<speech::Speech>,
+    sound: Arc<sound::Sound>,
     recorder: recorder::Recorder,
     meta: Meta,
     /// The profile last reported in the log.
@@ -371,19 +380,29 @@ fn load(
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
     let backups = backups::Backups::spawn(&storage.dir, diagnostics.clone());
+    let voicemeeter = Arc::new(voicemeeter::Voicemeeter::spawn(
+        engine.connections().voicemeeter.clone(),
+    ));
+    let speech = Arc::new(speech::Speech::spawn());
+    let sound = Arc::new(sound::Sound::spawn());
+    let services = executor::Services {
+        soundpad: soundpad.clone(),
+        discord: discord.clone(),
+        voicemeeter: voicemeeter.clone(),
+        speech: speech.clone(),
+        sound: sound.clone(),
+    };
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(
-            app.clone(),
-            soundpad.clone(),
-            discord.clone(),
-            diagnostics.clone(),
-        ),
+        executor: Executor::spawn(app.clone(), services, diagnostics.clone()),
         diagnostics,
         soundpad,
         discord,
+        voicemeeter,
+        speech,
+        sound,
         recorder: recorder::Recorder::default(),
         meta,
         logged_profile: Mutex::new(String::new()),
@@ -406,7 +425,12 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                 if !backend_alive {
                     std::thread::sleep(FRAME);
                 } else {
-                    match backend.events.recv_timeout(FRAME) {
+                    // Wake for the next frame, or earlier when a long or double press is due.
+                    let deadline = shared.engine().next_deadline();
+                    let wait = deadline.map_or(FRAME, |at| {
+                        Duration::from_nanos(at.saturating_sub(backend.now_ns())).min(FRAME)
+                    });
+                    match backend.events.recv_timeout(wait) {
                         Ok(event) => {
                             let mut engine = shared.engine();
                             if engine.apply(event) {
@@ -421,7 +445,15 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                                 shared.dispatch(&mut engine);
                             }
                         }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if deadline.is_some_and(|at| backend.now_ns() >= at) {
+                                let mut engine = shared.engine();
+                                if engine.advance(backend.now_ns()) {
+                                    shared.changed.store(true, Ordering::Relaxed);
+                                }
+                                shared.dispatch(&mut engine);
+                            }
+                        }
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                             // Keep serving the UI; the error is in the snapshot.
                             log::error!("input backend stopped");
@@ -475,6 +507,9 @@ fn report_connectors(shared: &Arc<Shared>) {
     };
     shared.soundpad.on_status(reporter(ConnectorId::Soundpad));
     shared.discord.on_status(reporter(ConnectorId::Discord));
+    shared
+        .voicemeeter
+        .on_status(reporter(ConnectorId::Voicemeeter));
 }
 
 /// Warnings and errors from the `log` crate, as event log entries.

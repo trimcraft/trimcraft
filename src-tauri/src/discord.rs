@@ -653,7 +653,6 @@ type Endpoint = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-#[cfg(windows)]
 mod ipc {
     //! Named pipe opened for overlapped I/O, so the reader thread can wait for data while the
     //! worker writes (on a handle opened for synchronous I/O, Windows serialises the two).
@@ -762,44 +761,6 @@ mod ipc {
                         "cannot open {}: {e}",
                         pipe_name(n)
                     )));
-                }
-            }
-        }
-        Err(DiscordError::NotRunning)
-    }
-}
-
-#[cfg(unix)]
-mod ipc {
-    //! Unix socket in the runtime or temp directory (macOS and Linux, for development).
-    use super::Endpoint;
-    use detent_core::discord::{DiscordError, PIPE_COUNT};
-    use std::os::unix::net::UnixStream;
-    use std::sync::Arc;
-
-    pub fn open() -> Result<Endpoint, DiscordError> {
-        let dirs: Vec<String> = ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"]
-            .iter()
-            .filter_map(|v| std::env::var(v).ok())
-            .chain(Some("/tmp".into()))
-            .collect();
-        for dir in &dirs {
-            for n in 0..PIPE_COUNT {
-                let path = std::path::Path::new(dir).join(format!("discord-ipc-{n}"));
-                if let Ok(stream) = UnixStream::connect(&path) {
-                    let reader = stream
-                        .try_clone()
-                        .map_err(|e| DiscordError::Disconnected(e.to_string()))?;
-                    let closer = stream
-                        .try_clone()
-                        .map_err(|e| DiscordError::Disconnected(e.to_string()))?;
-                    return Ok((
-                        Box::new(reader),
-                        Box::new(stream),
-                        Arc::new(move || {
-                            let _ = closer.shutdown(std::net::Shutdown::Both);
-                        }),
-                    ));
                 }
             }
         }

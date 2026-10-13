@@ -7,8 +7,7 @@
 //! any other process. Injected input (including Detent's own playback) is ignored.
 //!
 //! The captured events go to `detent_core::recording`, which turns them into steps; the result
-//! waits in the engine until the editor takes it. Other platforms report that recording is
-//! not available.
+//! waits in the engine until the editor takes it.
 
 use crate::{Shared, overlay};
 use detent_core::Movement;
@@ -177,7 +176,6 @@ fn record(
     }
 }
 
-#[cfg(windows)]
 mod platform {
     use super::{CANCEL, Control, Ended, RUN};
     use detent_core::recording::{Hotkey, RawEvent, RecordKind, Recorded, StopReason};
@@ -617,26 +615,7 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
-mod platform {
-    use super::{Control, Ended};
-    use detent_core::Movement;
-    use detent_core::recording::{Hotkey, RecordKind};
-
-    pub fn capture(
-        _kind: RecordKind,
-        _movement: Movement,
-        _hotkey: Option<Hotkey>,
-        _control: &Control,
-        _on_started: impl FnOnce(),
-    ) -> Result<Ended, String> {
-        Err("recording macros is only available on Windows".into())
-    }
-
-    pub fn wake(_thread_id: u32) {}
-}
-
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 

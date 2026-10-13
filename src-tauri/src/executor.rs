@@ -3,9 +3,8 @@
 //! Soundpad and Discord commands are handed on to their connector threads, so a slow or
 //! missing program never holds up the queue.
 //!
-//! On Windows input is synthesised with `SendInput`, keys as scan codes so games reading
-//! DirectInput or RawInput see them. Other platforms only log what would be sent, so the app
-//! still builds and runs for development.
+//! Input is synthesised with `SendInput`, keys as scan codes so games reading DirectInput or
+//! RawInput see them.
 
 use crate::discord::Discord;
 use crate::overlay;
@@ -94,7 +93,6 @@ fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad, discord: &
     platform::send(&batch);
 }
 
-#[cfg(windows)]
 mod platform {
     use detent_core::{InputOp, MouseButton};
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -206,17 +204,6 @@ mod platform {
                 "SendInput delivered {sent} of {count} inputs (error {})",
                 std::io::Error::last_os_error()
             );
-        }
-    }
-}
-
-#[cfg(not(windows))]
-mod platform {
-    use detent_core::InputOp;
-
-    pub fn send(ops: &[InputOp]) {
-        if !ops.is_empty() {
-            log::info!("action: not sent on this platform: {ops:?}");
         }
     }
 }

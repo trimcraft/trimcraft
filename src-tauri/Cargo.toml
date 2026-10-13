@@ -20,15 +20,13 @@ detent-input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-tauri = { version = "2", features = ["macos-private-api"] }
+tauri = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
 # Opens the Discord Developer Portal in the default browser (setup guide).
 tauri-plugin-opener = "2"
 # Discord token endpoint (HTTPS, rustls).
 ureq = "2"
-# Client secret and OAuth tokens in the OS credential store.
-keyring = "3"
 
 [lints]
 workspace = true
@@ -48,10 +46,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# Client secret and OAuth tokens in the Windows Credential Manager.
 [target.'cfg(windows)'.dependencies.keyring]
 version = "3"
 features = ["windows-native"]
-
-[target.'cfg(target_os = "macos")'.dependencies.keyring]
-version = "3"
-features = ["apple-native"]

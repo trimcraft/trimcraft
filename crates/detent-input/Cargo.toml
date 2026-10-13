@@ -1,6 +1,6 @@
 [package]
 name = "detent-input"
-description = "Input backends for Detent: SDL3 on Windows and macOS, plus a mock for development"
+description = "Input backends for Detent: SDL3 on Windows, plus a mock for development"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

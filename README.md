@@ -133,13 +133,14 @@ the connection is enabled (and reconnects when Discord restarts).
 | Path | What |
 |---|---|
 | `crates/detent-core` | Platform-independent model: device identity, live state, encoders, counters, virtual controls, actions, overlay layout. All logic is here and unit-tested. |
-| `crates/detent-input` | Input backends: SDL3 (Windows, macOS) and a mock with synthetic devices. |
+| `crates/detent-input` | Input backends: SDL3 and a mock with synthetic devices. |
 | `src-tauri` | Desktop app (Tauri 2): engine thread, windows, hotkey, persistence. |
 | `ui` | Svelte 5 + TypeScript frontend: main window and overlay window. |
 
 ## Development
 
-Requirements: Rust (stable), Node 24, CMake (SDL3 is built from source and linked statically).
+Detent runs on Windows 10/11 only, and is developed there. Requirements: Rust (stable, MSVC),
+Node 24, CMake (SDL3 is built from source and linked statically).
 
 ```sh
 npm install
@@ -150,13 +151,12 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 ./scripts/check.sh                  # full gate, same as CI; run before every push
 ```
 
-Settings live in the app config directory (`%APPDATA%\cloud.breu.detent` on Windows,
-`~/Library/Application Support/cloud.breu.detent` on macOS): `devices.json` (known devices and
+Settings live in `%APPDATA%\cloud.breu.detent`: `devices.json` (known devices and
 labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder, connections), `values.json`
 (current counter values), `control-states.json` (active radio states).
 
 ## CI
 
-Every push to `main` runs the gate and builds the app on Windows and macOS. The Windows build
+Every push to `main` runs the gate and builds the app on Windows. The build
 is downloadable as the `detent-windows` artifact (NSIS installer and plain `detent.exe`).
 Builds are not code-signed; Windows SmartScreen will warn on first start.

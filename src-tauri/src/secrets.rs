@@ -1,6 +1,6 @@
-//! Secrets in the operating system's credential store: the Windows Credential Manager
-//! ("generic credentials", visible under Control Panel, Credential Manager, Windows
-//! Credentials), the Keychain on macOS. Settings only hold a `SecretRef` naming the entry.
+//! Secrets in the Windows Credential Manager ("generic credentials", visible under Control
+//! Panel, Credential Manager, Windows Credentials). Settings only hold a `SecretRef` naming the
+//! entry.
 //!
 //! Values never go to the log; errors only name the entry.
 

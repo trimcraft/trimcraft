@@ -311,7 +311,6 @@ impl State {
     }
 }
 
-#[cfg(windows)]
 mod pipe {
     //! One request per connection, overlapped I/O so every step can time out.
     use detent_core::soundpad::PIPE;
@@ -478,15 +477,6 @@ mod pipe {
             }
         }
         Ok(String::from_utf8_lossy(&response).into_owned())
-    }
-}
-
-#[cfg(not(windows))]
-mod pipe {
-    use std::time::Duration;
-
-    pub fn request(_request: &str, _timeout: Duration) -> Result<String, String> {
-        Err("Soundpad is only available on Windows".into())
     }
 }
 

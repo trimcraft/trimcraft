@@ -5,7 +5,9 @@ Guidance for agents working in this repository.
 ## Project
 
 Detent is a HOTAS configuration tool for Windows with an in-game overlay. Owner: Sam
-(private project). Target platform is Windows 10/11; development happens on macOS.
+(private project). Detent supports Windows 10/11 only; development and testing happen on
+Windows. The browser demo (`npm run dev`) and the mock input backend stay as platform-neutral
+dev tools.
 
 ## Rules
 
@@ -70,11 +72,12 @@ When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, an
 test in `src-tauri/src/commands.rs`. When changing `Setup`, keep old files loading (serde defaults)
 or bump `SETUP_SCHEMA_VERSION`.
 
-## Testing on Windows
+## Testing with real hardware
 
-Only the Windows machine can verify: real devices through DirectInput/RawInput, the overlay
-over a borderless game, the global hotkey while the game has focus, encoder pulse timing, the
-macro recorder (low-level hooks, Raw Input), Soundpad and Discord. Ignored tests need such a machine:
+Some things need real hardware and an interactive desktop: devices through DirectInput/RawInput,
+the overlay over a borderless game, the global hotkey while the game has focus, encoder pulse
+timing, the macro recorder (low-level hooks, Raw Input), Soundpad and Discord. Ignored tests need
+such a setup:
 `cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
 without playing anything; reads Discord voice settings with saved, authorized credentials and
 `DETENT_DISCORD_CLIENT_ID` set).

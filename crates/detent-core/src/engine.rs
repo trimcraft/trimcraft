@@ -1062,6 +1062,11 @@ impl Engine {
         switched || before.as_deref() != self.auto_switch.foreground()
     }
 
+    /// The program in the foreground as auto-switching last saw it.
+    pub fn foreground(&self) -> Option<&str> {
+        self.auto_switch.foreground()
+    }
+
     pub fn set_profile_switching(&mut self, switching: ProfileSwitching) {
         self.setup.profile_switching = switching;
         self.dirty.setup = true;

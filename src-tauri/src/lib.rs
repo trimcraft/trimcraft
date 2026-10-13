@@ -3,6 +3,7 @@
 mod commands;
 mod discord;
 mod executor;
+mod foreground;
 mod overlay;
 mod recorder;
 mod secrets;
@@ -51,6 +52,8 @@ pub struct Shared {
     discord: Arc<Discord>,
     recorder: recorder::Recorder,
     meta: Meta,
+    /// The profile last reported in the log.
+    logged_profile: Mutex<String>,
 }
 
 impl Shared {
@@ -70,6 +73,7 @@ impl Shared {
     /// Hands the actions the engine emitted to the executor thread, in order. Actions whose
     /// connection is disabled stay stored but are skipped with a warning.
     fn dispatch(&self, engine: &mut Engine) {
+        self.log_profile(engine);
         let actions: Vec<_> = engine
             .take_actions()
             .into_iter()
@@ -88,6 +92,24 @@ impl Shared {
             .collect();
         if !actions.is_empty() {
             self.executor.submit(actions);
+        }
+    }
+
+    /// Logs a change of the active profile, however it happened.
+    fn log_profile(&self, engine: &Engine) {
+        let setup = engine.setup();
+        let mut logged = self
+            .logged_profile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *logged != setup.active_profile {
+            logged.clone_from(&setup.active_profile);
+            let foreground = engine.foreground();
+            log::info!(
+                "profile: \"{}\" active (foreground: {})",
+                setup.profile().name,
+                foreground.unwrap_or("-")
+            );
         }
     }
 
@@ -141,6 +163,7 @@ pub fn run() {
             app.manage(shared.clone());
             report_connectors(&shared);
             overlay::create(&handle, &shared)?;
+            watch_foreground(&shared);
             start_input(handle, shared, backend);
             Ok(())
         })
@@ -198,6 +221,7 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         discord,
         recorder: recorder::Recorder::default(),
         meta,
+        logged_profile: Mutex::new(String::new()),
     })
 }
 
@@ -256,6 +280,18 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
             }
         })
         .expect("spawn engine thread");
+}
+
+/// Foreground changes go into the engine, which switches profiles as set.
+fn watch_foreground(shared: &Arc<Shared>) {
+    let weak = Arc::downgrade(shared);
+    foreground::watch(move |exe| {
+        let Some(shared) = weak.upgrade() else { return };
+        let mut engine = shared.engine();
+        if engine.foreground_changed(exe.as_deref()) {
+            shared.commit(&mut engine);
+        }
+    });
 }
 
 /// Connector status changes go into the engine, so both windows see them.

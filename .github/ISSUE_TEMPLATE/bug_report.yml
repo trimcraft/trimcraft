@@ -1,0 +1,69 @@
+name: Bug report
+description: Something does not work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Trimcraft is in early access, so every report helps.
+        Security problems go to [private vulnerability reporting](https://github.com/trimcraft/trimcraft/security/advisories/new), not here.
+  - type: input
+    id: trimcraft-version
+    attributes:
+      label: Trimcraft version
+      description: Shown in the window header and under Settings → About.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows-version
+    attributes:
+      label: Windows version
+      description: "Win+R, `winver`."
+      placeholder: "Windows 11 24H2 (26100.1234)"
+    validations:
+      required: true
+  - type: textarea
+    id: devices
+    attributes:
+      label: Devices
+      description: Controllers involved (stick, throttle, button box, ...), and vJoy, Discord, Soundpad or Voicemeeter if they play a part.
+      placeholder: |
+        - Throttle: ...
+        - Stick: ...
+        - vJoy 2.2.2, 2 devices
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Create a radio control with ...
+        2. Press ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game or sim
+      description: If it happens with a specific game running, which one (and whether it runs as administrator).
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: |
+        From Hardware Test → Event log ("Copy"), or from `%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`.
+        **Privacy:** check the excerpt before posting and remove user names, paths, URLs, webhook addresses and anything else private. Trimcraft never writes secrets to the log, but your own action texts may contain personal data.
+      render: text

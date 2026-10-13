@@ -1,0 +1,29 @@
+name: Feature request
+description: An idea or wish for Trimcraft. Ideas from real cockpits are very welcome.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What should Trimcraft do?
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+      description: The situation in the cockpit where you need it, and what you do today instead.
+      placeholder: "When I switch the radio in ..., I want ..."
+    validations:
+      required: true
+  - type: input
+    id: game
+    attributes:
+      label: Game or sim
+      placeholder: "DCS World, MSFS 2024, Star Citizen, ..."
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: Devices or programs involved, if it matters.

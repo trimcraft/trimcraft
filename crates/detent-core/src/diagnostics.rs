@@ -313,6 +313,52 @@ pub fn duration_text(ms: f64) -> String {
     }
 }
 
+/// What happened to an action, for [`action_record`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ActionEvent {
+    Queued,
+    /// A macro ran to the end.
+    Executed {
+        ms: f64,
+    },
+    /// Handed to a connector, which runs it on its own thread.
+    Handed {
+        connector: String,
+    },
+    Skipped {
+        reason: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+/// `origin` is where the action came from ("Comms / B (activate)"), `description` is
+/// `Action::describe`.
+pub fn action_record(event: &ActionEvent, origin: &str, description: &str) -> Record {
+    let record = |text: String, level| {
+        Record::new(Category::Action, text)
+            .level(level)
+            .detail(format!("{origin}: {description}"))
+    };
+    match event {
+        ActionEvent::Queued => record(format!("Queued: {description}"), Level::Info),
+        ActionEvent::Executed { ms } => record(
+            format!("Executed in {}: {description}", duration_text(*ms)),
+            Level::Info,
+        ),
+        ActionEvent::Handed { connector } => {
+            record(format!("Sent to {connector}: {description}"), Level::Info)
+        }
+        ActionEvent::Skipped { reason } => {
+            record(format!("Skipped ({reason}): {description}"), Level::Warn)
+        }
+        ActionEvent::Failed { error } => {
+            record(format!("Failed ({error}): {description}"), Level::Error)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,5 +511,49 @@ mod tests {
         assert_eq!(duration_text(1530.0), "1.53 s");
         assert!(axis_detail(0.5, None).contains("first value"));
         assert!(axis_detail(0.5, Some(0.25)).contains("last logged +0.2500"));
+    }
+
+    #[test]
+    fn formats_action_events() {
+        let origin = "Comms / B (activate)";
+        let desc = "keys: tap F1";
+        let queued = action_record(&ActionEvent::Queued, origin, desc);
+        assert_eq!(queued.text, "Queued: keys: tap F1");
+        assert_eq!(
+            queued.detail.as_deref(),
+            Some("Comms / B (activate): keys: tap F1")
+        );
+        assert_eq!(queued.category, Category::Action);
+
+        let done = action_record(&ActionEvent::Executed { ms: 12.4 }, origin, desc);
+        assert_eq!(done.text, "Executed in 12 ms: keys: tap F1");
+        let sent = action_record(
+            &ActionEvent::Handed {
+                connector: "Soundpad".into(),
+            },
+            origin,
+            desc,
+        );
+        assert_eq!(sent.text, "Sent to Soundpad: keys: tap F1");
+
+        let skipped = action_record(
+            &ActionEvent::Skipped {
+                reason: "connection disabled".into(),
+            },
+            origin,
+            desc,
+        );
+        assert_eq!(skipped.level, Level::Warn);
+        assert!(skipped.text.starts_with("Skipped (connection disabled)"));
+
+        let failed = action_record(
+            &ActionEvent::Failed {
+                error: "SendInput blocked".into(),
+            },
+            origin,
+            desc,
+        );
+        assert_eq!(failed.level, Level::Error);
+        assert!(failed.text.contains("SendInput blocked"));
     }
 }

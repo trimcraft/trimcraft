@@ -28,7 +28,7 @@ pub use action::{
 };
 pub use connection::{Connections, ConnectorId, ConnectorState, ConnectorStatus};
 pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualDriver};
-pub use diagnostics::{Category, Diagnostics, Entry, Level, Record};
+pub use diagnostics::{ActionEvent, Category, Diagnostics, Entry, Level, Record};
 pub use discord::{DiscordCommand, VoiceState};
 pub use encoder::{DetectorConfig, EncoderBinding};
 pub use engine::{Dirty, Engine, EngineError, EngineSnapshot};

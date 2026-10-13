@@ -9,7 +9,10 @@ mod secrets;
 mod soundpad;
 mod storage;
 
-use detent_core::{DeviceRegistry, Engine, Setup};
+use detent_core::diagnostics::action_record;
+use detent_core::{
+    ActionEvent, Category, DeviceRegistry, Diagnostics, Engine, Level, Record, Setup,
+};
 use discord::Discord;
 use executor::Executor;
 use serde::Serialize;
@@ -47,6 +50,7 @@ pub struct Shared {
     changed: AtomicBool,
     storage: Storage,
     executor: Executor,
+    diagnostics: Diagnostics,
     soundpad: Arc<Soundpad>,
     discord: Arc<Discord>,
     recorder: recorder::Recorder,
@@ -76,12 +80,20 @@ impl Shared {
             .filter(|request| {
                 let enabled = engine.action_enabled(&request.action);
                 if !enabled {
-                    log::warn!(
+                    // Info in the file: the event log shows it as a warning of its own.
+                    log::info!(
                         "action skipped, its connection is disabled: {} / {}: {}",
                         request.control,
                         request.state,
                         request.action.describe()
                     );
+                    self.diagnostics.record(action_record(
+                        &ActionEvent::Skipped {
+                            reason: "its connection is disabled".into(),
+                        },
+                        &executor::origin(request),
+                        &request.action.describe(),
+                    ));
                 }
                 enabled
             })
@@ -111,6 +123,7 @@ impl Shared {
 }
 
 pub fn run() {
+    let diagnostics = Diagnostics::default();
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
@@ -120,6 +133,10 @@ pub fn run() {
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: Some("detent".into()),
                     }),
+                    // Warnings and errors also go to the event log.
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(
+                        log_bridge(diagnostics.clone()),
+                    )),
                 ])
                 .build(),
         )
@@ -137,10 +154,11 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let backend = detent_input::default_backend();
-            let shared = Arc::new(load(&handle, backend.name())?);
+            let shared = Arc::new(load(&handle, backend.name(), diagnostics)?);
             app.manage(shared.clone());
             report_connectors(&shared);
             overlay::create(&handle, &shared)?;
+            start_diagnostics(handle.clone(), shared.diagnostics.clone());
             start_input(handle, shared, backend);
             Ok(())
         })
@@ -157,7 +175,11 @@ pub fn run() {
         .expect("error while running Detent");
 }
 
-fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Error>> {
+fn load(
+    app: &AppHandle,
+    backend: &str,
+    diagnostics: Diagnostics,
+) -> Result<Shared, Box<dyn std::error::Error>> {
     let storage = Storage::new(app.path().app_config_dir()?)?;
     let registry: DeviceRegistry = storage.load_json(DEVICES_FILE).unwrap_or_default();
     let setup = storage
@@ -186,6 +208,7 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         meta.backend
     );
     let mut engine = Engine::new(registry, setup, &values);
+    engine.set_diagnostics(diagnostics.clone());
     engine.restore_active_states(&control_states);
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
@@ -193,7 +216,13 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(app.clone(), soundpad.clone(), discord.clone()),
+        executor: Executor::spawn(
+            app.clone(),
+            soundpad.clone(),
+            discord.clone(),
+            diagnostics.clone(),
+        ),
+        diagnostics,
         soundpad,
         discord,
         recorder: recorder::Recorder::default(),
@@ -273,4 +302,46 @@ fn report_connectors(shared: &Arc<Shared>) {
     };
     shared.soundpad.on_status(reporter(ConnectorId::Soundpad));
     shared.discord.on_status(reporter(ConnectorId::Discord));
+}
+
+/// Warnings and errors from the `log` crate, as event log entries.
+fn log_bridge(diagnostics: Diagnostics) -> tauri_plugin_log::fern::Dispatch {
+    tauri_plugin_log::fern::Dispatch::new()
+        .level(log::LevelFilter::Warn)
+        .chain(tauri_plugin_log::fern::Output::call(move |record| {
+            let level = if record.level() == log::Level::Error {
+                Level::Error
+            } else {
+                Level::Warn
+            };
+            diagnostics.record(
+                Record::new(Category::Log, record.args().to_string())
+                    .level(level)
+                    .detail(format!("log target: {}", record.target())),
+            );
+        }))
+}
+
+/// How often new event log entries are sent to the windows. Batching keeps heavy input from
+/// flooding the UI; the entries themselves are recorded as they happen.
+const DIAGNOSTICS_BATCH: Duration = Duration::from_millis(100);
+
+/// Sends entries recorded since the last batch to the windows as one event.
+fn start_diagnostics(app: AppHandle, diagnostics: Diagnostics) {
+    std::thread::Builder::new()
+        .name("detent-diagnostics".into())
+        .spawn(move || {
+            let mut cursor = diagnostics.all().last().map_or(0, |e| e.seq);
+            loop {
+                std::thread::sleep(DIAGNOSTICS_BATCH);
+                let batch = diagnostics.since(cursor);
+                let Some(last) = batch.last() else { continue };
+                cursor = last.seq;
+                if let Err(e) = app.emit("detent://diagnostics", &batch) {
+                    // Not logged as a warning: that would itself become an entry.
+                    log::debug!("could not send diagnostics: {e}");
+                }
+            }
+        })
+        .expect("spawn diagnostics thread");
 }

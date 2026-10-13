@@ -9,7 +9,8 @@
 use crate::discord::Discord;
 use crate::overlay;
 use crate::soundpad::Soundpad;
-use detent_core::{Action, ActionRequest, InputOp, Phase};
+use detent_core::diagnostics::action_record;
+use detent_core::{Action, ActionEvent, ActionRequest, Diagnostics, InputOp, Phase};
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
@@ -17,24 +18,36 @@ use tauri::AppHandle;
 
 pub struct Executor {
     queue: Sender<ActionRequest>,
+    diagnostics: Diagnostics,
 }
 
 impl Executor {
-    pub fn spawn(app: AppHandle, soundpad: Arc<Soundpad>, discord: Arc<Discord>) -> Self {
+    pub fn spawn(
+        app: AppHandle,
+        soundpad: Arc<Soundpad>,
+        discord: Arc<Discord>,
+        diagnostics: Diagnostics,
+    ) -> Self {
+        let log = diagnostics.clone();
         let (queue, requests) = channel::<ActionRequest>();
         std::thread::Builder::new()
             .name("detent-actions".into())
             .spawn(move || {
                 for request in requests {
-                    run(&app, &request, &soundpad, &discord);
+                    run(&app, &request, &soundpad, &discord, &log);
                 }
             })
             .expect("spawn action thread");
-        Self { queue }
+        Self { queue, diagnostics }
     }
 
     pub fn submit(&self, requests: Vec<ActionRequest>) {
         for request in requests {
+            self.diagnostics.record(action_record(
+                &ActionEvent::Queued,
+                &origin(&request),
+                &request.action.describe(),
+            ));
             if self.queue.send(request).is_err() {
                 log::error!("action thread is gone; action dropped");
             }
@@ -42,23 +55,40 @@ impl Executor {
     }
 }
 
-fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad, discord: &Discord) {
+/// Where an action came from, e.g. "Comms / B (activate)".
+pub fn origin(request: &ActionRequest) -> String {
     let phase = match request.phase {
         Phase::Activate => "activate",
         Phase::Deactivate => "deactivate",
     };
-    log::info!(
-        "action: {} / {} ({phase}): {}",
-        request.control,
-        request.state,
-        request.action.describe()
-    );
+    format!("{} / {} ({phase})", request.control, request.state)
+}
+
+fn run(
+    app: &AppHandle,
+    request: &ActionRequest,
+    soundpad: &Soundpad,
+    discord: &Discord,
+    diagnostics: &Diagnostics,
+) {
+    let origin = origin(request);
+    let description = request.action.describe();
+    let record = |event: ActionEvent| {
+        diagnostics.record(action_record(&event, &origin, &description));
+    };
+    log::info!("action: {origin}: {description}");
     if let Action::Soundpad { command } = &request.action {
         soundpad.submit(command.clone());
+        record(ActionEvent::Handed {
+            connector: "Soundpad".into(),
+        });
         return;
     }
     if let Action::Discord { command } = &request.action {
         discord.submit(*command);
+        record(ActionEvent::Handed {
+            connector: "Discord".into(),
+        });
         return;
     }
     // Absolute moves need the current monitor layout; it is queried per macro, so a changed
@@ -78,9 +108,15 @@ fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad, discord: &
     let start = Instant::now();
     let mut due = Duration::ZERO;
     let mut batch = Vec::new();
+    let mut failure = None;
+    let mut send = |batch: &[InputOp]| {
+        if let Err(e) = platform::send(batch) {
+            failure.get_or_insert(e);
+        }
+    };
     for op in ops {
         if let InputOp::Sleep { ms } = op {
-            platform::send(&batch);
+            send(&batch);
             batch.clear();
             due += Duration::from_millis(u64::from(ms));
             if let Some(wait) = due.checked_sub(start.elapsed()) {
@@ -90,7 +126,13 @@ fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad, discord: &
             batch.push(op);
         }
     }
-    platform::send(&batch);
+    send(&batch);
+    match failure {
+        None => record(ActionEvent::Executed {
+            ms: start.elapsed().as_secs_f64() * 1000.0,
+        }),
+        Some(error) => record(ActionEvent::Failed { error }),
+    }
 }
 
 mod platform {
@@ -187,10 +229,10 @@ mod platform {
         })
     }
 
-    pub fn send(ops: &[InputOp]) {
+    pub fn send(ops: &[InputOp]) -> Result<(), String> {
         let inputs: Vec<INPUT> = ops.iter().filter_map(to_input).collect();
         if inputs.is_empty() {
-            return;
+            return Ok(());
         }
         let count = u32::try_from(inputs.len()).unwrap_or(u32::MAX);
         let size = i32::try_from(std::mem::size_of::<INPUT>()).unwrap_or(i32::MAX);
@@ -200,10 +242,13 @@ mod platform {
         if sent != count {
             // Typically UIPI: the foreground window belongs to a process with higher integrity
             // (a game running as administrator).
-            log::warn!(
+            let error = format!(
                 "SendInput delivered {sent} of {count} inputs (error {})",
                 std::io::Error::last_os_error()
             );
+            log::warn!("{error}");
+            return Err(error);
         }
+        Ok(())
     }
 }

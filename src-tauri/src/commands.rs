@@ -61,6 +61,9 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         clear_recording,
         set_recorder_config,
         test_action,
+        get_diagnostics,
+        clear_diagnostics,
+        open_log_folder,
     ]
 }
 
@@ -521,6 +524,33 @@ fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// The event log held by the app, oldest first. New entries arrive as `detent://diagnostics`
+/// events; entries are numbered, so the UI can drop ones it already has.
+#[tauri::command]
+fn get_diagnostics(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Entry> {
+    shared.diagnostics.all()
+}
+
+#[tauri::command]
+fn clear_diagnostics(shared: State<'_, Arc<Shared>>) {
+    shared.diagnostics.clear();
+}
+
+/// Opens the log folder in the file manager. Only that folder can be opened.
+#[tauri::command]
+fn open_log_folder(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = std::path::PathBuf::from(&shared.meta.log_dir);
+    if shared.meta.log_dir.is_empty() {
+        return Err("the log folder is unknown".into());
+    }
+    // The folder appears with the first log line; make sure it exists.
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create the log folder: {e}"))?;
+    app.opener()
+        .open_path(dir.display().to_string(), None::<&str>)
+        .map_err(|e| format!("cannot open the log folder: {e}"))
 }
 
 #[cfg(test)]

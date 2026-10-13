@@ -4,10 +4,11 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Trimcraft is a HOTAS configuration tool for Windows with an in-game overlay: a public open
-source project under GPL-3.0-or-later, maintained by Samuel Breu (@bresam). Trimcraft supports
-Windows 10/11 only; development and testing happen on Windows. The browser demo (`npm run dev`) and the mock input backend stay as platform-neutral
-dev tools.
+Trimcraft is a HOTAS configuration tool with an in-game overlay: a public open source project
+under GPL-3.0-or-later, maintained by Samuel Breu (@bresam). It currently runs on Windows 10/11;
+Linux and macOS support are planned, so keep platform-specific code behind clear module
+boundaries. Development and testing happen on Windows. The browser demo (`npm run dev`) and the
+mock input backend stay as platform-neutral dev tools.
 
 ## Rules
 
@@ -28,11 +29,11 @@ dev tools.
 - **Git over HTTPS only** (`origin` is `https://github.com/trimcraft/trimcraft`). No SSH.
 - Commits directly on `main` are fine until the first tagged version; after that, feature
   branches from `main` and pull requests.
-- Trimcraft was called **Detent** before. The old name (`detent`, `cloud.breu.detent`,
-  `detent-export`) appears only in the migration code and its tests (`migration.rs` in both
-  crates), the legacy export format in `transfer`, the "formerly Detent" note in the README and
-  the rename entry in CHANGELOG.md.
-  `git grep -i detent` should find nothing else.
+- "Detent" was an internal working title and is never mentioned publicly (README, docs,
+  CHANGELOG, UI). The old name (`detent`, `cloud.breu.detent`, `detent-export`) appears only in
+  the migration code and its tests (`migration.rs` in both crates, the old-autostart cleanup in
+  `autostart.rs`/`lib.rs`, the schema-5 credential rename in `setup.rs`), the legacy export
+  format in `transfer`, and this file. `git grep -i detent` should find nothing else.
 
 ## Commands
 

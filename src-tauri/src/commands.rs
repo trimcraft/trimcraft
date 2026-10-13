@@ -1,7 +1,9 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
 use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
-use detent_core::connection::{DiscordSettings, valid_client_id};
+use crate::{volume, webhook};
+use detent_core::audio::VoiceRef;
+use detent_core::connection::{DiscordSettings, SecretRef, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
@@ -61,6 +63,10 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         clear_recording,
         set_recorder_config,
         test_action,
+        list_voices,
+        list_sound_devices,
+        list_audio_programs,
+        store_http_secret,
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
@@ -244,12 +250,29 @@ fn get_keys() -> &'static [KeyInfo] {
 
 #[tauri::command]
 fn save_virtual_control(shared: State<'_, Arc<Shared>>, control: VirtualControl) -> Res<String> {
-    with(&shared, |e| e.save_virtual_control(control))
+    with_secrets(&shared, |e| e.save_virtual_control(control))
 }
 
 #[tauri::command]
 fn remove_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.remove_virtual_control(&id))
+    with_secrets(&shared, |e| e.remove_virtual_control(&id))
+}
+
+/// Like [`with`], for changes that can drop actions: secret HTTP header values no action
+/// uses any more are deleted from the credential store.
+fn with_secrets<T>(
+    shared: &Shared,
+    f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
+) -> Res<T> {
+    let before = shared.engine().setup().secret_refs();
+    let result = with(shared, f)?;
+    let after = shared.engine().setup().secret_refs();
+    for secret in before.iter().filter(|s| !after.contains(s)) {
+        if let Err(e) = webhook::delete_secret(secret) {
+            log::warn!("{e}");
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -311,7 +334,7 @@ fn rename_profile(shared: State<'_, Arc<Shared>>, id: String, name: String) -> R
 
 #[tauri::command]
 fn delete_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.delete_profile(&id))
+    with_secrets(&shared, |e| e.delete_profile(&id))
 }
 
 /// Moves a profile to the front: the default profile.
@@ -422,9 +445,11 @@ fn set_connections(shared: State<'_, Arc<Shared>>, mut connections: Connections)
     connections.discord.client_secret = current.client_secret;
     let soundpad = connections.soundpad.clone();
     let discord = connections.discord.clone();
+    let voicemeeter = connections.voicemeeter.clone();
     with(&shared, |e| e.set_connections(connections))?;
     shared.soundpad.apply(soundpad);
     shared.discord.apply(discord);
+    shared.voicemeeter.apply(voicemeeter);
     Ok(())
 }
 
@@ -436,6 +461,7 @@ async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res
     tauri::async_runtime::spawn_blocking(move || match id {
         ConnectorId::Soundpad => shared.soundpad.test(),
         ConnectorId::Discord => shared.discord.test(),
+        ConnectorId::Voicemeeter => shared.voicemeeter.test(),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -578,30 +604,67 @@ fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -
     with(&shared, |e| e.set_recorder_config(config))
 }
 
-/// Plays an action (e.g. the macro being edited) after the recording countdown, so the user
-/// can switch to the game first.
+/// Plays an action being edited. Keyboard and mouse macros wait for the recording countdown,
+/// so the user can switch to the game first; everything else runs at once. Placeholders get
+/// "Test play", "editor" and the active profile.
 #[tauri::command]
 fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     action.normalize().map_err(|e| e.to_string())?;
     if !shared.engine().action_enabled(&action) {
         return Err("this action's connection is disabled; enable it under Connections".into());
     }
+    let countdown = matches!(
+        action,
+        Action::KeyboardMacro { .. } | Action::MouseMacro { .. }
+    );
+    let mut request = ActionRequest::new("Test play", "editor", Phase::Activate, action);
+    request.profile = shared.engine().setup().profile().name.clone();
     let shared = Arc::clone(&shared);
     std::thread::Builder::new()
         .name("detent-test-play".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(
-                detent_core::recording::COUNTDOWN_MS,
-            ));
-            shared.executor.submit(vec![ActionRequest {
-                control: "Test play".into(),
-                state: "editor".into(),
-                phase: Phase::Activate,
-                action,
-            }]);
+            if countdown {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    detent_core::recording::COUNTDOWN_MS,
+                ));
+            }
+            shared.executor.submit(vec![request]);
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Installed Windows voices, for the speech editor.
+#[tauri::command]
+async fn list_voices(shared: State<'_, Arc<Shared>>) -> Res<Vec<VoiceRef>> {
+    let speech = shared.speech.clone();
+    tauri::async_runtime::spawn_blocking(move || speech.voices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Sound output devices, for the sound file editor.
+#[tauri::command]
+async fn list_sound_devices(shared: State<'_, Arc<Shared>>) -> Res<Vec<String>> {
+    let sound = shared.sound.clone();
+    tauri::async_runtime::spawn_blocking(move || sound.devices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Programs that have an audio session now, for the volume editor.
+#[tauri::command]
+async fn list_audio_programs() -> Res<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(volume::session_programs)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Stores a secret HTTP header value in the credential store; the editor keeps only the
+/// returned reference. Unused ones are deleted when the action is saved without them.
+#[tauri::command]
+fn store_http_secret(value: String) -> Res<SecretRef> {
+    webhook::store_secret(&value)
 }
 
 /// The event log held by the app, oldest first. New entries arrive as `detent://diagnostics`

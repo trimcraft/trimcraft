@@ -29,7 +29,8 @@ dev tools.
   branches from `main` and pull requests.
 - Trimcraft was called **Detent** before. The old name (`detent`, `cloud.breu.detent`,
   `detent-export`) appears only in the migration code and its tests (`migration.rs` in both
-  crates), the legacy export format in `transfer`, and the "formerly Detent" note in the README.
+  crates), the legacy export format in `transfer`, the "formerly Detent" note in the README and
+  the rename entry in CHANGELOG.md.
   `git grep -i detent` should find nothing else.
 
 ## Commands
@@ -89,7 +90,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey), `toasts.rs` (toast queue thread; shows the window without activating it),
-  `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),
+  `tray.rs` (tray icon and menu), `updates.rs` (updater: check, install; Settings, Updates), `autostart.rs` (Run key or elevated Task Scheduler task),
   `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels,
   elevated-foreground warning), `foreground.rs` (the one `SetWinEventHook` foreground watcher,
   feeding profile switching and the elevation warning), `profile_watch.rs` (profile switching
@@ -109,6 +110,29 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload
 test in `src-tauri/src/commands.rs`. When changing `Setup`, keep old files loading (serde defaults)
 or bump `SETUP_SCHEMA_VERSION`.
+
+## Releasing
+
+Versions live in four files and must agree (a test and `scripts/check-versions.mjs` check it):
+`Cargo.toml` (`[workspace.package]`), `package.json`, `package-lock.json` and
+`src-tauri/tauri.conf.json`.
+
+1. Bump the version in all four (`npm version X.Y.Z --no-git-tag-version` updates both npm files).
+2. In CHANGELOG.md, move the "Unreleased" entries into `## [X.Y.Z] - YYYY-MM-DD` and add the
+   compare links at the bottom. The release notes are this section; the workflow fails without it.
+3. Run `./scripts/check.sh`, commit, merge to `main`.
+4. Tag that commit `vX.Y.Z` and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+5. `.github/workflows/release.yml` checks that the tag matches the version, runs the gate, builds
+   the NSIS installer with signed updater artifacts (secrets `TAURI_SIGNING_PRIVATE_KEY` and
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `src-tauri/tauri.release.conf.json` turns them on) and
+   publishes "Trimcraft vX.Y.Z (early access)" as a normal release with the installer, its `.sig`
+   and `latest.json`. Installed copies find it through
+   `https://github.com/trimcraft/trimcraft/releases/latest/download/latest.json` (public key in
+   `tauri.conf.json`, `plugins.updater`).
+
+Running the workflow by hand (Actions, Release, "Run workflow") is a dry run: it builds and signs
+and keeps the files as an artifact, but publishes nothing. Never mark a release as prerelease or
+draft: `/releases/latest`, and with it the updater, only sees normal releases.
 
 ## Testing with real hardware
 

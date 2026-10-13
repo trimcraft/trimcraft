@@ -1,0 +1,117 @@
+name: Release
+
+# A tag vX.Y.Z builds, signs and publishes "Trimcraft vX.Y.Z (early access)" as a normal GitHub
+# release (not a prerelease, so /releases/latest and the updater feed point to it), with the
+# installer, its updater signature and latest.json. Run by hand (workflow_dispatch) it is a dry
+# run: it builds and signs but publishes nothing; the files are kept as a workflow artifact.
+#
+# Never runs for pull requests: the signing key is a repository secret.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: build, sign and publish
+    runs-on: windows-latest
+    permissions:
+      # Creating the release and uploading its files.
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Cargo.toml, package.json, package-lock.json and tauri.conf.json agree, and for a tag
+      # they match it (v0.1.0 releases version 0.1.0).
+      - name: Check versions
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          if [ -n "$TAG" ]; then
+            version=$(node scripts/check-versions.mjs --tag "$TAG")
+          else
+            version=$(node scripts/check-versions.mjs)
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The release notes: an early-access note and the version's CHANGELOG.md section. Fails
+      # when the section is missing, before anything is built.
+      - name: Release notes
+        id: notes
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/release-notes.mjs "$VERSION" > "$RUNNER_TEMP/notes.md"
+          delimiter="notes_$(openssl rand -hex 8)"
+          {
+            echo "body<<$delimiter"
+            cat "$RUNNER_TEMP/notes.md"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      # The same gate as CI: npm ci, svelte-check, frontend build, fmt, clippy, tests.
+      - name: Checks
+        shell: bash
+        run: ./scripts/check.sh
+
+      # Tag: build the per-user NSIS installer with signed updater artifacts
+      # (tauri.release.conf.json) and publish it with the .sig and latest.json.
+      - name: Build, sign and publish
+        if: github.event_name == 'push'
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Trimcraft ${{ github.ref_name }} (early access)
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --bundles nsis --config src-tauri/tauri.release.conf.json
+
+      # Dry run: the same build and signing, nothing published.
+      - name: Build and sign (dry run)
+        if: github.event_name != 'push'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npx tauri build --bundles nsis --config src-tauri/tauri.release.conf.json
+
+      - name: Keep the dry run's files
+        if: github.event_name != 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trimcraft-release-dry-run
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: error

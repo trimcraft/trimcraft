@@ -32,6 +32,7 @@ pub mod state;
 pub mod toast;
 pub mod transfer;
 pub mod trigger;
+pub mod updates;
 pub mod virtual_control;
 pub mod vjoy;
 pub mod voicemeeter;

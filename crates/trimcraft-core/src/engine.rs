@@ -32,6 +32,7 @@ use crate::trigger::{
     ButtonRef, Condition, DigitalKey, Fired, HatDirection, HoldKey, PressConfig, PressEvent,
     PressKind, PressTracker, StepDirection, Trigger, TriggerInput, ZoneKey, axis_percent,
 };
+use crate::updates::UpdateState;
 use crate::virtual_control::{
     ActionRequest, Command, ControlError, CounterCommand, ModeCommand, RadioCommand, RadioMemory,
     Startup, TOGGLE_ON, Toggle, ToggleCommand, VirtualControl, VirtualControlKind,
@@ -242,6 +243,8 @@ pub struct EngineSnapshot {
     /// App-wide settings (Settings page).
     pub settings: AppSettings,
     pub shell: ShellStatus,
+    /// The update check (Settings, Updates; header badge).
+    pub update: UpdateState,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -289,6 +292,8 @@ pub struct Engine {
     connector_states: HashMap<ConnectorId, ConnectorState>,
     /// Elevation, autostart and foreground warning, as the app reports them.
     shell: ShellStatus,
+    /// Reported by the app.
+    update: UpdateState,
     dirty: Dirty,
     /// Event log sink; without one nothing is recorded (tests, tools).
     diagnostics: Option<Diagnostics>,
@@ -337,6 +342,7 @@ impl Engine {
             recorder: RecorderView::default(),
             connector_states: HashMap::new(),
             shell: ShellStatus::default(),
+            update: UpdateState::default(),
             dirty: Dirty::default(),
             diagnostics: None,
             axis_throttle: AxisThrottle::default(),
@@ -1299,6 +1305,7 @@ impl Engine {
             detector: self.setup.detector,
             settings: self.setup.settings.clone(),
             shell: self.shell.clone(),
+            update: self.update.clone(),
         }
     }
 
@@ -1947,6 +1954,19 @@ impl Engine {
 
     /// Stores what the app found out about elevation, autostart and the foreground program.
     /// Returns whether anything changed.
+    pub fn update_state(&self) -> &UpdateState {
+        &self.update
+    }
+
+    /// Stores where the update check stands. Returns whether anything changed.
+    pub fn set_update_state(&mut self, state: UpdateState) -> bool {
+        if self.update == state {
+            return false;
+        }
+        self.update = state;
+        true
+    }
+
     pub fn set_shell_status(&mut self, status: ShellStatus) -> bool {
         if self.shell == status {
             return false;

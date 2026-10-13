@@ -26,6 +26,8 @@ pub struct AppSettings {
     /// Global hotkey that stops all macros and releases every input they hold. Missing in
     /// files from before it.
     pub panic_hotkey: String,
+    /// Look for a new release when Trimcraft starts. Missing in files from before updates.
+    pub check_updates_on_startup: bool,
 }
 
 /// Default panic hotkey.
@@ -40,6 +42,7 @@ impl Default for AppSettings {
             run_as_admin: false,
             tray_notice_shown: false,
             panic_hotkey: DEFAULT_PANIC_HOTKEY.into(),
+            check_updates_on_startup: true,
         }
     }
 }
@@ -274,6 +277,7 @@ mod tests {
         assert!(!s.run_as_admin);
         assert!(!s.tray_notice_shown);
         assert_eq!(s.panic_hotkey, "Ctrl+Shift+F12");
+        assert!(s.check_updates_on_startup);
     }
 
     #[test]

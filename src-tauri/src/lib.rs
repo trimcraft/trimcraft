@@ -22,6 +22,7 @@ mod storage;
 mod toasts;
 mod transfer;
 mod tray;
+mod updates;
 mod vjoy;
 mod voicemeeter;
 mod volume;
@@ -252,6 +253,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // Used from Rust only (tray notice); the windows get no notification permission.
         .plugin(tauri_plugin_notification::init())
+        // Used from Rust only (updates.rs); the windows get no updater permission.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -332,6 +335,7 @@ pub fn run() {
                     main.show()?;
                 }
             }
+            updates::check_on_startup(&handle, &shared);
             start_input(handle, shared, backend);
             Ok(())
         })

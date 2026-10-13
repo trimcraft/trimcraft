@@ -428,6 +428,11 @@ impl Player {
     }
 
     /// Trimcraft quits: stops everything and waits a moment for the releases.
+    /// Macros running now (for the update confirmation).
+    pub fn running(&self) -> usize {
+        lock(&self.inner.runs).len()
+    }
+
     pub fn shutdown(&self) {
         self.stop_all(StopReason::AppExit);
     }

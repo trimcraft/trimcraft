@@ -88,6 +88,9 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         test_toast,
         set_settings,
         restart_elevated,
+        check_for_updates,
+        update_busy,
+        install_update,
         select_profile,
         create_profile,
         duplicate_profile,
@@ -769,6 +772,29 @@ async fn restart_elevated(app: AppHandle) -> Res<()> {
     Ok(())
 }
 
+/// "Check now" (Settings, Updates). The result also lands in the snapshot.
+#[tauri::command]
+async fn check_for_updates(
+    app: AppHandle,
+    shared: State<'_, Arc<Shared>>,
+) -> Res<trimcraft_core::updates::UpdateState> {
+    let shared = Arc::clone(&shared);
+    Ok(crate::updates::check(&app, &shared).await)
+}
+
+/// What an update would interrupt, so the UI can ask first.
+#[tauri::command]
+fn update_busy(shared: State<'_, Arc<Shared>>) -> trimcraft_core::updates::UpdateBusy {
+    crate::updates::busy(&shared)
+}
+
+/// "Download & install": installs the available update; Trimcraft quits and restarts.
+#[tauri::command]
+async fn install_update(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
+    let shared = Arc::clone(&shared);
+    crate::updates::install(&app, &shared).await
+}
+
 /// Colors, text size and corners of the overlay (Settings > Overlay appearance). Values are
 /// kept within their bounds.
 #[tauri::command]
@@ -1041,6 +1067,30 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"panicHotkey":"Ctrl+Alt+P"}"#).unwrap();
         assert_eq!(settings.panic_hotkey, "Ctrl+Alt+P");
+        // Updates: the setting, and what check_for_updates and update_busy return
+        // (types.ts: UpdateState, UpdateBusy).
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"checkUpdatesOnStartup":false}"#).unwrap();
+        assert!(!settings.check_updates_on_startup);
+        let state = serde_json::to_value(trimcraft_core::updates::UpdateState::Available {
+            version: "0.2.0".into(),
+            notes: "Fixes".into(),
+            date: Some("2026-11-01 0:00:00.0 +00:00:00".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            (state["state"].as_str(), state["version"].as_str()),
+            (Some("available"), Some("0.2.0"))
+        );
+        let busy = serde_json::to_value(trimcraft_core::updates::UpdateBusy {
+            macros: 2,
+            vjoy: true,
+        })
+        .unwrap();
+        assert_eq!(
+            (busy["macros"].as_u64(), busy["vjoy"].as_bool()),
+            (Some(2), Some(true))
+        );
         assert!(
             trimcraft_core::settings::DEFAULT_PANIC_HOTKEY
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()

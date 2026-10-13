@@ -3604,7 +3604,7 @@ mod tests {
                 id: String::new(),
                 name: "Gear".into(),
                 kind: VirtualControlKind::Toggle(Toggle {
-                    toggle: vec![button(5).into()],
+                    toggle: vec![button(5)],
                     ..Toggle::default()
                 }),
             })

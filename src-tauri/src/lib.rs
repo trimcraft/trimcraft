@@ -16,6 +16,7 @@ mod sound;
 mod soundpad;
 mod speech;
 mod storage;
+mod toasts;
 mod transfer;
 mod tray;
 mod voicemeeter;
@@ -77,6 +78,7 @@ pub struct Shared {
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
     backups: Arc<backups::Backups>,
+    toasts: Arc<toasts::Toasts>,
     /// An import file the user picked and has not applied yet.
     pending_import: Mutex<Option<detent_core::transfer::ImportFile>>,
 }
@@ -125,6 +127,14 @@ impl Shared {
             .collect();
         if !actions.is_empty() {
             self.executor.submit(actions);
+        }
+        let requests = engine.take_toasts();
+        if !requests.is_empty() {
+            let overlay = &engine.setup().overlay;
+            // With the overlay hidden and "while hidden" off, a toast would have nowhere to show.
+            if overlay.visible || overlay.toasts.while_hidden || engine.overlay_editing() {
+                self.toasts.push(requests, overlay.toasts.duration_ms);
+            }
         }
     }
 
@@ -407,6 +417,7 @@ fn load(
         meta,
         logged_profile: Mutex::new(String::new()),
         backups,
+        toasts: toasts::Toasts::spawn(app.clone()),
         pending_import: Mutex::new(None),
     })
 }

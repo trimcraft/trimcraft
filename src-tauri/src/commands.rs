@@ -79,6 +79,11 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         crate::transfer::backup_now,
         crate::transfer::restore_backup,
         crate::transfer::open_backup_folder,
+        set_overlay_appearance,
+        set_toast_settings,
+        set_toast_position,
+        get_toasts,
+        test_toast,
         set_settings,
         restart_elevated,
         select_profile,
@@ -715,6 +720,66 @@ async fn restart_elevated(app: AppHandle) -> Res<()> {
         .map_err(|e| e.to_string())??;
     app.exit(0);
     Ok(())
+}
+
+/// Colors, text size and corners of the overlay (Settings > Overlay appearance). Values are
+/// kept within their bounds.
+#[tauri::command]
+fn set_overlay_appearance(
+    shared: State<'_, Arc<Shared>>,
+    appearance: detent_core::Appearance,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_overlay_appearance(appearance);
+        Ok(())
+    })
+}
+
+/// How long toasts stay, whether they show while the overlay is hidden, and the profile toast.
+#[tauri::command]
+fn set_toast_settings(
+    shared: State<'_, Arc<Shared>>,
+    settings: detent_core::overlay::ToastSettings,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_settings(settings);
+        Ok(())
+    })
+}
+
+/// Places the toast area of the active profile; `None` puts it back to the default place.
+#[tauri::command]
+fn set_toast_position(shared: State<'_, Arc<Shared>>, position: Option<WidgetPosition>) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_position(position);
+        Ok(())
+    })
+}
+
+/// The toasts on screen now; later changes arrive as `detent://toasts` events.
+#[tauri::command]
+fn get_toasts(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Toast> {
+    shared.toasts.list()
+}
+
+/// Shows a sample toast, as a real one would appear.
+#[tauri::command]
+fn test_toast(shared: State<'_, Arc<Shared>>) {
+    let (settings, visible, editing) = {
+        let engine = shared.engine();
+        let overlay = &engine.setup().overlay;
+        (overlay.toasts, overlay.visible, engine.overlay_editing())
+    };
+    if visible || settings.while_hidden || editing {
+        shared.toasts.push(
+            vec![detent_core::ToastRequest {
+                key: "test".into(),
+                title: "Test toast".into(),
+                text: "It works".into(),
+            }],
+            settings.duration_ms,
+        );
+    }
 }
 
 #[cfg(test)]

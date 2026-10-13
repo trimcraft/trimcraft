@@ -6,8 +6,8 @@ use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
     Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
-    DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem,
-    Phase, ProfileSwitching, RadioCommand, Sound, VirtualControl, WidgetPosition,
+    DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, ManualCommand, MonitorRef,
+    Movement, OverlayItem, Phase, ProfileSwitching, Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -39,6 +39,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         remove_virtual_control,
         set_radio_active,
         command_radio,
+        set_control_value,
         toggle_overlay_virtual_control,
         start_learn,
         stop_learn,
@@ -257,25 +258,17 @@ fn set_radio_active(shared: State<'_, Arc<Shared>>, id: String, state: Option<St
     with(&shared, |e| e.set_radio_active(&id, state))
 }
 
-/// Radio commands the UI can run, as if a trigger had fired.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "camelCase")]
-enum UiRadioCommand {
-    Increment,
-    Decrement,
-    Clear,
-    ToggleOff,
+/// Runs a command on any virtual control as if a trigger had fired (next/previous, clear,
+/// toggle off, toggle/on/off, reset; which ones apply depends on the kind).
+#[tauri::command]
+fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: ManualCommand) -> Res<()> {
+    with(&shared, |e| e.command_control(&id, command))
 }
 
+/// Sets a counter control's value without running actions.
 #[tauri::command]
-fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: UiRadioCommand) -> Res<()> {
-    let command = match command {
-        UiRadioCommand::Increment => RadioCommand::Increment,
-        UiRadioCommand::Decrement => RadioCommand::Decrement,
-        UiRadioCommand::Clear => RadioCommand::Clear,
-        UiRadioCommand::ToggleOff => RadioCommand::ToggleOff,
-    };
-    with(&shared, |e| e.command_radio(&id, command))
+fn set_control_value(shared: State<'_, Arc<Shared>>, id: String, value: f64) -> Res<()> {
+    with(&shared, |e| e.set_control_value(&id, value))
 }
 
 #[tauri::command]
@@ -593,12 +586,12 @@ fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
             std::thread::sleep(std::time::Duration::from_millis(
                 detent_core::recording::COUNTDOWN_MS,
             ));
-            shared.executor.submit(vec![ActionRequest {
-                control: "Test play".into(),
-                state: "editor".into(),
-                phase: Phase::Activate,
-                action,
-            }]);
+            shared.executor.submit(vec![ActionRequest::new(
+                "Test play",
+                "editor",
+                Phase::Activate,
+                &action,
+            )]);
         })
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -702,8 +695,8 @@ mod tests {
                 "end":"clamp","toggleOnReselect":true,"startup":"empty"}}"#,
         )
         .unwrap();
-        assert_eq!(c.radio().states[0].on_activate.len(), 1);
-        assert_eq!(c.radio().startup, detent_core::Startup::Empty);
+        assert_eq!(c.radio().unwrap().states[0].on_activate.len(), 1);
+        assert_eq!(c.radio().unwrap().startup, detent_core::Startup::Empty);
         let item: OverlayItem = serde_json::from_str(
             r#"{"type":"radio","control":"vc-1","layout":"horizontal","position":{"x":0.25,"y":0.5}}"#,
         )
@@ -721,7 +714,7 @@ mod tests {
         )
         .unwrap();
         let _: Option<MonitorRef> = serde_json::from_str("null").unwrap();
-        assert_eq!(c.radio().toggle_off.len(), 1);
+        assert_eq!(c.radio().unwrap().toggle_off.len(), 1);
         let sp: VirtualControl = serde_json::from_str(
             r#"{"id":"vc-1","name":"Sounds","kind":{"type":"radio","states":[
                 {"id":"st-1","name":"Siren","select":[],
@@ -736,7 +729,7 @@ mod tests {
                 "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
         )
         .unwrap();
-        assert_eq!(sp.radio().states[0].on_deactivate.len(), 5);
+        assert_eq!(sp.radio().unwrap().states[0].on_deactivate.len(), 5);
 
         // Connections.
         let connections: Connections = serde_json::from_str(
@@ -766,7 +759,7 @@ mod tests {
                 "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
         )
         .unwrap();
-        assert_eq!(dc.radio().states[0].on_deactivate.len(), 4);
+        assert_eq!(dc.radio().unwrap().states[0].on_deactivate.len(), 4);
         // The setup guide reads these (ui/src/lib/types.ts: DiscordSetup).
         let setup = serde_json::to_value(discord_setup()).unwrap();
         assert_eq!(setup["redirectUri"], discord::REDIRECT_URI);
@@ -841,8 +834,50 @@ mod tests {
             r#""decrement""#,
             r#""clear""#,
             r#""toggleOff""#,
+            r#""toggle""#,
+            r#""on""#,
+            r#""off""#,
+            r#""reset""#,
         ] {
-            let _: UiRadioCommand = serde_json::from_str(command).unwrap();
+            let _: ManualCommand = serde_json::from_str(command).unwrap();
+        }
+
+        // Control kinds and triggers as the editors build them.
+        let trigger = r#"{"type":"button","device":"d","index":3,"press":{"kind":"press"},"modifiers":[],"conditions":[]}"#;
+        for kind in [
+            format!(
+                r#"{{"type":"toggle","toggle":[{trigger}],"on":[],"off":[],"onOn":[],"onOff":[],"startup":"restoreLast"}}"#
+            ),
+            format!(
+                r#"{{"type":"momentary","triggers":[{trigger}],"onPress":[],"onRelease":[],"invert":false}}"#
+            ),
+            format!(
+                r#"{{"type":"counter","spec":{{"min":1,"max":20,"step":1,"initial":1,"end":"wrap","decimals":0}},
+                    "increment":[{trigger}],"decrement":[],"reset":[],"onChange":[],"startup":"restoreLast"}}"#
+            ),
+            format!(
+                r#"{{"type":"mode","states":[{{"id":"","name":"Air","select":[],"shift":[{trigger}],
+                    "onActivate":[],"onDeactivate":[]}}],"next":[],"previous":[],"end":"wrap","startup":"restoreLast"}}"#
+            ),
+        ] {
+            let mut c: VirtualControl =
+                serde_json::from_str(&format!(r#"{{"id":"","name":"X","kind":{kind}}}"#)).unwrap();
+            c.normalize().unwrap();
+        }
+        let t: detent_core::Trigger = serde_json::from_str(
+            r#"{"type":"axisZone","device":"d","index":2,"min":80,"max":100,
+                "press":{"kind":"release"},
+                "modifiers":[{"device":"d","index":7}],
+                "conditions":[{"mode":"vc-2","state":"st-1"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(t.modifiers.len(), 1);
+        for press in [
+            r#"{"kind":"long","ms":500}"#,
+            r#"{"kind":"double","ms":300}"#,
+            r#"{"kind":"release"}"#,
+        ] {
+            let _: detent_core::PressKind = serde_json::from_str(press).unwrap();
         }
     }
 

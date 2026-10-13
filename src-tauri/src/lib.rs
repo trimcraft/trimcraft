@@ -394,7 +394,12 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                 if !backend_alive {
                     std::thread::sleep(FRAME);
                 } else {
-                    match backend.events.recv_timeout(FRAME) {
+                    // Wake for the next frame, or earlier when a long or double press is due.
+                    let deadline = shared.engine().next_deadline();
+                    let wait = deadline.map_or(FRAME, |at| {
+                        Duration::from_nanos(at.saturating_sub(backend.now_ns())).min(FRAME)
+                    });
+                    match backend.events.recv_timeout(wait) {
                         Ok(event) => {
                             let mut engine = shared.engine();
                             if engine.apply(event) {
@@ -409,7 +414,15 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                                 shared.dispatch(&mut engine);
                             }
                         }
-                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if deadline.is_some_and(|at| backend.now_ns() >= at) {
+                                let mut engine = shared.engine();
+                                if engine.advance(backend.now_ns()) {
+                                    shared.changed.store(true, Ordering::Relaxed);
+                                }
+                                shared.dispatch(&mut engine);
+                            }
+                        }
                         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                             // Keep serving the UI; the error is in the snapshot.
                             log::error!("input backend stopped");

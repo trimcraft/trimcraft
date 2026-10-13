@@ -22,6 +22,7 @@ pub mod settings;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
+pub mod trigger;
 pub mod virtual_control;
 
 pub use action::{
@@ -33,7 +34,7 @@ pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualD
 pub use diagnostics::{ActionEvent, Category, Diagnostics, Entry, Level, Record};
 pub use discord::{DiscordCommand, VoiceState};
 pub use encoder::{DetectorConfig, EncoderBinding};
-pub use engine::{Dirty, Engine, EngineError, EngineSnapshot};
+pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, ManualCommand};
 pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
 pub use overlay::{
@@ -47,7 +48,9 @@ pub use settings::{AppSettings, AutostartKind, ShellStatus};
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};
+pub use trigger::{ButtonRef, Condition, PressKind, TriggerInput};
 pub use virtual_control::{
-    ActionRequest, HatDirection, Phase, Radio, RadioCommand, RadioMemory, RadioState, Startup,
-    StepDirection, Trigger, VirtualControl, VirtualControlKind,
+    ActionRequest, CounterControl, HatDirection, Mode, ModeState, Momentary, Phase, Radio,
+    RadioCommand, RadioMemory, RadioState, Startup, StepDirection, Toggle, Trigger, VirtualControl,
+    VirtualControlKind,
 };

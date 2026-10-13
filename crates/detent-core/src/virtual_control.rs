@@ -1,88 +1,35 @@
 //! Virtual controls: named controls built from physical inputs, with actions attached.
 //!
-//! The first kind is the [`Radio`]: a set of states of which at most one is active, like the
-//! preset buttons of a car radio. Triggers (button presses, hat directions, encoder detents)
-//! switch states; entering and leaving a state emits its actions.
+//! - [`Radio`]: states of which at most one is active, like the preset buttons of a car
+//!   radio.
+//! - [`Toggle`]: on or off.
+//! - [`Momentary`]: on only while a trigger is held.
+//! - [`CounterControl`]: a value with range and step, like the Hardware Test counters.
+//! - [`Mode`]: states of which exactly one is active (a layer); any trigger can be limited to
+//!   a mode state with a [`Condition`](crate::trigger::Condition).
 //!
-//! Everything here is pure. A transition returns the actions to run; executing them is the
-//! app's job.
+//! Triggers are matched by the engine (see [`crate::trigger`]); each control lists its
+//! triggers with the command they run ([`VirtualControl::bindings`]). Everything here is
+//! pure: a transition returns the actions to run; executing them is the app's job.
 
 use crate::action::{Action, ActionError};
-use crate::device::DeviceId;
-use crate::function::EndBehavior;
-use crate::state::HatState;
+use crate::function::{CounterSpec, EndBehavior, SpecError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum HatDirection {
-    Up,
-    UpRight,
-    Right,
-    DownRight,
-    Down,
-    DownLeft,
-    Left,
-    UpLeft,
-}
-
-impl HatDirection {
-    pub fn from_state(state: HatState) -> Option<Self> {
-        const U: u8 = HatState::UP;
-        const R: u8 = HatState::RIGHT;
-        const D: u8 = HatState::DOWN;
-        const L: u8 = HatState::LEFT;
-        Some(match state.0 {
-            x if x == U => Self::Up,
-            x if x == U | R => Self::UpRight,
-            x if x == R => Self::Right,
-            x if x == D | R => Self::DownRight,
-            x if x == D => Self::Down,
-            x if x == D | L => Self::DownLeft,
-            x if x == L => Self::Left,
-            x if x == U | L => Self::UpLeft,
-            _ => return None,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum StepDirection {
-    Decrement,
-    Increment,
-}
-
-/// Something on a controller that fires once: a press, a hat direction entered, a detent.
-///
-/// The same type describes what happened (an input edge) and what a control listens to, so
-/// matching is equality. More kinds (axis zones, modifier combos) can be added as variants.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", tag = "type")]
-pub enum Trigger {
-    /// Fires when the button is pressed, not when released.
-    Button { device: DeviceId, index: u16 },
-    /// Fires when the hat enters the direction.
-    Hat {
-        device: DeviceId,
-        index: u16,
-        direction: HatDirection,
-    },
-    /// Fires once per detent of a configured encoder.
-    EncoderStep {
-        encoder: String,
-        direction: StepDirection,
-    },
-}
+pub use crate::trigger::{
+    ButtonRef, Condition, HatDirection, PressKind, StepDirection, Trigger, TriggerError,
+    TriggerInput,
+};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Startup {
-    /// Restore the state that was active when Detent last ran.
+    /// Restore the state (or value) that was active when Detent last ran.
     #[default]
     RestoreLast,
-    /// Start with no state active.
+    /// Start empty: no radio state, toggle off, counter at its initial value, mode in its
+    /// first state.
     Empty,
 }
 
@@ -113,10 +60,77 @@ pub struct Radio {
     pub startup: Startup,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Toggle {
+    /// Switches between on and off.
+    pub toggle: Vec<Trigger>,
+    pub on: Vec<Trigger>,
+    pub off: Vec<Trigger>,
+    pub on_on: Vec<Action>,
+    pub on_off: Vec<Action>,
+    /// `Empty`: off at startup.
+    pub startup: Startup,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Momentary {
+    /// Active while any of them is held.
+    pub triggers: Vec<Trigger>,
+    pub on_press: Vec<Action>,
+    pub on_release: Vec<Action>,
+    /// Active while nothing is held instead.
+    pub invert: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CounterControl {
+    pub spec: CounterSpec,
+    pub increment: Vec<Trigger>,
+    pub decrement: Vec<Trigger>,
+    /// Back to the initial value.
+    pub reset: Vec<Trigger>,
+    /// Runs on every change; actions can use the new value as `{value}`.
+    pub on_change: Vec<Action>,
+    /// `Empty`: the initial value at startup.
+    pub startup: Startup,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ModeState {
+    pub id: String,
+    pub name: String,
+    /// Makes this state active (latching).
+    pub select: Vec<Trigger>,
+    /// Makes this state active while held; on release the mode goes back.
+    pub shift: Vec<Trigger>,
+    pub on_activate: Vec<Action>,
+    pub on_deactivate: Vec<Action>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Mode {
+    /// Exactly one is active; the first one by default.
+    pub states: Vec<ModeState>,
+    pub next: Vec<Trigger>,
+    pub previous: Vec<Trigger>,
+    pub end: EndBehavior,
+    /// `Empty`: the first state at startup.
+    pub startup: Startup,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum VirtualControlKind {
     Radio(Radio),
+    Toggle(Toggle),
+    Momentary(Momentary),
+    Counter(CounterControl),
+    Mode(Mode),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -139,6 +153,51 @@ pub enum RadioCommand {
     ToggleOff,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToggleCommand {
+    Toggle,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CounterCommand {
+    Increment,
+    Decrement,
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModeCommand {
+    Next,
+    Previous,
+    /// Index into [`Mode::states`].
+    Select(usize),
+    /// Index into [`Mode::states`]: active while the trigger is held.
+    Shift(usize),
+}
+
+/// What a trigger does to its control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Radio(RadioCommand),
+    Toggle(ToggleCommand),
+    /// Held: the momentary control is pressed until the trigger's input is released.
+    Momentary,
+    Counter(CounterCommand),
+    Mode(ModeCommand),
+}
+
+impl Command {
+    /// The command lasts while the input is held (it needs a release).
+    pub fn is_hold(self) -> bool {
+        matches!(
+            self,
+            Command::Momentary | Command::Mode(ModeCommand::Shift(_))
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Phase {
@@ -153,16 +212,40 @@ pub struct ActionRequest {
     pub state: String,
     pub phase: Phase,
     pub action: Action,
+    /// The value an action may insert as `{value}` (counters: the new value, formatted).
+    pub value: Option<String>,
 }
 
-/// What is remembered per radio between transitions and across restarts (control-states.json).
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+impl ActionRequest {
+    pub fn new(control: &str, state: &str, phase: Phase, action: &Action) -> Self {
+        Self {
+            control: control.into(),
+            state: state.into(),
+            phase,
+            action: action.clone(),
+            value: None,
+        }
+    }
+
+    /// `text` with `{value}` replaced by the request's value (empty without one).
+    pub fn fill_placeholders(&self, text: &str) -> String {
+        text.replace("{value}", self.value.as_deref().unwrap_or(""))
+    }
+}
+
+/// What is remembered per control between transitions and across restarts
+/// (control-states.json): the active state (radio, mode; `"on"` for a toggle), the most
+/// recently active one, and a counter's value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", from = "SavedMemory")]
 pub struct RadioMemory {
     /// Id of the active state.
     pub active: Option<String>,
     /// Id of the most recently active state, for [`RadioCommand::ToggleOff`].
     pub last: Option<String>,
+    /// A counter's value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
 }
 
 /// control-states.json entries: a plain state id in files from before toggle off.
@@ -175,6 +258,8 @@ enum SavedMemory {
         active: Option<String>,
         #[serde(default)]
         last: Option<String>,
+        #[serde(default)]
+        value: Option<f64>,
     },
 }
 
@@ -184,26 +269,49 @@ impl From<SavedMemory> for RadioMemory {
             SavedMemory::Active(active) => Self {
                 active: Some(active),
                 last: None,
+                value: None,
             },
-            SavedMemory::Full { active, last } => Self { active, last },
+            SavedMemory::Full {
+                active,
+                last,
+                value,
+            } => Self {
+                active,
+                last,
+                value,
+            },
         }
     }
 }
 
+/// The state id a toggle remembers while on.
+pub const TOGGLE_ON: &str = "on";
+
 impl RadioMemory {
     pub fn is_empty(&self) -> bool {
-        self.active.is_none() && self.last.is_none()
+        self.active.is_none() && self.last.is_none() && self.value.is_none()
     }
 
-    /// Forgets states the radio no longer has.
-    pub fn retain_existing(&mut self, radio: &Radio) {
+    /// Forgets what the control no longer has.
+    pub fn retain_existing(&mut self, control: &VirtualControl) {
+        let exists = |id: &str| match &control.kind {
+            VirtualControlKind::Radio(r) => r.index_of(id).is_some(),
+            VirtualControlKind::Mode(m) => m.index_of(id).is_some(),
+            VirtualControlKind::Toggle(_) => id == TOGGLE_ON,
+            VirtualControlKind::Momentary(_) | VirtualControlKind::Counter(_) => false,
+        };
         for slot in [&mut self.active, &mut self.last] {
-            if slot
-                .as_deref()
-                .is_some_and(|id| radio.index_of(id).is_none())
-            {
+            if slot.as_deref().is_some_and(|id| !exists(id)) {
                 *slot = None;
             }
+        }
+        match &control.kind {
+            VirtualControlKind::Counter(c) => {
+                if let Some(v) = self.value {
+                    self.value = Some(c.spec.value_at(c.spec.position_of(v)));
+                }
+            }
+            _ => self.value = None,
         }
     }
 }
@@ -216,6 +324,73 @@ pub enum ControlError {
     DuplicateState(String),
     #[error(transparent)]
     Action(#[from] ActionError),
+    #[error(transparent)]
+    Trigger(#[from] TriggerError),
+    #[error(transparent)]
+    Spec(#[from] SpecError),
+}
+
+fn requests(
+    control: &str,
+    state: &str,
+    phase: Phase,
+    actions: &[Action],
+    value: Option<&str>,
+) -> impl Iterator<Item = ActionRequest> {
+    actions.iter().map(move |a| ActionRequest {
+        value: value.map(str::to_owned),
+        ..ActionRequest::new(control, state, phase, a)
+    })
+}
+
+/// Fills in missing state ids (`st-<n>`) and names; refuses duplicate ids.
+fn normalize_states<'a>(
+    states: impl Iterator<Item = (&'a mut String, &'a mut String)>,
+) -> Result<(), ControlError> {
+    let states: Vec<_> = states.collect();
+    let mut next = 1 + states
+        .iter()
+        .filter_map(|(id, _)| id.strip_prefix("st-")?.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    let mut seen = std::collections::HashSet::new();
+    for (i, (id, name)) in states.into_iter().enumerate() {
+        if id.is_empty() {
+            *id = format!("st-{next}");
+            next += 1;
+        }
+        if !seen.insert(id.clone()) {
+            return Err(ControlError::DuplicateState(id.clone()));
+        }
+        *name = name.trim().to_owned();
+        if name.is_empty() {
+            *name = format!("State {}", i + 1);
+        }
+    }
+    Ok(())
+}
+
+/// Index of the state after stepping, for radios and modes. `None` (nothing active) counts
+/// as before the first state going up and after the last going down.
+fn step(len: usize, active: Option<usize>, up: bool, end: EndBehavior) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let last = len - 1;
+    Some(match (up, active) {
+        (true, None) => 0,
+        (false, None) => last,
+        (true, Some(i)) if i >= last => match end {
+            EndBehavior::Wrap => 0,
+            EndBehavior::Clamp => last,
+        },
+        (true, Some(i)) => i + 1,
+        (false, Some(0)) => match end {
+            EndBehavior::Wrap => last,
+            EndBehavior::Clamp => 0,
+        },
+        (false, Some(i)) => i.min(len) - 1,
+    })
 }
 
 impl Radio {
@@ -237,18 +412,8 @@ impl Radio {
         }
         let last = len - 1;
         match (command, active) {
-            (RadioCommand::Increment, None) => Some(0),
-            (RadioCommand::Decrement, None) => Some(last),
-            (RadioCommand::Increment, Some(i)) if i >= last => match self.end {
-                EndBehavior::Wrap => Some(0),
-                EndBehavior::Clamp => Some(last),
-            },
-            (RadioCommand::Increment, Some(i)) => Some(i + 1),
-            (RadioCommand::Decrement, Some(0)) => match self.end {
-                EndBehavior::Wrap => Some(last),
-                EndBehavior::Clamp => Some(0),
-            },
-            (RadioCommand::Decrement, Some(i)) => Some(i.min(len) - 1),
+            (RadioCommand::Increment, _) => step(len, active, true, self.end),
+            (RadioCommand::Decrement, _) => step(len, active, false, self.end),
             (RadioCommand::Select(i), _) if i > last => active,
             (RadioCommand::Select(i), Some(a)) if a == i => {
                 if self.toggle_on_reselect {
@@ -308,99 +473,370 @@ impl Radio {
             return Vec::new();
         }
         let mut out = Vec::new();
-        if let Some(state) = from.and_then(|i| self.states.get(i)) {
-            out.extend(state.on_deactivate.iter().map(|a| ActionRequest {
-                control: control.into(),
-                state: state.name.clone(),
-                phase: Phase::Deactivate,
-                action: a.clone(),
-            }));
+        if let Some(s) = from.and_then(|i| self.states.get(i)) {
+            out.extend(requests(
+                control,
+                &s.name,
+                Phase::Deactivate,
+                &s.on_deactivate,
+                None,
+            ));
         }
-        if let Some(state) = to.and_then(|i| self.states.get(i)) {
-            out.extend(state.on_activate.iter().map(|a| ActionRequest {
-                control: control.into(),
-                state: state.name.clone(),
-                phase: Phase::Activate,
-                action: a.clone(),
-            }));
+        if let Some(s) = to.and_then(|i| self.states.get(i)) {
+            out.extend(requests(
+                control,
+                &s.name,
+                Phase::Activate,
+                &s.on_activate,
+                None,
+            ));
         }
         out
     }
+}
 
-    /// Commands `fired` triggers, in a fixed order: increment, decrement, per-state select
-    /// (in state order), clear, toggle off.
-    pub fn commands_for(&self, fired: &Trigger) -> Vec<RadioCommand> {
+impl Toggle {
+    pub fn is_on(memory: &RadioMemory) -> bool {
+        memory.active.is_some()
+    }
+
+    pub fn apply(
+        &self,
+        control: &str,
+        memory: &mut RadioMemory,
+        command: ToggleCommand,
+    ) -> Option<Vec<ActionRequest>> {
+        let on = Self::is_on(memory);
+        let to = match command {
+            ToggleCommand::Toggle => !on,
+            ToggleCommand::On => true,
+            ToggleCommand::Off => false,
+        };
+        if to == on {
+            return None;
+        }
+        Self::set(memory, to);
+        Some(if to {
+            requests(control, "on", Phase::Activate, &self.on_on, None).collect()
+        } else {
+            requests(control, "off", Phase::Deactivate, &self.on_off, None).collect()
+        })
+    }
+
+    pub fn set(memory: &mut RadioMemory, on: bool) {
+        memory.active = on.then(|| TOGGLE_ON.to_owned());
+    }
+}
+
+impl Momentary {
+    /// Whether the control is active with `held` triggers held.
+    pub fn active(&self, held: bool) -> bool {
+        held != self.invert
+    }
+
+    /// Actions for going from active `from` to `to`.
+    pub fn transition_actions(&self, control: &str, from: bool, to: bool) -> Vec<ActionRequest> {
+        match (from, to) {
+            (false, true) => {
+                requests(control, "pressed", Phase::Activate, &self.on_press, None).collect()
+            }
+            (true, false) => requests(
+                control,
+                "released",
+                Phase::Deactivate,
+                &self.on_release,
+                None,
+            )
+            .collect(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+impl CounterControl {
+    pub fn value(&self, memory: &RadioMemory) -> f64 {
+        let pos = memory.value.map_or_else(
+            || self.spec.position_of(self.spec.initial),
+            |v| self.spec.position_of(v),
+        );
+        self.spec.value_at(pos)
+    }
+
+    pub fn apply(
+        &self,
+        control: &str,
+        memory: &mut RadioMemory,
+        command: CounterCommand,
+    ) -> Option<Vec<ActionRequest>> {
+        let before = self.value(memory);
+        let pos = self.spec.position_of(before);
+        let to = match command {
+            CounterCommand::Increment => self.spec.advance(pos, 1),
+            CounterCommand::Decrement => self.spec.advance(pos, -1),
+            CounterCommand::Reset => self.spec.position_of(self.spec.initial),
+        };
+        let value = self.spec.value_at(to);
+        if to == pos {
+            return None;
+        }
+        memory.value = Some(value);
+        let shown = self.spec.format(value);
+        Some(
+            requests(
+                control,
+                &shown,
+                Phase::Activate,
+                &self.on_change,
+                Some(&shown),
+            )
+            .collect(),
+        )
+    }
+
+    /// Sets the value (clamped to the range, on a step) without actions.
+    pub fn set(&self, memory: &mut RadioMemory, value: f64) {
+        memory.value = Some(self.spec.value_at(self.spec.position_of(value)));
+    }
+}
+
+impl Mode {
+    pub fn index_of(&self, state_id: &str) -> Option<usize> {
+        self.states.iter().position(|s| s.id == state_id)
+    }
+
+    /// The active state: the remembered one, or the first.
+    pub fn active(&self, memory: &RadioMemory) -> Option<usize> {
+        if self.states.is_empty() {
+            return None;
+        }
+        Some(
+            memory
+                .active
+                .as_deref()
+                .and_then(|id| self.index_of(id))
+                .unwrap_or(0),
+        )
+    }
+
+    /// The state after a latching command (shifts are handled by the engine).
+    pub fn next(&self, active: usize, command: ModeCommand) -> usize {
+        let len = self.states.len();
+        match command {
+            ModeCommand::Next => step(len, Some(active), true, self.end).unwrap_or(0),
+            ModeCommand::Previous => step(len, Some(active), false, self.end).unwrap_or(0),
+            ModeCommand::Select(i) | ModeCommand::Shift(i) if i < len => i,
+            _ => active,
+        }
+    }
+
+    /// Switches to state `to`: updates `memory` and returns the actions, `None` if it is
+    /// already active.
+    pub fn go(
+        &self,
+        control: &str,
+        memory: &mut RadioMemory,
+        to: usize,
+    ) -> Option<Vec<ActionRequest>> {
+        let from = self.active(memory)?;
+        if from == to || to >= self.states.len() {
+            return None;
+        }
+        let (a, b) = (&self.states[from], &self.states[to]);
+        let actions = requests(control, &a.name, Phase::Deactivate, &a.on_deactivate, None)
+            .chain(requests(
+                control,
+                &b.name,
+                Phase::Activate,
+                &b.on_activate,
+                None,
+            ))
+            .collect();
+        self.set(memory, to);
+        Some(actions)
+    }
+
+    pub fn set(&self, memory: &mut RadioMemory, to: usize) {
+        if let Some(s) = self.states.get(to) {
+            memory.last = memory.active.take();
+            memory.active = Some(s.id.clone());
+        }
+    }
+}
+
+impl VirtualControl {
+    pub fn radio(&self) -> Option<&Radio> {
+        match &self.kind {
+            VirtualControlKind::Radio(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn radio_mut(&mut self) -> Option<&mut Radio> {
+        match &mut self.kind {
+            VirtualControlKind::Radio(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn mode(&self) -> Option<&Mode> {
+        match &self.kind {
+            VirtualControlKind::Mode(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    pub fn startup(&self) -> Startup {
+        match &self.kind {
+            VirtualControlKind::Radio(r) => r.startup,
+            VirtualControlKind::Toggle(t) => t.startup,
+            VirtualControlKind::Counter(c) => c.startup,
+            VirtualControlKind::Mode(m) => m.startup,
+            VirtualControlKind::Momentary(_) => Startup::Empty,
+        }
+    }
+
+    /// Every trigger with the command it runs, in a fixed order per kind (radio: increment,
+    /// decrement, per-state select, clear, toggle off).
+    pub fn bindings<'a>(&'a self) -> Vec<(Command, &'a Trigger)> {
+        fn push<'a>(out: &mut Vec<(Command, &'a Trigger)>, cmd: Command, list: &'a [Trigger]) {
+            out.extend(list.iter().map(|t| (cmd, t)));
+        }
         let mut out = Vec::new();
-        if self.increment.contains(fired) {
-            out.push(RadioCommand::Increment);
-        }
-        if self.decrement.contains(fired) {
-            out.push(RadioCommand::Decrement);
-        }
-        for (i, state) in self.states.iter().enumerate() {
-            if state.select.contains(fired) {
-                out.push(RadioCommand::Select(i));
+        let mut add = |cmd: Command, list: &'a [Trigger]| push(&mut out, cmd, list);
+        match &self.kind {
+            VirtualControlKind::Radio(r) => {
+                add(Command::Radio(RadioCommand::Increment), &r.increment);
+                add(Command::Radio(RadioCommand::Decrement), &r.decrement);
+                for (i, s) in r.states.iter().enumerate() {
+                    add(Command::Radio(RadioCommand::Select(i)), &s.select);
+                }
+                add(Command::Radio(RadioCommand::Clear), &r.clear);
+                add(Command::Radio(RadioCommand::ToggleOff), &r.toggle_off);
+            }
+            VirtualControlKind::Toggle(t) => {
+                add(Command::Toggle(ToggleCommand::Toggle), &t.toggle);
+                add(Command::Toggle(ToggleCommand::On), &t.on);
+                add(Command::Toggle(ToggleCommand::Off), &t.off);
+            }
+            VirtualControlKind::Momentary(m) => add(Command::Momentary, &m.triggers),
+            VirtualControlKind::Counter(c) => {
+                add(Command::Counter(CounterCommand::Increment), &c.increment);
+                add(Command::Counter(CounterCommand::Decrement), &c.decrement);
+                add(Command::Counter(CounterCommand::Reset), &c.reset);
+            }
+            VirtualControlKind::Mode(m) => {
+                add(Command::Mode(ModeCommand::Next), &m.next);
+                add(Command::Mode(ModeCommand::Previous), &m.previous);
+                for (i, s) in m.states.iter().enumerate() {
+                    add(Command::Mode(ModeCommand::Select(i)), &s.select);
+                    add(Command::Mode(ModeCommand::Shift(i)), &s.shift);
+                }
             }
         }
-        if self.clear.contains(fired) {
-            out.push(RadioCommand::Clear);
-        }
-        if self.toggle_off.contains(fired) {
-            out.push(RadioCommand::ToggleOff);
-        }
         out
     }
 
-    pub fn triggers_mut(&mut self) -> impl Iterator<Item = &mut Vec<Trigger>> {
-        [
-            &mut self.increment,
-            &mut self.decrement,
-            &mut self.clear,
-            &mut self.toggle_off,
-        ]
-        .into_iter()
-        .chain(self.states.iter_mut().map(|s| &mut s.select))
+    /// Every trigger list, for editing (e.g. removing a deleted encoder's triggers).
+    pub fn triggers_mut(&mut self) -> Vec<&mut Vec<Trigger>> {
+        match &mut self.kind {
+            VirtualControlKind::Radio(r) => {
+                let mut v = vec![
+                    &mut r.increment,
+                    &mut r.decrement,
+                    &mut r.clear,
+                    &mut r.toggle_off,
+                ];
+                v.extend(r.states.iter_mut().map(|s| &mut s.select));
+                v
+            }
+            VirtualControlKind::Toggle(t) => vec![&mut t.toggle, &mut t.on, &mut t.off],
+            VirtualControlKind::Momentary(m) => vec![&mut m.triggers],
+            VirtualControlKind::Counter(c) => {
+                vec![&mut c.increment, &mut c.decrement, &mut c.reset]
+            }
+            VirtualControlKind::Mode(m) => {
+                let mut v = vec![&mut m.next, &mut m.previous];
+                for s in &mut m.states {
+                    v.push(&mut s.select);
+                    v.push(&mut s.shift);
+                }
+                v
+            }
+        }
     }
 
     pub fn triggers(&self) -> impl Iterator<Item = &Trigger> {
-        self.increment
-            .iter()
-            .chain(&self.decrement)
-            .chain(&self.clear)
-            .chain(&self.toggle_off)
-            .chain(self.states.iter().flat_map(|s| &s.select))
+        self.bindings().into_iter().map(|(_, t)| t)
     }
 
-    /// Validates the radio and fills in missing state ids and names.
+    /// Every action list.
+    pub fn actions(&self) -> Vec<&Action> {
+        let lists: Vec<&Vec<Action>> = match &self.kind {
+            VirtualControlKind::Radio(r) => r
+                .states
+                .iter()
+                .flat_map(|s| [&s.on_activate, &s.on_deactivate])
+                .collect(),
+            VirtualControlKind::Toggle(t) => vec![&t.on_on, &t.on_off],
+            VirtualControlKind::Momentary(m) => vec![&m.on_press, &m.on_release],
+            VirtualControlKind::Counter(c) => vec![&c.on_change],
+            VirtualControlKind::Mode(m) => m
+                .states
+                .iter()
+                .flat_map(|s| [&s.on_activate, &s.on_deactivate])
+                .collect(),
+        };
+        lists.into_iter().flatten().collect()
+    }
+
+    fn actions_mut(&mut self) -> Vec<&mut Action> {
+        let lists: Vec<&mut Vec<Action>> = match &mut self.kind {
+            VirtualControlKind::Radio(r) => r
+                .states
+                .iter_mut()
+                .flat_map(|s| [&mut s.on_activate, &mut s.on_deactivate])
+                .collect(),
+            VirtualControlKind::Toggle(t) => vec![&mut t.on_on, &mut t.on_off],
+            VirtualControlKind::Momentary(m) => vec![&mut m.on_press, &mut m.on_release],
+            VirtualControlKind::Counter(c) => vec![&mut c.on_change],
+            VirtualControlKind::Mode(m) => m
+                .states
+                .iter_mut()
+                .flat_map(|s| [&mut s.on_activate, &mut s.on_deactivate])
+                .collect(),
+        };
+        lists.into_iter().flatten().collect()
+    }
+
+    /// Validates the control: states (filling in missing ids and names), counter range,
+    /// actions and triggers (held commands need inputs with a release). Duplicate triggers
+    /// in one list are dropped.
     pub fn normalize(&mut self) -> Result<(), ControlError> {
-        if self.states.is_empty() {
-            return Err(ControlError::NoStates);
+        match &mut self.kind {
+            VirtualControlKind::Radio(r) => {
+                if r.states.is_empty() {
+                    return Err(ControlError::NoStates);
+                }
+                normalize_states(r.states.iter_mut().map(|s| (&mut s.id, &mut s.name)))?;
+            }
+            VirtualControlKind::Mode(m) => {
+                if m.states.is_empty() {
+                    return Err(ControlError::NoStates);
+                }
+                normalize_states(m.states.iter_mut().map(|s| (&mut s.id, &mut s.name)))?;
+            }
+            VirtualControlKind::Counter(c) => c.spec.validate()?,
+            VirtualControlKind::Toggle(_) | VirtualControlKind::Momentary(_) => {}
         }
-        let mut next = 1 + self
-            .states
-            .iter()
-            .filter_map(|s| s.id.strip_prefix("st-")?.parse::<u32>().ok())
-            .max()
-            .unwrap_or(0);
-        let mut seen = std::collections::HashSet::new();
-        for (i, state) in self.states.iter_mut().enumerate() {
-            if state.id.is_empty() {
-                state.id = format!("st-{next}");
-                next += 1;
-            }
-            if !seen.insert(state.id.clone()) {
-                return Err(ControlError::DuplicateState(state.id.clone()));
-            }
-            state.name = state.name.trim().to_owned();
-            if state.name.is_empty() {
-                state.name = format!("State {}", i + 1);
-            }
-            for action in state.on_activate.iter_mut().chain(&mut state.on_deactivate) {
-                action.normalize()?;
-            }
+        for action in self.actions_mut() {
+            action.normalize()?;
         }
-        for slot in self.triggers_mut() {
-            let mut unique = Vec::with_capacity(slot.len());
+        let holds: Vec<bool> = self.bindings_hold_flags();
+        for (slot, hold) in self.triggers_mut().into_iter().zip(holds) {
+            for t in slot.iter_mut() {
+                t.validate(hold)?;
+            }
+            let mut unique: Vec<Trigger> = Vec::with_capacity(slot.len());
             for t in slot.drain(..) {
                 if !unique.contains(&t) {
                     unique.push(t);
@@ -410,17 +846,22 @@ impl Radio {
         }
         Ok(())
     }
-}
 
-impl VirtualControl {
-    pub fn radio(&self) -> &Radio {
-        let VirtualControlKind::Radio(r) = &self.kind;
-        r
-    }
-
-    pub fn radio_mut(&mut self) -> &mut Radio {
-        let VirtualControlKind::Radio(r) = &mut self.kind;
-        r
+    /// For each list of [`Self::triggers_mut`], whether its command is held.
+    fn bindings_hold_flags(&self) -> Vec<bool> {
+        match &self.kind {
+            VirtualControlKind::Radio(r) => vec![false; 4 + r.states.len()],
+            VirtualControlKind::Toggle(_) => vec![false; 3],
+            VirtualControlKind::Momentary(_) => vec![true],
+            VirtualControlKind::Counter(_) => vec![false; 3],
+            VirtualControlKind::Mode(m) => {
+                let mut v = vec![false, false];
+                for _ in &m.states {
+                    v.extend([false, true]);
+                }
+                v
+            }
+        }
     }
 }
 
@@ -428,6 +869,8 @@ impl VirtualControl {
 mod tests {
     use super::*;
     use crate::action::KeyStep;
+    use crate::device::DeviceId;
+    use crate::state::HatState;
 
     fn key(name: &str) -> Action {
         Action::keyboard(vec![KeyStep::KeyTap {
@@ -452,6 +895,14 @@ mod tests {
             end,
             ..Default::default()
         }
+    }
+
+    fn button(index: u16) -> Trigger {
+        TriggerInput::Button {
+            device: DeviceId("d".into()),
+            index,
+        }
+        .into()
     }
 
     use RadioCommand::*;
@@ -525,31 +976,51 @@ mod tests {
         assert!(r.transition_actions("radio", None, None).is_empty());
     }
 
+    fn commands(c: &VirtualControl, t: &Trigger) -> Vec<Command> {
+        c.bindings()
+            .into_iter()
+            .filter(|(_, b)| *b == t)
+            .map(|(c, _)| c)
+            .collect()
+    }
+
+    fn control(kind: VirtualControlKind) -> VirtualControl {
+        VirtualControl {
+            id: "vc-1".into(),
+            name: "C".into(),
+            kind,
+        }
+    }
+
     #[test]
-    fn commands_follow_fixed_order() {
-        let t = Trigger::Button {
-            device: DeviceId("d".into()),
-            index: 1,
-        };
+    fn bindings_follow_fixed_order() {
+        let t = button(1);
         let mut r = radio(EndBehavior::Wrap);
         r.clear.push(t.clone());
         r.states[2].select.push(t.clone());
         r.increment.push(t.clone());
-        assert_eq!(r.commands_for(&t), [Increment, Select(2), Clear]);
-        let other = Trigger::Button {
-            device: DeviceId("d".into()),
-            index: 2,
-        };
-        assert!(r.commands_for(&other).is_empty());
+        r.toggle_off.push(t.clone());
+        let c = control(VirtualControlKind::Radio(r));
+        assert_eq!(
+            commands(&c, &t),
+            [
+                Command::Radio(Increment),
+                Command::Radio(Select(2)),
+                Command::Radio(Clear),
+                Command::Radio(ToggleOff)
+            ]
+        );
+        assert!(commands(&c, &button(2)).is_empty());
     }
 
     #[test]
     fn normalize_fills_ids_names_and_dedupes() {
-        let t = Trigger::EncoderStep {
+        let t: Trigger = TriggerInput::EncoderStep {
             encoder: "enc-1".into(),
             direction: StepDirection::Increment,
-        };
-        let mut r = Radio {
+        }
+        .into();
+        let mut c = control(VirtualControlKind::Radio(Radio {
             states: vec![
                 RadioState {
                     id: "st-4".into(),
@@ -559,18 +1030,75 @@ mod tests {
             ],
             increment: vec![t.clone(), t.clone()],
             ..Default::default()
-        };
-        r.normalize().unwrap();
+        }));
+        c.normalize().unwrap();
+        let r = c.radio().unwrap();
         assert_eq!(r.states[1].id, "st-5");
         assert_eq!(r.states[1].name, "State 2");
         assert_eq!(r.increment, [t]);
 
+        let VirtualControlKind::Radio(r) = &mut c.kind else {
+            unreachable!()
+        };
         r.states[1].id = "st-4".into();
         assert_eq!(
-            r.normalize(),
+            c.normalize(),
             Err(ControlError::DuplicateState("st-4".into()))
         );
-        assert_eq!(Radio::default().normalize(), Err(ControlError::NoStates));
+        assert_eq!(
+            control(VirtualControlKind::Radio(Radio::default())).normalize(),
+            Err(ControlError::NoStates)
+        );
+        assert_eq!(
+            control(VirtualControlKind::Mode(Mode::default())).normalize(),
+            Err(ControlError::NoStates)
+        );
+    }
+
+    #[test]
+    fn held_commands_need_a_release() {
+        let enc: Trigger = TriggerInput::EncoderStep {
+            encoder: "enc-1".into(),
+            direction: StepDirection::Increment,
+        }
+        .into();
+        let mut m = control(VirtualControlKind::Momentary(Momentary {
+            triggers: vec![enc.clone()],
+            ..Default::default()
+        }));
+        assert_eq!(
+            m.normalize(),
+            Err(ControlError::Trigger(TriggerError::NeedsRelease))
+        );
+        // Encoders are fine for latching mode commands, not for shifts.
+        let mut mode = control(VirtualControlKind::Mode(Mode {
+            states: vec![ModeState {
+                select: vec![enc.clone()],
+                ..Default::default()
+            }],
+            next: vec![enc.clone()],
+            ..Default::default()
+        }));
+        mode.normalize().unwrap();
+        let VirtualControlKind::Mode(md) = &mut mode.kind else {
+            unreachable!()
+        };
+        md.states[0].shift.push(enc);
+        assert_eq!(
+            mode.normalize(),
+            Err(ControlError::Trigger(TriggerError::NeedsRelease))
+        );
+        let mut counter = control(VirtualControlKind::Counter(CounterControl {
+            spec: CounterSpec {
+                step: 0.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        assert_eq!(
+            counter.normalize(),
+            Err(ControlError::Spec(SpecError::Step))
+        );
     }
 
     #[test]
@@ -595,18 +1123,24 @@ mod tests {
                 states: vec![RadioState {
                     id: "st-1".into(),
                     name: "Guard".into(),
-                    select: vec![Trigger::Hat {
-                        device: DeviceId("f00d:0001#1".into()),
-                        index: 0,
-                        direction: HatDirection::UpLeft,
-                    }],
+                    select: vec![
+                        TriggerInput::Hat {
+                            device: DeviceId("f00d:0001#1".into()),
+                            index: 0,
+                            direction: HatDirection::UpLeft,
+                        }
+                        .into(),
+                    ],
                     on_activate: vec![],
                     on_deactivate: vec![],
                 }],
-                increment: vec![Trigger::EncoderStep {
-                    encoder: "enc-1".into(),
-                    direction: StepDirection::Increment,
-                }],
+                increment: vec![
+                    TriggerInput::EncoderStep {
+                        encoder: "enc-1".into(),
+                        direction: StepDirection::Increment,
+                    }
+                    .into(),
+                ],
                 ..Default::default()
             }),
         };
@@ -628,14 +1162,38 @@ mod tests {
             r#"{"id":"vc-2","name":"R","kind":{"type":"radio","states":[{"id":"s","name":"S"}]}}"#,
         )
         .unwrap();
-        assert_eq!(minimal.radio().startup, Startup::RestoreLast);
-        assert!(!minimal.radio().toggle_on_reselect);
+        assert_eq!(minimal.radio().unwrap().startup, Startup::RestoreLast);
+        assert!(!minimal.radio().unwrap().toggle_on_reselect);
+
+        // The new kinds.
+        for (kind, json) in [
+            (
+                "toggle",
+                r#"{"type":"toggle","toggle":[],"onOn":[],"onOff":[],"startup":"empty"}"#,
+            ),
+            (
+                "momentary",
+                r#"{"type":"momentary","triggers":[],"invert":true}"#,
+            ),
+            (
+                "counter",
+                r#"{"type":"counter","spec":{"min":1,"max":5,"step":1,"initial":1,"end":"clamp","decimals":0}}"#,
+            ),
+            (
+                "mode",
+                r#"{"type":"mode","states":[{"id":"st-1","name":"Air","shift":[]}],"next":[]}"#,
+            ),
+        ] {
+            let c: VirtualControlKind = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_value(&c).unwrap()["type"], kind);
+        }
     }
 
     fn memory(active: Option<&str>, last: Option<&str>) -> RadioMemory {
         RadioMemory {
             active: active.map(Into::into),
             last: last.map(Into::into),
+            value: None,
         }
     }
 
@@ -702,13 +1260,28 @@ mod tests {
 
     #[test]
     fn memory_forgets_deleted_states() {
-        let r = radio(EndBehavior::Wrap);
+        let r = control(VirtualControlKind::Radio(radio(EndBehavior::Wrap)));
         let mut m = memory(Some("x"), Some("b"));
         m.retain_existing(&r);
         assert_eq!(m, memory(None, Some("b")));
         let mut m = memory(Some("a"), Some("y"));
         m.retain_existing(&r);
         assert_eq!(m, memory(Some("a"), None));
+        // A counter's value is clamped into a changed range.
+        let c = control(VirtualControlKind::Counter(CounterControl {
+            spec: CounterSpec {
+                min: 1.0,
+                max: 5.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        }));
+        let mut m = RadioMemory {
+            value: Some(9.0),
+            ..Default::default()
+        };
+        m.retain_existing(&c);
+        assert_eq!(m.value, Some(5.0));
     }
 
     #[test]
@@ -726,18 +1299,103 @@ mod tests {
             serde_json::from_str::<RadioMemory>(r#"{"active":"st-3"}"#).unwrap(),
             memory(Some("st-3"), None)
         );
+        let v: RadioMemory = serde_json::from_str(r#"{"value":7.5}"#).unwrap();
+        assert_eq!(v.value, Some(7.5));
     }
 
     #[test]
-    fn toggle_off_trigger_comes_last() {
-        let t = Trigger::Button {
-            device: DeviceId("d".into()),
-            index: 1,
+    fn toggle_commands() {
+        let t = Toggle {
+            on_on: vec![key("on")],
+            on_off: vec![key("off")],
+            ..Default::default()
         };
-        let mut r = radio(EndBehavior::Wrap);
-        r.toggle_off.push(t.clone());
-        r.clear.push(t.clone());
-        assert_eq!(r.commands_for(&t), [Clear, ToggleOff]);
-        assert!(r.triggers().any(|x| *x == t));
+        let mut m = RadioMemory::default();
+        assert_eq!(trace(t.apply("t", &mut m, ToggleCommand::Toggle)), ["+on"]);
+        assert!(Toggle::is_on(&m));
+        assert!(t.apply("t", &mut m, ToggleCommand::On).is_none());
+        assert_eq!(trace(t.apply("t", &mut m, ToggleCommand::Off)), ["-off"]);
+        assert!(t.apply("t", &mut m, ToggleCommand::Off).is_none());
+        assert_eq!(trace(t.apply("t", &mut m, ToggleCommand::On)), ["+on"]);
+    }
+
+    #[test]
+    fn momentary_transitions_and_invert() {
+        let mut m = Momentary {
+            on_press: vec![key("p")],
+            on_release: vec![key("r")],
+            ..Default::default()
+        };
+        assert!(m.active(true) && !m.active(false));
+        assert_eq!(
+            trace(Some(m.transition_actions("m", false, true))),
+            ["+pressed"]
+        );
+        assert_eq!(
+            trace(Some(m.transition_actions("m", true, false))),
+            ["-released"]
+        );
+        assert!(m.transition_actions("m", true, true).is_empty());
+        m.invert = true;
+        assert!(!m.active(true) && m.active(false));
+    }
+
+    #[test]
+    fn counter_steps_wraps_resets_and_carries_its_value() {
+        let c = CounterControl {
+            spec: CounterSpec {
+                min: 118.0,
+                max: 118.1,
+                step: 0.025,
+                initial: 118.05,
+                end: EndBehavior::Wrap,
+                decimals: 3,
+            },
+            on_change: vec![key("x")],
+            ..Default::default()
+        };
+        let mut m = RadioMemory::default();
+        assert_eq!(c.value(&m), 118.05);
+        let a = c.apply("Freq", &mut m, CounterCommand::Increment).unwrap();
+        assert_eq!(a[0].value.as_deref(), Some("118.075"));
+        assert_eq!(a[0].fill_placeholders("set {value} MHz"), "set 118.075 MHz");
+        c.apply("Freq", &mut m, CounterCommand::Increment);
+        c.apply("Freq", &mut m, CounterCommand::Increment);
+        assert_eq!(c.spec.format(c.value(&m)), "118.000");
+        c.apply("Freq", &mut m, CounterCommand::Decrement);
+        assert_eq!(c.spec.format(c.value(&m)), "118.100");
+        c.apply("Freq", &mut m, CounterCommand::Reset);
+        assert_eq!(c.value(&m), 118.05);
+        assert!(c.apply("Freq", &mut m, CounterCommand::Reset).is_none());
+        c.set(&mut m, 500.0);
+        assert_eq!(c.spec.format(c.value(&m)), "118.100");
+    }
+
+    #[test]
+    fn mode_has_exactly_one_state_active() {
+        let s = |id: &str| ModeState {
+            id: id.into(),
+            name: id.to_uppercase(),
+            on_activate: vec![key(id)],
+            on_deactivate: vec![key(id)],
+            ..Default::default()
+        };
+        let mode = Mode {
+            states: vec![s("air"), s("ground"), s("nav")],
+            end: EndBehavior::Clamp,
+            ..Default::default()
+        };
+        let mut m = RadioMemory::default();
+        assert_eq!(mode.active(&m), Some(0));
+        assert_eq!(mode.next(0, ModeCommand::Previous), 0);
+        assert_eq!(mode.next(0, ModeCommand::Next), 1);
+        assert_eq!(mode.next(2, ModeCommand::Next), 2);
+        assert_eq!(mode.next(0, ModeCommand::Select(9)), 0);
+        assert_eq!(trace(mode.go("M", &mut m, 2)), ["-AIR", "+NAV"]);
+        assert_eq!(mode.active(&m), Some(2));
+        assert!(mode.go("M", &mut m, 2).is_none());
+        // A remembered state that is gone: the first one.
+        let gone = memory(Some("x"), None);
+        assert_eq!(mode.active(&gone), Some(0));
     }
 }

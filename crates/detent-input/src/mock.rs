@@ -13,6 +13,13 @@ pub struct MockBackend;
 
 const TICK: Duration = Duration::from_millis(10);
 
+/// Start of the mock clock: the first time it is read.
+static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+fn now_ns() -> u64 {
+    u64::try_from(START.get_or_init(Instant::now).elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
 /// `shape` is (axes, buttons, hats).
 fn device(
     instance: u32,
@@ -41,6 +48,10 @@ fn device(
 impl InputBackend for MockBackend {
     fn name(&self) -> &'static str {
         "mock"
+    }
+
+    fn clock(&self) -> fn() -> u64 {
+        now_ns
     }
 
     fn run(self: Box<Self>, events: Sender<BackendEvent>, stop: Arc<AtomicBool>) {
@@ -90,12 +101,11 @@ impl InputBackend for MockBackend {
             return;
         }
 
-        let start = Instant::now();
         let mut tick: u64 = 0;
         while !stop.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
-            let t = start.elapsed().as_secs_f32();
-            let now = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            let now = now_ns();
+            let t = now as f32 / 1e9;
             let mut out = vec![
                 BackendEvent::Axis {
                     instance: 1,

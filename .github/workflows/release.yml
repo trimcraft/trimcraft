@@ -57,11 +57,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           toolchain: stable
-          components: rustfmt, clippy
 
       # Binaries signed through SignPath are built from source, without reusing cached builds.
+      # Otherwise this restores the cache of CI's build job on main (same shared key), so only
+      # what changed since then is compiled. Never saved here: a tag's cache is of no use to
+      # later runs, and main's comes from CI.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         if: env.SIGNPATH != 'true'
+        with:
+          shared-key: release-build
+          save-if: false
 
       # Cargo.toml, package.json, package-lock.json and tauri.conf.json agree, and for a tag
       # they match it (v0.1.0 releases version 0.1.0).
@@ -94,10 +99,41 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
 
-      # The same gate as CI: npm ci, svelte-check, frontend build, fmt, clippy, tests.
-      - name: Checks
+      # The gate (scripts/check.sh) does not run again here: the CI workflow must have passed for
+      # exactly this commit, in a run from a push to main or started by hand (pull request runs
+      # test a merge commit, not this one). Waits while that run is still going, e.g. right after
+      # the push to main that the tag points at. For a dry run of a branch, run CI on it first.
+      - name: CI passed for this commit
         shell: bash
-        run: ./scripts/check.sh
+        timeout-minutes: 45
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          query="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=100"
+          runs='[.workflow_runs[] | select(.event == "push" or .event == "workflow_dispatch")]'
+          while true; do
+            state=$(gh api "$query" --jq "$runs"' |
+              if any(.[]; .conclusion == "success") then "passed"
+              elif any(.[]; .status != "completed") then "running"
+              else "failed" end')
+            case "$state" in
+              passed)
+                gh api "$query" --jq "$runs"' | map(select(.conclusion == "success"))[0] |
+                  "CI passed for this commit: \(.html_url)"'
+                exit 0 ;;
+              running)
+                echo "CI for $SHA is still running, waiting..."
+                sleep 30 ;;
+              *)
+                echo "::error::No successful CI run (push or workflow_dispatch) for $SHA."
+                gh api "$query" --jq "$runs"' | .[] | "  \(.event): \(.conclusion) \(.html_url)"'
+                exit 1 ;;
+            esac
+          done
+
+      - name: Install frontend dependencies
+        run: npm ci --no-audit --no-fund
 
       # --- Without Windows code signing (SIGNPATH_ENABLED is not 'true') ---
 

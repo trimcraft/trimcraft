@@ -330,9 +330,9 @@ pub struct OverlayConfig {
     pub scale: f32,
     pub appearance: Appearance,
     pub toasts: ToastSettings,
-    /// The active profile's widgets. The setup file stores them per profile, so there the
-    /// list is empty and left out.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The active profile's widgets. Always serialised, even when empty: the snapshot sends
+    /// this type to the UI, which reads the list. The setup file stores widgets per profile
+    /// and leaves this one out (see `Setup`).
     pub widgets: WidgetList,
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import type { AppMeta, EngineSnapshot } from "./lib/types";
-  import { backend, isTauri } from "./lib/backend";
+  import { backend, errorText, isTauri } from "./lib/backend";
   import DeviceList from "./components/DeviceList.svelte";
   import DeviceView from "./components/DeviceView.svelte";
   import EncoderPanel from "./components/EncoderPanel.svelte";
@@ -22,19 +22,48 @@
   let meta = $state<AppMeta | null>(null);
   let selected = $state<string | null>(null);
   let hardwareTab = $state<"devices" | "log">("devices");
+  /** Why the first snapshot did not arrive: a failed call, or no answer in time. */
+  let startError = $state<string | null>(null);
+  let slowStart = $state(false);
+
+  /** Without a snapshot after this long, "Starting…" turns into a hint. */
+  const SLOW_START_MS = 10_000;
 
   let elevated = $derived(snapshot?.shell.elevated ?? meta?.elevated ?? false);
   let device = $derived(snapshot?.devices.find((d) => d.id === selected) ?? snapshot?.devices[0]);
 
   onMount(() => {
     let stop: (() => void) | undefined;
-    backend().then(async (b) => {
-      meta = await b.meta();
-      stop = await b.subscribe((s) => (snapshot = s));
-    });
-    return () => stop?.();
+    const slow = setTimeout(() => (slowStart = true), SLOW_START_MS);
+    backend()
+      .then(async (b) => {
+        // The version badge is a nicety; the pages only need the snapshot.
+        b.meta().then((m) => (meta = m), (e) => console.error("get_meta failed", e));
+        stop = await b.subscribe((s) => (snapshot = s));
+      })
+      .catch((e) => {
+        console.error("startup failed", e);
+        startError = errorText(e);
+      });
+    return () => {
+      clearTimeout(slow);
+      stop?.();
+    };
   });
 </script>
+
+{#snippet pageFailed(error: unknown, reset: () => void)}
+  <main class="single">
+    <div class="content">
+      <section class="panel">
+        <h2>This page could not be shown</h2>
+        <p class="error mono">{errorText(error)}</p>
+        <p class="muted">The other pages keep working. Please report this with the log file{meta ? ` (${meta.logDir})` : ""}.</p>
+        <div class="row"><button onclick={reset}>Try again</button></div>
+      </section>
+    </div>
+  </main>
+{/snippet}
 
 <header>
   <nav>
@@ -63,6 +92,9 @@
       <button class="link" onclick={() => show("settings")}>Settings</button>
     </p>
   {/if}
+  <!-- One page failing to render must not take the navigation or the other pages with it. -->
+  {#key nav.section}
+  <svelte:boundary failed={pageFailed} onerror={(e) => console.error(`page ${nav.section} failed`, e)}>
   {#if nav.section === "hardware"}
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected={hardwareTab === "devices"} class:current={hardwareTab === "devices"} onclick={() => (hardwareTab = "devices")}>Devices</button>
@@ -118,6 +150,18 @@
       </div>
     </main>
   {/if}
+  </svelte:boundary>
+  {/key}
+{:else if startError}
+  <div class="pad">
+    <p class="error">Trimcraft could not start: {startError}</p>
+    <p class="muted">Restart Trimcraft from the tray menu (Quit, then start it again). If it keeps happening, please report it with the log file{meta ? ` (${meta.logDir})` : ""}.</p>
+  </div>
+{:else if slowStart}
+  <div class="pad">
+    <p class="muted">Starting… this takes longer than usual.</p>
+    <p class="muted">Trimcraft's engine has not answered yet. If nothing changes, quit Trimcraft from the tray menu and start it again; the log file{meta ? ` (${meta.logDir})` : ""} shows what it is waiting for.</p>
+  </div>
 {:else}
   <p class="muted pad">Starting…</p>
 {/if}

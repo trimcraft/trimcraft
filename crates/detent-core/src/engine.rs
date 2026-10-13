@@ -440,9 +440,11 @@ impl Engine {
             .as_ref()
             .map(|_| trigger_text(&self.live, &self.setup, trigger));
         let active = self.setup.active_index();
-        for control in &self.setup.profiles[active].virtual_controls {
+        let profile = &self.setup.profiles[active];
+        for control in &profile.virtual_controls {
             for command in control.radio().commands_for(trigger) {
                 self.dirty.controls |= run_radio_command(
+                    &profile.name,
                     control,
                     command,
                     &mut self.memory,
@@ -1001,6 +1003,7 @@ impl Engine {
         let (p, c) = self.control_position(id)?;
         let queued = self.actions.len();
         self.dirty.controls |= run_radio_command(
+            &self.setup.profiles[p].name,
             &self.setup.profiles[p].virtual_controls[c],
             command,
             &mut self.memory,
@@ -1410,7 +1413,10 @@ impl Engine {
 /// Applies `command` to a radio: updates its memory and queues the transition's actions.
 /// Returns whether the active state changed. `log` is the event log with what caused the
 /// command (a trigger's text), if recording.
+/// `profile` is the name of the profile `control` belongs to, for the `{profile}`
+/// placeholder.
 fn run_radio_command(
+    profile: &str,
     control: &VirtualControl,
     command: RadioCommand,
     memory: &mut HashMap<String, RadioMemory>,
@@ -1423,7 +1429,10 @@ fn run_radio_command(
     let queued = actions.len();
     let changed = match radio.apply(&control.name, memory, command) {
         Some(emitted) => {
-            actions.extend(emitted);
+            actions.extend(emitted.into_iter().map(|r| ActionRequest {
+                profile: profile.to_owned(),
+                ..r
+            }));
             true
         }
         None => false,
@@ -2993,5 +3002,23 @@ mod tests {
         assert_eq!(json["shell"]["elevatedForeground"], "game.exe");
         assert_eq!(json["shell"]["autostart"], "off");
         assert_eq!(json["settings"]["closeToTray"], true);
+    }
+
+    #[test]
+    fn emitted_actions_carry_the_placeholder_context() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        engine.take_actions();
+        press(&mut engine, 0, 0); // selects B
+        let queued = engine.take_actions();
+        assert!(!queued.is_empty());
+        let p = queued[0].placeholders();
+        assert_eq!(p.control, "Comms");
+        assert_eq!(p.state, "B");
+        assert_eq!(p.profile, engine.setup().profile().name);
+        assert_eq!(p.value, None);
+        assert_eq!(
+            p.fill("{profile}/{control}/{state}"),
+            format!("{}/Comms/B", p.profile)
+        );
     }
 }

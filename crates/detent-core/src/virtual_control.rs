@@ -10,6 +10,7 @@
 use crate::action::{Action, ActionError};
 use crate::device::DeviceId;
 use crate::function::EndBehavior;
+use crate::placeholder::Placeholders;
 use crate::state::HatState;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -146,13 +147,40 @@ pub enum Phase {
     Activate,
 }
 
-/// An action to run, with where it came from (for the log).
+/// An action to run, with where it came from (for the log and the placeholders).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionRequest {
     pub control: String,
     pub state: String,
     pub phase: Phase,
     pub action: Action,
+    /// Name of the profile the emitting control belongs to; the engine fills it in.
+    pub profile: String,
+    /// The emitting control's value, formatted (e.g. a counter); `None` for radios.
+    pub value: Option<String>,
+}
+
+impl ActionRequest {
+    pub fn new(control: &str, state: &str, phase: Phase, action: Action) -> Self {
+        Self {
+            control: control.into(),
+            state: state.into(),
+            phase,
+            action,
+            profile: String::new(),
+            value: None,
+        }
+    }
+
+    /// The values of `{control}`, `{state}`, `{profile}` and `{value}`.
+    pub fn placeholders(&self) -> Placeholders {
+        Placeholders {
+            control: self.control.clone(),
+            state: self.state.clone(),
+            profile: self.profile.clone(),
+            value: self.value.clone(),
+        }
+    }
 }
 
 /// What is remembered per radio between transitions and across restarts (control-states.json).
@@ -309,20 +337,19 @@ impl Radio {
         }
         let mut out = Vec::new();
         if let Some(state) = from.and_then(|i| self.states.get(i)) {
-            out.extend(state.on_deactivate.iter().map(|a| ActionRequest {
-                control: control.into(),
-                state: state.name.clone(),
-                phase: Phase::Deactivate,
-                action: a.clone(),
-            }));
+            out.extend(
+                state.on_deactivate.iter().map(|a| {
+                    ActionRequest::new(control, &state.name, Phase::Deactivate, a.clone())
+                }),
+            );
         }
         if let Some(state) = to.and_then(|i| self.states.get(i)) {
-            out.extend(state.on_activate.iter().map(|a| ActionRequest {
-                control: control.into(),
-                state: state.name.clone(),
-                phase: Phase::Activate,
-                action: a.clone(),
-            }));
+            out.extend(
+                state
+                    .on_activate
+                    .iter()
+                    .map(|a| ActionRequest::new(control, &state.name, Phase::Activate, a.clone())),
+            );
         }
         out
     }
@@ -421,6 +448,14 @@ impl VirtualControl {
     pub fn radio_mut(&mut self) -> &mut Radio {
         let VirtualControlKind::Radio(r) = &mut self.kind;
         r
+    }
+
+    /// Every action the control can run.
+    pub fn actions(&self) -> impl Iterator<Item = &Action> {
+        self.radio()
+            .states
+            .iter()
+            .flat_map(|s| s.on_activate.iter().chain(&s.on_deactivate))
     }
 }
 

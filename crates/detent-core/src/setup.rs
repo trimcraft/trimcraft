@@ -188,6 +188,21 @@ impl Setup {
             .unwrap_or(0)
     }
 
+    /// Every secret the actions of all profiles refer to (HTTP header values).
+    pub fn secret_refs(&self) -> Vec<crate::connection::SecretRef> {
+        let mut refs = Vec::new();
+        for control in self.profiles.iter().flat_map(|p| &p.virtual_controls) {
+            for action in control.actions() {
+                for secret in action.secrets() {
+                    if !refs.contains(secret) {
+                        refs.push(secret.clone());
+                    }
+                }
+            }
+        }
+        refs
+    }
+
     pub fn profile(&self) -> &Profile {
         &self.profiles[self.active_index()]
     }

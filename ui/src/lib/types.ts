@@ -782,7 +782,7 @@ export interface AppSettings {
   trayNoticeShown: boolean;
   /** Stops all macros and releases every input they hold. */
   panicHotkey: string;
-  /** Look for a new release when Trimcraft starts. */
+  /** Look for a new release automatically (after the start, then every few hours). */
   checkUpdatesOnStartup: boolean;
 }
 

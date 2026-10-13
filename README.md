@@ -68,9 +68,10 @@ updating.
 
 ### Updates
 
-Trimcraft looks for a new release when it starts (**Settings → Updates**; can be turned off) and
-shows an **update** badge next to its version when one is available. **Download & install** there
-installs it for your user and restarts Trimcraft; it asks first when macros are running or vJoy
+Trimcraft looks for a new release when it starts and every 6 hours while it runs (**Settings →
+Updates**; can be turned off) and shows an **update** badge next to its version when one is
+available. **Download & install** there installs it for your user and restarts Trimcraft; it
+asks first when macros are running or vJoy
 is in use. Update packages are signed with the project's update key, and Trimcraft installs only
 packages with a valid signature (this is separate from Windows code signing, see the
 [code signing policy](#code-signing-policy)).
@@ -130,8 +131,9 @@ approved manually.
 specifically requested by the user or the person installing or operating it, with one exception
 that is on by default: the update check. In detail:
 
-- **Update check:** on start, Trimcraft fetches `latest.json` from this repository's GitHub
-  releases (github.com); **Download & install** downloads the update from there. Turn the check
+- **Update check:** on start and every 6 hours while it runs, until a new version is found,
+  Trimcraft fetches `latest.json` from this repository's GitHub releases (github.com);
+  **Download & install** downloads the update from there. Turn the check
   off under Settings → Updates.
   [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
   applies.

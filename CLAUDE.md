@@ -46,6 +46,12 @@ cargo run -p trimcraft-input --example probe -- 30
 node scripts/screenshots.mjs docs/images http://localhost:1420 virtual-controls connections hardware settings credits overlay
 ```
 
+The update check can be tested against a local `latest.json` (a higher `version` and a
+`windows-x86_64` entry): debug builds honour `TRIMCRAFT_UPDATE_ENDPOINT=http://127.0.0.1:…/latest.json`
+(and `TRIMCRAFT_UPDATE_RECHECK_SECS` for the repeat interval); for a release build add
+`--features update-endpoint-override --config '{"plugins":{"updater":{"dangerousInsecureTransportProtocol":true}}}'`
+to `npx tauri build`. Never in the workflows (a test checks that).
+
 Docs: `README.md` is the public front page (short); behaviour in detail goes to
 `docs/user-guide.md`. Update the guide when you change what the user sees.
 

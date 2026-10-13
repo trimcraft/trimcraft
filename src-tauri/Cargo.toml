@@ -38,6 +38,11 @@ tauri-plugin-notification = "2"
 rodio = { version = "0.23", default-features = false, features = ["playback", "flac", "mp3", "vorbis", "wav"] }
 tauri-plugin-updater = "2"
 
+[features]
+# Honours TRIMCRAFT_UPDATE_ENDPOINT in a release build too, to test the update check against a
+# local latest.json (debug builds always do). Never enabled for published releases.
+update-endpoint-override = []
+
 [lints]
 workspace = true
 

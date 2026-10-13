@@ -1,22 +1,23 @@
 // The main window's current section; components can switch it (e.g. "enable it under
 // Connections"). Remembered across restarts as a convenience.
 
-export type Section = "hardware" | "controls" | "connections";
+export type Section = "controls" | "connections" | "hardware";
 
 export const SECTIONS: [Section, string][] = [
-  ["hardware", "Hardware Test"],
   ["controls", "Virtual Controls"],
   ["connections", "Connections"],
+  ["hardware", "Hardware Test"],
 ];
 
 const KEY = "detent.section";
+const DEFAULT: Section = "controls";
 
 function load(): Section {
   try {
     const saved = localStorage.getItem(KEY);
-    return SECTIONS.some(([s]) => s === saved) ? (saved as Section) : "hardware";
+    return SECTIONS.some(([s]) => s === saved) ? (saved as Section) : DEFAULT;
   } catch {
-    return "hardware";
+    return DEFAULT;
   }
 }
 

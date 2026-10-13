@@ -27,7 +27,8 @@ Widgets that were never placed stay stacked in the chosen corner, as in earlier 
 
 ## Virtual controls
 
-The main window has two sections: **Hardware Test** (everything above) and **Virtual Controls**.
+The main window has three sections: **Virtual Controls** (opened by default), **Connections** and
+**Hardware Test** (everything above).
 A virtual control is built from physical inputs and can run actions. The first kind is the
 **radio**: several states of which at most one is active, like the preset buttons of a car radio.
 

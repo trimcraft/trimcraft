@@ -64,7 +64,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
-- `ui/src`: `App.svelte` (main window: Hardware Test and Virtual Controls), `Overlay.svelte`
+- `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test), `Overlay.svelte`
   (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 

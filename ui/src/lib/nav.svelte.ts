@@ -1,7 +1,8 @@
 // The main window's current section; components can switch it (e.g. "enable it under
 // Connections"). Remembered across restarts as a convenience.
 
-export type Section = "controls" | "connections" | "hardware";
+// "settings" is opened with the gear in the header, not from the navigation.
+export type Section = "controls" | "connections" | "hardware" | "settings";
 
 export const SECTIONS: [Section, string][] = [
   ["controls", "Virtual Controls"],

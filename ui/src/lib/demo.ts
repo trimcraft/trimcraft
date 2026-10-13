@@ -157,6 +157,10 @@ export function createDemo(): Backend {
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
+    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false },
+    // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
+    // banner shows. "Restart as administrator" clears both.
+    shell: { elevated: false, autostart: "off", autostartNote: null, elevatedForeground: "DemoGame.exe" },
   };
   const listeners = new Set<(s: EngineSnapshot) => void>();
   const positions = new Map<string, number>();
@@ -323,7 +327,7 @@ export function createDemo(): Backend {
   const ok = async () => emit();
 
   return {
-    meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser" }),
+    meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser", elevated: s.shell.elevated }),
     async subscribe(cb) {
       listeners.add(cb);
       cb(structuredClone(s));
@@ -584,6 +588,27 @@ export function createDemo(): Backend {
     async setRecorderConfig(config) {
       if (!config.stopHotkey.trim() || /esc/i.test(config.stopHotkey)) throw new Error(`hotkey "${config.stopHotkey}" is not valid`);
       s.recorderConfig = structuredClone(config);
+      await ok();
+    },
+    async setSettings(settings) {
+      s.settings = { ...structuredClone(settings), trayNoticeShown: s.settings.trayNoticeShown };
+      // Like detent-core's plan_autostart: the task needs administrator rights.
+      const { startWithWindows, runAsAdmin } = s.settings;
+      const elevated = s.shell.elevated;
+      s.shell.autostart = !startWithWindows ? "off" : runAsAdmin && elevated ? "task" : "runKey";
+      s.shell.autostartNote =
+        startWithWindows && runAsAdmin && !elevated
+          ? "Registered without administrator rights for now (UAC prompt at logon); Detent switches to a Task Scheduler task at the next start as administrator."
+          : null;
+      await ok();
+    },
+    async restartElevated() {
+      s.shell.elevated = true;
+      s.shell.elevatedForeground = null;
+      if (s.settings.startWithWindows) {
+        s.shell.autostart = s.settings.runAsAdmin ? "task" : "runKey";
+        s.shell.autostartNote = null;
+      }
       await ok();
     },
     async testAction(action) {

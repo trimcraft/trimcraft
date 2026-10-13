@@ -171,6 +171,9 @@ export interface EngineSnapshot {
   connectors: ConnectorView[];
   overlay: OverlayConfig;
   detector: DetectorConfig;
+  /** App-wide settings (Settings page). */
+  settings: AppSettings;
+  shell: ShellStatus;
 }
 
 export interface AppMeta {
@@ -179,6 +182,8 @@ export interface AppMeta {
   dataDir: string;
   logDir: string;
   platform: string;
+  /** Detent runs as administrator. */
+  elevated: boolean;
 }
 
 // --- Virtual controls (detent-core: virtual_control.rs, action.rs) ---------------------------
@@ -434,3 +439,30 @@ export interface KeyInfo {
 
 /** Radio commands the UI can run; they fire actions like a trigger would. */
 export type RadioCommand = "increment" | "decrement" | "clear" | "toggleOff";
+
+// --- Settings page (detent-core: settings.rs) ------------------------------------------------
+
+export interface AppSettings {
+  /** The close button hides the window; Detent keeps running in the tray. */
+  closeToTray: boolean;
+  startWithWindows: boolean;
+  /** Start in the tray, also when started by hand (a start by Windows always does). */
+  startMinimized: boolean;
+  /** Relaunch elevated (UAC prompt) when started without administrator rights. */
+  runAsAdmin: boolean;
+  /** Set by the app; ignored when saving. */
+  trayNoticeShown: boolean;
+}
+
+/** How Detent is started at logon: Run registry value or elevated Task Scheduler task. */
+export type AutostartKind = "off" | "runKey" | "task";
+
+export interface ShellStatus {
+  elevated: boolean;
+  /** What is registered right now. */
+  autostart: AutostartKind;
+  /** Why autostart differs from the settings, or why changing it failed. */
+  autostartNote: string | null;
+  /** The foreground program runs as administrator and Detent does not: its name. */
+  elevatedForeground: string | null;
+}

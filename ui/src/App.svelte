@@ -11,12 +11,14 @@
   import RecorderSettings from "./components/RecorderSettings.svelte";
   import RecordingBanner from "./components/RecordingBanner.svelte";
   import ConnectionsView from "./components/ConnectionsView.svelte";
+  import SettingsView from "./components/settings/SettingsView.svelte";
   import { SECTIONS, nav, show } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
   let meta = $state<AppMeta | null>(null);
   let selected = $state<string | null>(null);
 
+  let elevated = $derived(snapshot?.shell.elevated ?? meta?.elevated ?? false);
   let device = $derived(snapshot?.devices.find((d) => d.id === selected) ?? snapshot?.devices[0]);
 
   onMount(() => {
@@ -39,12 +41,19 @@
   {#if snapshot}<RecordingBanner {snapshot} />{/if}
   {#if meta}
     {#if !isTauri}<span class="badge warn">browser demo, not connected to devices</span>{/if}
-    <span class="version muted mono" title="Detent {meta.version} · input backend: {meta.backend}">v{meta.version}</span>
+    <span class="version muted mono" title="Detent {meta.version} · input backend: {meta.backend} · running as administrator: {elevated ? 'yes' : 'no'}">v{meta.version}</span>
   {/if}
+  <button class="gear" class:current={nav.section === "settings"} title="Settings" aria-label="Settings" onclick={() => show("settings")}>⚙</button>
 </header>
 
 {#if snapshot}
   {#if snapshot.backendError}<p class="error banner">Input backend failed: {snapshot.backendError}</p>{/if}
+  {#if snapshot.shell.elevatedForeground}
+    <p class="warn banner">
+      {snapshot.shell.elevatedForeground} runs as administrator; Detent's keys and mouse will not reach it.
+      <button class="link" onclick={() => show("settings")}>Settings</button>
+    </p>
+  {/if}
   {#if nav.section === "hardware"}
     <main>
       <aside>
@@ -63,6 +72,12 @@
         <EncoderPanel {snapshot} />
         <FunctionPanel {snapshot} />
         <OverlayPanel {snapshot} />
+      </div>
+    </main>
+  {:else if nav.section === "settings"}
+    <main class="single">
+      <div class="content">
+        <SettingsView {snapshot} />
       </div>
     </main>
   {:else if nav.section === "connections"}
@@ -98,5 +113,9 @@
   .info { font-size: 11px; word-break: break-all; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
   .banner { padding: 8px 16px; margin: 0; }
   .pad { padding: 16px; }
+  .gear { border-color: transparent; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 6px; }
+  .gear.current { color: var(--accent); border-color: var(--accent); }
+  .warn.banner { color: var(--warn); background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }
+  .link { border: none; background: none; padding: 0 4px; color: var(--accent); text-decoration: underline; font-size: 12px; }
   @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
 </style>

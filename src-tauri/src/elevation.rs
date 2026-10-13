@@ -14,9 +14,9 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, OpenMutexW, OpenProcess, OpenProcessToken,
-    PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-    SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
+    GetCurrentProcess, GetCurrentProcessId, MUTEX_ALL_ACCESS, OpenMutexW, OpenProcess,
+    OpenProcessToken, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    QueryFullProcessImageNameW, SYNCHRONIZATION_SYNCHRONIZE, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -189,8 +189,9 @@ const SINGLE_INSTANCE_DATA: usize = 1542;
 /// which case this process must exit.
 pub fn forward_to_elevated_instance(identifier: &str) -> bool {
     let name = mutex_name(identifier);
+    // The access the plugin asks for when it opens the mutex (CreateMutexW).
     // SAFETY: NUL-terminated name; the handle is closed right away.
-    let mutex = unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, 0, name.as_ptr()) };
+    let mutex = unsafe { OpenMutexW(MUTEX_ALL_ACCESS, 0, name.as_ptr()) };
     if !mutex.is_null() {
         // SAFETY: opened above.
         unsafe { CloseHandle(mutex) };

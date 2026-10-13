@@ -129,6 +129,35 @@ credentials** also deletes the secret. Discord lets only one app at a time chang
 settings and reverts that app's changes when it disconnects, so Detent stays connected while
 the connection is enabled (and reconnects when Discord restarts).
 
+## Tray and settings
+
+Detent keeps a **tray icon** while it runs: a left click opens the main window; its menu has
+*Show window*, *Overlay visible* (the same switch as the overlay hotkey) and *Quit*. Starting
+Detent a second time opens the running instance instead.
+
+The gear in the header opens **Settings**. Under *General*:
+
+- **Close button minimizes to the tray** (on by default): closing the window only hides it;
+  inputs, actions and the overlay keep running. Quit from the tray menu. The first time,
+  Windows shows a notification that Detent is still running.
+- **Start with Windows** (off by default): registered per user. A start by Windows always
+  goes to the tray.
+- **Start minimized to the tray** (on by default): also for starts by hand. The very first
+  start (no settings saved yet) always shows the window.
+- **Always run as administrator** (off by default): Windows does not let a normal program send
+  keys and mouse input to a program that runs as administrator. If a game does, Detent must too.
+  With this on, Detent restarts itself as administrator (UAC prompt) when started normally.
+  Together with *Start with Windows* it is registered as a Task Scheduler task with highest
+  privileges instead of a startup entry, so there is no prompt at logon. Creating or removing
+  that task needs administrator rights; until Detent runs as administrator it uses the normal
+  startup entry. **Restart as administrator** does it right away.
+
+The settings page and the version tooltip show whether Detent runs as administrator. When it
+does not and the program in the foreground does, a banner in the main window warns that
+Detent's keys and mouse will not reach it (also in the log).
+
+Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
+
 ## Layout
 
 | Path | What |
@@ -153,7 +182,8 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 ```
 
 Settings live in `%APPDATA%\cloud.breu.detent`: `devices.json` (known devices and
-labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder, connections), `values.json`
+labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder, connections,
+settings), `values.json`
 (current counter values), `control-states.json` (active radio states).
 
 ## CI

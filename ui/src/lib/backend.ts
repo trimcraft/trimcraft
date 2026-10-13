@@ -4,6 +4,7 @@
 import type {
   Action,
   AppMeta,
+  AppSettings,
   ButtonPair,
   Connections,
   ConnectorId,
@@ -85,6 +86,10 @@ export interface Backend {
   setRecorderConfig(config: RecorderConfig): Promise<void>;
   /** Plays the action after the countdown. */
   testAction(action: Action): Promise<void>;
+  /** Saves the Settings page and registers or removes autostart to match. */
+  setSettings(settings: AppSettings): Promise<void>;
+  /** Starts Detent as administrator (UAC prompt) and quits this instance. */
+  restartElevated(): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -142,6 +147,8 @@ async function tauriBackend(): Promise<Backend> {
     clearRecording: () => invoke("clear_recording"),
     setRecorderConfig: (config) => invoke("set_recorder_config", { config }),
     testAction: (action) => invoke("test_action", { action }),
+    setSettings: (settings) => invoke("set_settings", { settings }),
+    restartElevated: () => invoke("restart_elevated"),
   };
 }
 

@@ -44,7 +44,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
-  `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
+  `setup` (persisted config, schema-versioned), `settings` (app-wide settings, autostart
+  mechanism choice, hidden start, elevation warning rules), `virtual_control` (radios, triggers, transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
@@ -62,9 +63,13 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
+  `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),
+  `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels),
+  `foreground.rs` (WinEvent hook: warns about an elevated foreground program),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
-- `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test), `Overlay.svelte`
+- `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
+  via the gear, one component per section in `components/settings`), `Overlay.svelte`
   (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
@@ -76,9 +81,11 @@ or bump `SETUP_SCHEMA_VERSION`.
 
 Some things need real hardware and an interactive desktop: devices through DirectInput/RawInput,
 the overlay over a borderless game, the global hotkey while the game has focus, encoder pulse
-timing, the macro recorder (low-level hooks, Raw Input), Soundpad and Discord. Ignored tests need
+timing, the macro recorder (low-level hooks, Raw Input), Soundpad and Discord, the tray, autostart and
+elevation (UAC, Task Scheduler). Ignored tests need
 such a setup:
 `cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
 without playing anything; reads Discord voice settings with saved, authorized credentials and
-`DETENT_DISCORD_CLIENT_ID` set).
+`DETENT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
+Detent autostart enabled).
 Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.

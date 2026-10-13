@@ -287,6 +287,23 @@ Settings has a section **Backup & transfer**.
   with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
   in the event log.
 
+## Overlay toasts and appearance
+
+- **Toasts**: every virtual control has "Show toast on change" (off by default) in its editor. When its state or value
+  changes, a toast shows the name and the new state, e.g. "COM1 · 121.500" or "Radio · Kanal 2": it fades in and out, at
+  most 3 are stacked with the newest on top, and a repeated change of the same control updates its toast instead of
+  adding one. Switching the profile shows "Profile: <name>" (can be turned off). Duration (default 2 s), the profile
+  toast and "Show toasts while the overlay is hidden" are under Settings > Overlay appearance. With the overlay hidden by
+  the hotkey, only the toasts appear; the window stays click-through and is shown without activation, so a game keeps
+  the keyboard and mouse. The toast area is placed in Edit layout like a widget (default: top centre) and belongs to the
+  profile. "Show a test toast" in Settings tries it.
+- **Widget visibility**: in the Overlay panel each widget can be "Always" or "Only after a change" (shown for N seconds,
+  default 3, then it fades out), and can have its own size and opacity on top of the overlay's. In layout edit mode all
+  widgets are visible.
+- **Appearance** (Settings > Overlay appearance, all profiles): theme (Dark, Light, High contrast, HUD green), accent
+  color for active states, background opacity, text size and corner radius, with a live preview; the overlay window
+  follows while you adjust. The highlight of the active state never changes a widget's size in any theme.
+
 ## Layout
 
 | Path | What |

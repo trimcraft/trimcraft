@@ -5,13 +5,15 @@
   import type { EngineSnapshot } from "../../lib/types";
   import GeneralSettings from "./GeneralSettings.svelte";
   import BackupSettings from "./BackupSettings.svelte";
+  import OverlayAppearanceSettings from "./OverlayAppearanceSettings.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
   type Section = { id: string; title: string; component: Component<{ snapshot: EngineSnapshot }> };
   const GENERAL: Section = { id: "general", title: "General", component: GeneralSettings };
   const BACKUP: Section = { id: "backup", title: "Backup & transfer", component: BackupSettings };
-  const SECTIONS: Section[] = [GENERAL, BACKUP];
+  const APPEARANCE: Section = { id: "appearance", title: "Overlay appearance", component: OverlayAppearanceSettings };
+  const SECTIONS: Section[] = [GENERAL, APPEARANCE, BACKUP];
 
   let current = $state(GENERAL.id);
   let section = $derived(SECTIONS.find((s) => s.id === current) ?? GENERAL);

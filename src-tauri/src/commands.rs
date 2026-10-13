@@ -1091,4 +1091,26 @@ mod tests {
                 .is_ok()
         );
     }
+
+    #[test]
+    fn appearance_and_toast_payloads_deserialise() {
+        let appearance: detent_core::Appearance = serde_json::from_str(
+            r##"{"theme":"hudGreen","accent":"#39ff6a","backgroundOpacity":60,"textScale":1.25,"cornerRadius":4}"##,
+        )
+        .unwrap();
+        assert_eq!(appearance.theme, detent_core::overlay::Theme::HudGreen);
+        let settings: detent_core::overlay::ToastSettings =
+            serde_json::from_str(r#"{"durationMs":3000,"whileHidden":false,"profileToast":true}"#)
+                .unwrap();
+        assert_eq!(settings.duration_ms, 3000);
+        // A widget as the Overlay panel sends it back, with the new settings.
+        let item: OverlayItem = serde_json::from_str(
+            r#"{"type":"profileName","position":null,"visibility":{"mode":"afterChange","seconds":3},"scale":1.5,"opacity":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(item.scale, Some(1.5));
+        let position: Option<WidgetPosition> =
+            serde_json::from_str(r#"{"x":0.5,"y":0.1}"#).unwrap();
+        assert!(position.is_some());
+    }
 }

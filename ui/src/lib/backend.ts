@@ -12,12 +12,15 @@ import type {
   DetectorConfig,
   DiscordSetup,
   DeviceId,
+  Appearance,
   BackupInfo,
   DiagEntry,
   EngineSnapshot,
   ImportMode,
   ImportResult,
   ImportSummary,
+  Toast,
+  ToastSettings,
   FunctionDef,
   KeyInfo,
   MonitorInfo,
@@ -122,6 +125,14 @@ export interface Backend {
   /** Restores a backup after backing up the current configuration; resolves with a message. */
   restoreBackup(name: string): Promise<string>;
   openBackupFolder(): Promise<void>;
+  setOverlayAppearance(appearance: Appearance): Promise<void>;
+  setToastSettings(settings: ToastSettings): Promise<void>;
+  /** Places the toast area of the active profile; null: the default place. */
+  setToastPosition(position: WidgetPosition | null): Promise<void>;
+  /** Calls `onToasts` with the toasts on screen now and again whenever they change. */
+  subscribeToasts(onToasts: (toasts: Toast[]) => void): Promise<() => void>;
+  /** Shows a sample toast. */
+  testToast(): Promise<void>;
   /** Saves the Settings page and registers or removes autostart to match. */
   setSettings(settings: AppSettings): Promise<void>;
   /** Starts Detent as administrator (UAC prompt) and quits this instance. */
@@ -220,6 +231,15 @@ async function tauriBackend(): Promise<Backend> {
     backupNow: () => invoke("backup_now"),
     restoreBackup: (name) => invoke("restore_backup", { name }),
     openBackupFolder: () => invoke("open_backup_folder"),
+    setOverlayAppearance: (appearance) => invoke("set_overlay_appearance", { appearance }),
+    setToastSettings: (settings) => invoke("set_toast_settings", { settings }),
+    setToastPosition: (position) => invoke("set_toast_position", { position }),
+    async subscribeToasts(onToasts) {
+      const unlisten = await listen<Toast[]>("detent://toasts", (e) => onToasts(e.payload));
+      onToasts(await invoke<Toast[]>("get_toasts"));
+      return unlisten;
+    },
+    testToast: () => invoke("test_toast"),
     setSettings: (settings) => invoke("set_settings", { settings }),
     restartElevated: () => invoke("restart_elevated"),
     selectProfile: (id) => invoke("select_profile", { id }),

@@ -61,6 +61,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
+  `toast` (toast queue: newest first, one per control, at most 3, expiry),
   `transfer` (export files, secret stripping, import validation, profile merge), `backup` (backup file names
   and retention),
   `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
@@ -75,7 +76,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `discord.rs` (Discord connector: IPC pipe, token endpoint over HTTPS, worker thread with
   reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
-  low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
+  low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey), `toasts.rs` (toast queue thread; shows the window without activating it),
   `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),
   `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels,
   elevated-foreground warning), `foreground.rs` (the one `SetWinEventHook` foreground watcher,
@@ -89,7 +90,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
   via the gear, one component per section in `components/settings`), `Overlay.svelte`
   (overlay window), `components/DiagnosticsView.svelte` + `lib/diagnostics.svelte.ts` (event log tab),
-  `ProfilesPanel`/`ProfileSelector` (profiles), `ImportFlow` + `settings/BackupSettings` (export, import, backups), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  `ProfilesPanel`/`ProfileSelector` (profiles), `ToastView`, `lib/overlay-style.ts` (themes as CSS variables), `lib/widget-visibility.svelte.ts` (only-after-change widgets), `ImportFlow` + `settings/BackupSettings` (export, import, backups), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload

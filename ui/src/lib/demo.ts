@@ -8,6 +8,7 @@ import type {
   BackupInfo,
   DiagEntry,
   ExportKind,
+  Toast,
   DiscordCommand,
   GuideStep,
   EngineSnapshot,
@@ -171,7 +172,12 @@ export function createDemo(): Backend {
       { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null, missing: null },
       { id: "voicemeeter", name: "Voicemeeter", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
     ],
-    overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
+    overlay: {
+      visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [],
+      appearance: { theme: "dark", accent: null, backgroundOpacity: 72, textScale: 1, cornerRadius: 8 },
+      toasts: { durationMs: 2000, whileHidden: true, profileToast: true },
+    },
+    toastPosition: null,
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
     settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false },
     // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
@@ -182,7 +188,51 @@ export function createDemo(): Backend {
   const positions = new Map<string, number>();
   let tick = 0;
 
-  const emit = () => listeners.forEach((l) => l(structuredClone(s)));
+  // --- Toasts: the same rules as the app (a control with showToast, a profile switch) --------
+  let demoToasts: Toast[] = [];
+  const toastListeners = new Set<(t: Toast[]) => void>();
+  const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let toastId = 0;
+  const toastSeen = new Map<string, string>();
+  let toastProfile: string | null = null;
+  const sendToasts = () => toastListeners.forEach((l) => l(structuredClone(demoToasts)));
+  function pushToast(key: string, title: string, text: string) {
+    const old = demoToasts.find((t) => t.key === key);
+    const toast: Toast = old ? { ...old, title, text, version: old.version + 1 } : { id: ++toastId, key, title, text, version: 0 };
+    demoToasts = [toast, ...demoToasts.filter((t) => t.key !== key)].slice(0, 3);
+    for (const k of toastTimers.keys()) if (!demoToasts.some((t) => t.key === k)) clearTimeout(toastTimers.get(k)), toastTimers.delete(k);
+    clearTimeout(toastTimers.get(key));
+    toastTimers.set(key, setTimeout(() => {
+      demoToasts = demoToasts.filter((t) => t.key !== key);
+      toastTimers.delete(key);
+      sendToasts();
+    }, Math.min(Math.max(s.overlay.toasts.durationMs, 500), 30000)));
+    sendToasts();
+  }
+  function checkToasts() {
+    const current = s.virtualControls.filter((c) => c.showToast);
+    const value = (c: (typeof current)[number]) =>
+      c.kind.type === "radio" || c.kind.type === "mode" ? (c.activeName ?? "–") : c.kind.type === "counter" ? (c.display ?? "") : c.on ? "On" : "Off";
+    if (toastProfile !== s.activeProfile) {
+      if (toastProfile !== null && s.overlay.toasts.profileToast) pushToast("profile", "Profile:", s.profiles.find((p) => p.id === s.activeProfile)?.name ?? "");
+      toastProfile = s.activeProfile;
+      toastSeen.clear();
+      current.forEach((c) => toastSeen.set(c.id, value(c)));
+      return;
+    }
+    for (const id of [...toastSeen.keys()]) if (!current.some((c) => c.id === id)) toastSeen.delete(id);
+    for (const c of current) {
+      const v = value(c);
+      const old = toastSeen.get(c.id);
+      if (old !== undefined && old !== v) pushToast(c.id, c.name, v);
+      toastSeen.set(c.id, v);
+    }
+  }
+
+  const emit = () => {
+    checkToasts();
+    listeners.forEach((l) => l(structuredClone(s)));
+  };
 
   // Discord: a simulated voice state, changed by Discord actions (idempotent, like the app).
   // To see the guide hints: a client ID ending in 0000 is "refused" (App Testers step), a
@@ -640,6 +690,28 @@ export function createDemo(): Backend {
   let nextFn = 1;
   let nextVc = 6;
   const ok = async () => emit();
+
+  // The demo overlay page (overlay.html): switch to the DCS profile and let something happen
+  // every few seconds, so toasts, "only after a change" widgets and themes can be looked at.
+  if (typeof location !== "undefined" && location.pathname.endsWith("overlay.html")) {
+    activate("profile-2");
+    for (const c of s.virtualControls) c.showToast = ["vc-1", "vc-2", "vc-3"].includes(c.id);
+    s.overlay.widgets = [
+      { type: "radio", control: "vc-1", layout: "vertical", position: { x: 0.04, y: 0.25 } },
+      { type: "radio", control: "vc-3", layout: "vertical", position: { x: 0.04, y: 0.5 }, visibility: { mode: "afterChange", seconds: 3 } },
+      { type: "radio", control: "vc-2", layout: "vertical", position: { x: 0.04, y: 0.6 } },
+      { type: "profileName", position: { x: 0.04, y: 0.1 } },
+    ];
+    let step = 0;
+    setInterval(() => {
+      step++;
+      const find = (id: string) => s.virtualControls.find((c) => c.id === id)!;
+      runCommand(find("vc-1"), { type: "increment" });
+      if (step % 2 === 0) stepCounter(find("vc-3"), 5);
+      if (step % 4 === 0) setToggle(find("vc-2"), !find("vc-2").on);
+      emit();
+    }, 2500);
+  }
 
   return {
     meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser", elevated: s.shell.elevated }),
@@ -1142,6 +1214,26 @@ export function createDemo(): Backend {
     },
     async openBackupFolder() {
       throw new Error("not available in the browser demo");
+    },
+    async setOverlayAppearance(appearance) {
+      s.overlay.appearance = { ...appearance, backgroundOpacity: Math.min(100, Math.max(0, appearance.backgroundOpacity)), textScale: Math.min(2.5, Math.max(0.5, appearance.textScale)), cornerRadius: Math.min(32, Math.max(0, appearance.cornerRadius)), accent: appearance.accent && /^#[0-9a-f]{6}$/i.test(appearance.accent) ? appearance.accent : null };
+      emit();
+    },
+    async setToastSettings(settings) {
+      s.overlay.toasts = { ...settings, durationMs: Math.min(30000, Math.max(500, settings.durationMs)) };
+      emit();
+    },
+    async setToastPosition(position) {
+      s.toastPosition = position && { x: Math.min(1, Math.max(0, position.x)), y: Math.min(1, Math.max(0, position.y)) };
+      emit();
+    },
+    async subscribeToasts(cb) {
+      toastListeners.add(cb);
+      cb(structuredClone(demoToasts));
+      return () => toastListeners.delete(cb);
+    },
+    async testToast() {
+      pushToast("test", "Test toast", "It works");
     },
     async subscribeDiagnostics(cb) {
       diagListeners.add(cb);

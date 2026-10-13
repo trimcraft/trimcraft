@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 const EARLY_ACCESS =
   "**Early access.** Trimcraft is young: expect rough edges and back up your configuration " +
-  "(Settings, Backup & transfer) before updating. Windows 10/11 only. Install with " +
+  "(Settings, Backup & transfer) before updating. Currently runs on Windows 10/11. Install with " +
   "`Trimcraft_<version>_x64-setup.exe`; installed copies update themselves (Settings, Updates). " +
   "Windows code signing (SignPath Foundation): see the " +
   "[code signing policy](https://github.com/trimcraft/trimcraft#code-signing-policy).";

@@ -44,8 +44,10 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
-  `setup` (persisted config, schema-versioned), `settings` (app-wide settings, autostart
-  mechanism choice, hidden start, elevation warning rules), `virtual_control` (radios, triggers, transitions),
+  `setup` (persisted config, schema-versioned, migrations), `profile` (per-game profiles,
+  executable matching, auto-switch decisions), `settings` (app-wide settings outside the
+  profiles, autostart mechanism choice, hidden start, elevation warning rules),
+  `virtual_control` (radios, triggers, transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
@@ -64,13 +66,15 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),
-  `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels),
-  `foreground.rs` (WinEvent hook: warns about an elevated foreground program),
+  `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels,
+  elevated-foreground warning), `foreground.rs` (the one `SetWinEventHook` foreground watcher,
+  feeding profile switching and the elevation warning), `profile_watch.rs` (profile switching
+  from the foreground program, process window list),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
   via the gear, one component per section in `components/settings`), `Overlay.svelte`
-  (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  (overlay window), `ProfilesPanel`/`ProfileSelector` (profiles), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload

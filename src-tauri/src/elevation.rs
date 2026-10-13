@@ -4,7 +4,10 @@
 //! Windows blocks `SendInput` from a normal process into an elevated one (UIPI), so Detent's
 //! keys and mouse do not reach a game that runs as administrator unless Detent does too.
 
-use detent_core::settings::{AUTOSTART_ARG, ProcessElevation};
+use crate::Shared;
+use crate::foreground::Foreground;
+use detent_core::settings::{AUTOSTART_ARG, ProcessElevation, foreground_warning};
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, HWND, WAIT_OBJECT_0,
@@ -48,6 +51,48 @@ pub fn process_info(pid: u32) -> (ProcessElevation, Option<String>) {
     // SAFETY: opened above.
     unsafe { CloseHandle(process) };
     (elevation, name)
+}
+
+/// Executable file name of process `pid`.
+pub fn exe_name(pid: u32) -> Option<String> {
+    // SAFETY: plain call; the handle is closed below.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if process.is_null() {
+        return None;
+    }
+    let name = image_name(process);
+    // SAFETY: opened above.
+    unsafe { CloseHandle(process) };
+    name
+}
+
+/// A foreground change, for the warning: the foreground program runs as administrator and
+/// Detent does not, so Windows drops Detent's keys and mouse (UIPI). Switching to Detent
+/// itself keeps the warning so it can be read.
+pub fn check_foreground(shared: &Shared, fg: &Foreground) {
+    let mut engine = shared.engine();
+    let mut status = engine.shell_status().clone();
+    let warning = foreground_warning(
+        status.elevated,
+        fg.is_self,
+        fg.elevation,
+        &fg.name(),
+        status.elevated_foreground.as_deref(),
+    );
+    if warning == status.elevated_foreground {
+        return;
+    }
+    match &warning {
+        Some(name) => log::warn!(
+            "{name} runs as administrator; Detent's keys and mouse will not reach it ({:?})",
+            fg.elevation
+        ),
+        None => log::info!("the foreground program no longer runs as administrator"),
+    }
+    status.elevated_foreground = warning;
+    if engine.set_shell_status(status) {
+        shared.changed.store(true, Ordering::Relaxed);
+    }
 }
 
 fn denied_or_unknown() -> ProcessElevation {

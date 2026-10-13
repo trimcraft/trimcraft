@@ -1,13 +1,13 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
-use crate::{Meta, Shared, elevation, overlay, secrets};
+use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
 use detent_core::connection::{DiscordSettings, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
     Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
     DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem,
-    Phase, RadioCommand, Sound, VirtualControl, WidgetPosition,
+    Phase, ProfileSwitching, RadioCommand, Sound, VirtualControl, WidgetPosition,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -63,6 +63,16 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         test_action,
         set_settings,
         restart_elevated,
+        select_profile,
+        create_profile,
+        duplicate_profile,
+        rename_profile,
+        delete_profile,
+        make_default_profile,
+        set_profile_executables,
+        set_profile_switching,
+        toggle_overlay_profile_name,
+        list_process_windows,
     ]
 }
 
@@ -174,7 +184,7 @@ fn set_overlay_layout(shared: State<'_, Arc<Shared>>, layout: Layout) -> Res<()>
         return Err("size must be between 25% and 400%".into());
     }
     with(&shared, |e| {
-        let mut overlay = e.setup().overlay.clone();
+        let mut overlay = e.overlay();
         overlay.anchor = layout.anchor;
         overlay.margin = layout.margin.min(10_000);
         overlay.scale = layout.scale;
@@ -206,7 +216,7 @@ fn set_hotkey(app: AppHandle, shared: State<'_, Arc<Shared>>, hotkey: String) ->
         return Err(e);
     }
     with(&shared, |e| {
-        let mut overlay = e.setup().overlay.clone();
+        let mut overlay = e.overlay();
         overlay.hotkey = hotkey;
         e.set_overlay(overlay);
         Ok(())
@@ -268,6 +278,72 @@ fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: UiRadioCom
 #[tauri::command]
 fn toggle_overlay_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<bool> {
     with(&shared, |e| e.toggle_overlay_virtual_control(&id))
+}
+
+// --- Profiles -----------------------------------------------------------------------------
+
+/// The profile selector: makes a profile active (no actions run).
+#[tauri::command]
+fn select_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
+    with(&shared, |e| e.select_profile(&id))
+}
+
+/// Creates an empty profile and makes it active. Returns its id.
+#[tauri::command]
+fn create_profile(shared: State<'_, Arc<Shared>>, name: String) -> Res<String> {
+    with(&shared, |e| Ok(e.create_profile(&name)))
+}
+
+/// Copies a profile (controls, widgets, radio states; not the executables) and makes the copy
+/// active. Returns its id.
+#[tauri::command]
+fn duplicate_profile(shared: State<'_, Arc<Shared>>, id: String, name: String) -> Res<String> {
+    with(&shared, |e| e.duplicate_profile(&id, &name))
+}
+
+#[tauri::command]
+fn rename_profile(shared: State<'_, Arc<Shared>>, id: String, name: String) -> Res<()> {
+    with(&shared, |e| e.rename_profile(&id, &name))
+}
+
+#[tauri::command]
+fn delete_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
+    with(&shared, |e| e.delete_profile(&id))
+}
+
+/// Moves a profile to the front: the default profile.
+#[tauri::command]
+fn make_default_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
+    with(&shared, |e| e.make_default_profile(&id))
+}
+
+#[tauri::command]
+fn set_profile_executables(
+    shared: State<'_, Arc<Shared>>,
+    id: String,
+    executables: Vec<String>,
+) -> Res<()> {
+    with(&shared, |e| e.set_profile_executables(&id, executables))
+}
+
+/// Auto-switch on/off and what happens when no profile matches.
+#[tauri::command]
+fn set_profile_switching(shared: State<'_, Arc<Shared>>, switching: ProfileSwitching) -> Res<()> {
+    with(&shared, |e| {
+        e.set_profile_switching(switching);
+        Ok(())
+    })
+}
+
+#[tauri::command]
+fn toggle_overlay_profile_name(shared: State<'_, Arc<Shared>>) -> Res<bool> {
+    with(&shared, |e| Ok(e.toggle_overlay_profile_name()))
+}
+
+/// Programs with a window, for "Pick from running processes".
+#[tauri::command]
+fn list_process_windows() -> Vec<profile_watch::ProcessWindow> {
+    profile_watch::windows()
 }
 
 #[tauri::command]
@@ -701,6 +777,35 @@ mod tests {
         )
         .unwrap();
         keys.normalize().unwrap();
+        // Profiles.
+        let switching: ProfileSwitching =
+            serde_json::from_str(r#"{"autoSwitch":false,"noMatch":"switchToDefault"}"#).unwrap();
+        assert_eq!(switching.no_match, detent_core::NoMatch::SwitchToDefault);
+        let _: ProfileSwitching =
+            serde_json::from_str(r#"{"autoSwitch":true,"noMatch":"keepCurrent"}"#).unwrap();
+        let _: Vec<String> = serde_json::from_str(r#"["DCS.exe","C:\\Games\\x.exe"]"#).unwrap();
+        for target in [
+            r#"{"type":"profile","profile":"profile-2"}"#,
+            r#"{"type":"next"}"#,
+            r#"{"type":"previous"}"#,
+        ] {
+            let mut action: Action =
+                serde_json::from_str(&format!(r#"{{"type":"switchProfile","target":{target}}}"#))
+                    .unwrap();
+            action.normalize().unwrap();
+        }
+        let _: OverlayItem =
+            serde_json::from_str(r#"{"type":"profileName","position":{"x":0.5,"y":0.02}}"#)
+                .unwrap();
+        // The picker reads these (ui/src/lib/types.ts: ProcessWindow).
+        let window = serde_json::to_value(profile_watch::ProcessWindow {
+            exe: "DCS.exe".into(),
+            title: "DCS".into(),
+        })
+        .unwrap();
+        assert_eq!(window["exe"], "DCS.exe");
+        assert_eq!(window["title"], "DCS");
+
         for command in [
             r#""increment""#,
             r#""decrement""#,

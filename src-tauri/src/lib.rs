@@ -7,6 +7,7 @@ mod elevation;
 mod executor;
 mod foreground;
 mod overlay;
+mod profile_watch;
 mod recorder;
 mod secrets;
 mod soundpad;
@@ -58,6 +59,8 @@ pub struct Shared {
     discord: Arc<Discord>,
     recorder: recorder::Recorder,
     meta: Meta,
+    /// The profile last reported in the log.
+    logged_profile: Mutex<String>,
 }
 
 impl Shared {
@@ -77,6 +80,7 @@ impl Shared {
     /// Hands the actions the engine emitted to the executor thread, in order. Actions whose
     /// connection is disabled stay stored but are skipped with a warning.
     fn dispatch(&self, engine: &mut Engine) {
+        self.log_profile(engine);
         let actions: Vec<_> = engine
             .take_actions()
             .into_iter()
@@ -95,6 +99,24 @@ impl Shared {
             .collect();
         if !actions.is_empty() {
             self.executor.submit(actions);
+        }
+    }
+
+    /// Logs a change of the active profile, however it happened.
+    fn log_profile(&self, engine: &Engine) {
+        let setup = engine.setup();
+        let mut logged = self
+            .logged_profile
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if *logged != setup.active_profile {
+            logged.clone_from(&setup.active_profile);
+            let foreground = engine.foreground();
+            log::info!(
+                "profile: \"{}\" active (foreground: {})",
+                setup.profile().name,
+                foreground.unwrap_or("-")
+            );
         }
     }
 
@@ -184,9 +206,7 @@ pub fn run() {
             sync_autostart(&shared);
             tray::create(&handle, shared.engine().setup().overlay.visible)?;
             overlay::create(&handle, &shared)?;
-            if !elevated {
-                foreground::watch(shared.clone());
-            }
+            watch_foreground(&shared);
             if let Some(main) = handle.get_webview_window("main") {
                 if hidden {
                     log::info!("started in the tray");
@@ -323,6 +343,7 @@ fn load(
         discord,
         recorder: recorder::Recorder::default(),
         meta,
+        logged_profile: Mutex::new(String::new()),
     })
 }
 
@@ -381,6 +402,17 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
             }
         })
         .expect("spawn engine thread");
+}
+
+/// One foreground watcher for both consumers: the engine switches profiles as set, and the
+/// main window warns when the foreground program runs as administrator and Detent does not.
+fn watch_foreground(shared: &Arc<Shared>) {
+    let weak = Arc::downgrade(shared);
+    foreground::watch(move |fg| {
+        let Some(shared) = weak.upgrade() else { return };
+        profile_watch::on_foreground(&shared, fg);
+        elevation::check_foreground(&shared, fg);
+    });
 }
 
 /// Connector status changes go into the engine, so both windows see them.

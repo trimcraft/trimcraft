@@ -14,12 +14,13 @@ use crate::encoder::{
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
 use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
+use crate::profile::{AutoSwitch, Profile, ProfileSwitching, ProfileTarget, normalize_executable};
 use crate::recording::{
     RecordKind, RecorderConfig, RecorderError, RecorderPhase, RecorderView, RecordingResult,
 };
 use crate::registry::DeviceRegistry;
 use crate::settings::{AppSettings, ShellStatus};
-use crate::setup::{ButtonPair, Setup};
+use crate::setup::{ButtonPair, Setup, next_id};
 use crate::state::{ButtonEdge, HatEdge};
 use crate::state::{LiveState, Snapshot};
 use crate::virtual_control::{
@@ -72,6 +73,21 @@ pub enum EngineError {
     Connection(#[from] ConnectionError),
     #[error("a recording is already running")]
     Recording,
+    #[error("unknown profile {0}")]
+    UnknownProfile(String),
+    #[error("the last profile cannot be deleted")]
+    LastProfile,
+    #[error("\"{0}\" is not a program name; enter e.g. DCS.exe")]
+    BadExecutable(String),
+}
+
+/// A profile without its controls and widgets (the snapshot carries the active profile's).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileView {
+    pub id: String,
+    pub name: String,
+    pub executables: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -134,6 +150,13 @@ pub struct EngineSnapshot {
     pub half_detected: Vec<ButtonPair>,
     pub button_stats: Vec<ButtonStats>,
     pub functions: Vec<FunctionView>,
+    /// All profiles in order; the first is the default profile.
+    pub profiles: Vec<ProfileView>,
+    pub active_profile: String,
+    pub profile_switching: ProfileSwitching,
+    /// The program in the foreground (not Detent), as auto-switching sees it.
+    pub foreground: Option<String>,
+    /// The active profile's virtual controls.
     pub virtual_controls: Vec<VirtualControlView>,
     /// `None` unless learn mode is on or just captured something.
     pub learn: Option<LearnView>,
@@ -145,6 +168,7 @@ pub struct EngineSnapshot {
     pub connections: Connections,
     /// Every connector with its live status.
     pub connectors: Vec<ConnectorView>,
+    /// Global overlay settings with the active profile's widgets.
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
     /// App-wide settings (Settings page).
@@ -167,8 +191,10 @@ pub struct Engine {
     detector: EncoderDetector,
     positions: HashMap<String, i64>,
     steps: HashMap<(String, bool), u64>,
-    /// Active and most recently active state per virtual control.
+    /// Active and most recently active state per virtual control, of all profiles (control
+    /// ids are unique across profiles).
     memory: HashMap<String, RadioMemory>,
+    auto_switch: AutoSwitch,
     /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
     actions: Vec<ActionRequest>,
     learn: Learn,
@@ -203,6 +229,7 @@ impl Engine {
             positions,
             steps: HashMap::new(),
             memory: HashMap::new(),
+            auto_switch: AutoSwitch::default(),
             actions: Vec::new(),
             learn: Learn::Off,
             overlay_editing: false,
@@ -218,7 +245,7 @@ impl Engine {
     /// control set to start empty starts with nothing active but remembers the state that
     /// was active, so toggle off brings it back.
     pub fn restore_active_states(&mut self, saved: &BTreeMap<String, RadioMemory>) {
-        for control in &self.setup.virtual_controls {
+        for control in self.setup.profiles.iter().flat_map(|p| &p.virtual_controls) {
             let radio = control.radio();
             let Some(mut memory) = saved.get(&control.id).cloned() else {
                 continue;
@@ -269,9 +296,11 @@ impl Engine {
                 // The first trigger wins: an encoder detent before the plain button press.
                 self.learn = Learn::Captured(fired.swap_remove(0));
             } else {
+                let queued = self.actions.len();
                 for trigger in &fired {
                     self.fire(trigger);
                 }
+                self.run_profile_switches(queued);
             }
         }
         applied.state_changed
@@ -305,12 +334,33 @@ impl Engine {
         })
     }
 
-    /// Runs `trigger` through every virtual control, in setup order.
+    /// Runs `trigger` through every virtual control of the active profile, in setup order.
+    /// Profile switches it causes take effect afterwards (see [`Self::run_profile_switches`]),
+    /// so the triggers of one input edge all reach the same profile.
     fn fire(&mut self, trigger: &Trigger) {
-        for control in &self.setup.virtual_controls {
+        let active = self.setup.active_index();
+        for control in &self.setup.profiles[active].virtual_controls {
             for command in control.radio().commands_for(trigger) {
                 self.dirty.controls |=
                     run_radio_command(control, command, &mut self.memory, &mut self.actions);
+            }
+        }
+    }
+
+    /// Carries out the "Switch profile" actions queued since index `from`, in order. They
+    /// stay in the queue, so the app logs them like every action.
+    fn run_profile_switches(&mut self, from: usize) {
+        let targets: Vec<ProfileTarget> = self.actions[from..]
+            .iter()
+            .filter_map(|r| match &r.action {
+                Action::SwitchProfile { target } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        for target in targets {
+            if let Some(index) = target.resolve(&self.setup.profiles, self.setup.active_index()) {
+                self.auto_switch.manual_switch();
+                self.activate_profile(index);
             }
         }
     }
@@ -449,8 +499,22 @@ impl Engine {
                     }
                 })
                 .collect(),
+            profiles: self
+                .setup
+                .profiles
+                .iter()
+                .map(|p| ProfileView {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    executables: p.executables.clone(),
+                })
+                .collect(),
+            active_profile: self.setup.active_profile.clone(),
+            profile_switching: self.setup.profile_switching,
+            foreground: self.auto_switch.foreground().map(str::to_owned),
             virtual_controls: self
                 .setup
+                .profile()
                 .virtual_controls
                 .iter()
                 .map(|c| self.control_view(c))
@@ -476,7 +540,7 @@ impl Engine {
                     )
                 })
                 .collect(),
-            overlay: self.setup.overlay.clone(),
+            overlay: self.overlay(),
             detector: self.setup.detector,
             settings: self.setup.settings.clone(),
             shell: self.shell.clone(),
@@ -564,7 +628,12 @@ impl Engine {
                 *input = CounterInput::None;
             }
         }
-        for control in &mut self.setup.virtual_controls {
+        for control in self
+            .setup
+            .profiles
+            .iter_mut()
+            .flat_map(|p| &mut p.virtual_controls)
+        {
             for slot in control.radio_mut().triggers_mut() {
                 slot.retain(
                     |t| !matches!(t, Trigger::EncoderStep { encoder, .. } if encoder == id),
@@ -620,7 +689,9 @@ impl Engine {
     pub fn remove_function(&mut self, id: &str) -> Result<(), EngineError> {
         self.function(id)?;
         self.setup.functions.retain(|f| f.id != id);
-        self.setup.overlay.remove_function(id);
+        for profile in &mut self.setup.profiles {
+            profile.overlay_widgets.remove_function(id);
+        }
         self.positions.remove(id);
         self.dirty.setup = true;
         self.dirty.values = true;
@@ -638,17 +709,30 @@ impl Engine {
 
     pub fn toggle_overlay_control(&mut self, device: &DeviceId, control: ControlRef) -> bool {
         self.dirty.setup = true;
-        self.setup.overlay.toggle_control(device, control)
+        self.setup
+            .profile_mut()
+            .overlay_widgets
+            .toggle_control(device, control)
     }
 
     pub fn toggle_overlay_function(&mut self, id: &str) -> Result<bool, EngineError> {
         self.function(id)?;
         self.dirty.setup = true;
-        Ok(self.setup.overlay.toggle_function(id))
+        Ok(self.setup.profile_mut().overlay_widgets.toggle_function(id))
     }
 
-    /// Replaces layout settings (anchor, margin, scale, hotkey, visibility, widget order).
-    pub fn set_overlay(&mut self, overlay: OverlayConfig) {
+    /// The overlay as the windows show it: global settings with the active profile's widgets.
+    pub fn overlay(&self) -> OverlayConfig {
+        OverlayConfig {
+            widgets: self.setup.profile().overlay_widgets.clone(),
+            ..self.setup.overlay.clone()
+        }
+    }
+
+    /// Replaces layout settings (anchor, margin, scale, hotkey, visibility) and the active
+    /// profile's widgets (their order); takes what [`Self::overlay`] returns.
+    pub fn set_overlay(&mut self, mut overlay: OverlayConfig) {
+        self.setup.profile_mut().overlay_widgets = std::mem::take(&mut overlay.widgets);
         self.setup.overlay = overlay;
         self.dirty.setup = true;
     }
@@ -666,8 +750,8 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let slot = self
             .setup
-            .overlay
-            .widgets
+            .profile_mut()
+            .overlay_widgets
             .get_mut(index)
             .ok_or(EngineError::UnknownWidget(index))?;
         if !slot.widget.same_target(&item.widget) {
@@ -684,7 +768,7 @@ impl Engine {
         &mut self,
         positions: Vec<Option<WidgetPosition>>,
     ) -> Result<(), EngineError> {
-        let widgets = &mut self.setup.overlay.widgets;
+        let widgets = &mut self.setup.profile_mut().overlay_widgets;
         if positions.len() != widgets.len() {
             return Err(EngineError::WidgetCount {
                 expected: widgets.len(),
@@ -704,6 +788,15 @@ impl Engine {
         self.dirty.setup = true;
     }
 
+    /// Shows or hides the active profile's name on the overlay (for the active profile).
+    pub fn toggle_overlay_profile_name(&mut self) -> bool {
+        self.dirty.setup = true;
+        self.setup
+            .profile_mut()
+            .overlay_widgets
+            .toggle_profile_name()
+    }
+
     /// Layout edit mode: the overlay window takes the mouse so widgets can be dragged.
     pub fn set_overlay_editing(&mut self, editing: bool) {
         self.overlay_editing = editing;
@@ -719,7 +812,8 @@ impl Engine {
         self.dirty.setup = true;
     }
 
-    /// Creates the control if `control.id` is empty, updates it otherwise. Returns its id.
+    /// Creates the control (in the active profile) if `control.id` is empty, updates it
+    /// otherwise, in whichever profile it belongs to. Returns its id.
     ///
     /// Editing never runs actions. The active state is kept if it still exists; a new control
     /// starts with no state active and is put on the overlay.
@@ -736,25 +830,28 @@ impl Engine {
                 return Err(EngineError::UnknownEncoder(encoder.clone()));
             }
         }
+        for state in &radio.states {
+            for action in state.on_activate.iter().chain(&state.on_deactivate) {
+                if let Action::SwitchProfile {
+                    target: ProfileTarget::Profile { profile },
+                } = action
+                {
+                    self.profile_index(profile)?;
+                }
+            }
+        }
         control.name = control.name.trim().to_owned();
         if control.name.is_empty() {
             control.name = "Radio".into();
         }
         if control.id.is_empty() {
-            control.id = next_id(
-                "vc",
-                self.setup.virtual_controls.iter().map(|c| c.id.as_str()),
-            );
-            self.setup.overlay.toggle_virtual_control(&control.id);
-            self.setup.virtual_controls.push(control.clone());
+            control.id = next_id("vc", self.all_controls().map(|c| c.id.as_str()));
+            let profile = self.setup.profile_mut();
+            profile.overlay_widgets.toggle_virtual_control(&control.id);
+            profile.virtual_controls.push(control.clone());
         } else {
-            let slot = self
-                .setup
-                .virtual_controls
-                .iter_mut()
-                .find(|c| c.id == control.id)
-                .ok_or_else(|| EngineError::UnknownControl(control.id.clone()))?;
-            *slot = control.clone();
+            let (p, c) = self.control_position(&control.id)?;
+            self.setup.profiles[p].virtual_controls[c] = control.clone();
             if let Some(memory) = self.memory.get_mut(&control.id) {
                 let before = memory.clone();
                 memory.retain_existing(control.radio());
@@ -766,9 +863,10 @@ impl Engine {
     }
 
     pub fn remove_virtual_control(&mut self, id: &str) -> Result<(), EngineError> {
-        self.virtual_control(id)?;
-        self.setup.virtual_controls.retain(|c| c.id != id);
-        self.setup.overlay.remove_virtual_control(id);
+        let (p, c) = self.control_position(id)?;
+        let profile = &mut self.setup.profiles[p];
+        profile.virtual_controls.remove(c);
+        profile.overlay_widgets.remove_virtual_control(id);
         self.memory.remove(id);
         self.dirty.setup = true;
         self.dirty.controls = true;
@@ -777,13 +875,8 @@ impl Engine {
 
     /// Sets the active state (or none) without running actions, e.g. to match the game.
     pub fn set_radio_active(&mut self, id: &str, state: Option<String>) -> Result<(), EngineError> {
-        let radio = self
-            .setup
-            .virtual_controls
-            .iter()
-            .find(|c| c.id == id)
-            .ok_or_else(|| EngineError::UnknownControl(id.into()))?
-            .radio();
+        let (p, c) = self.control_position(id)?;
+        let radio = self.setup.profiles[p].virtual_controls[c].radio();
         let to = match state {
             Some(state) => Some(
                 radio
@@ -799,21 +892,24 @@ impl Engine {
 
     /// Runs a radio command as if a trigger had fired, including its actions.
     pub fn command_radio(&mut self, id: &str, command: RadioCommand) -> Result<(), EngineError> {
-        let control = self
-            .setup
-            .virtual_controls
-            .iter()
-            .find(|c| c.id == id)
-            .ok_or_else(|| EngineError::UnknownControl(id.into()))?;
-        self.dirty.controls |=
-            run_radio_command(control, command, &mut self.memory, &mut self.actions);
+        let (p, c) = self.control_position(id)?;
+        let queued = self.actions.len();
+        self.dirty.controls |= run_radio_command(
+            &self.setup.profiles[p].virtual_controls[c],
+            command,
+            &mut self.memory,
+            &mut self.actions,
+        );
+        self.run_profile_switches(queued);
         Ok(())
     }
 
     pub fn toggle_overlay_virtual_control(&mut self, id: &str) -> Result<bool, EngineError> {
-        self.virtual_control(id)?;
+        let (p, _) = self.control_position(id)?;
         self.dirty.setup = true;
-        Ok(self.setup.overlay.toggle_virtual_control(id))
+        Ok(self.setup.profiles[p]
+            .overlay_widgets
+            .toggle_virtual_control(id))
     }
 
     /// Starts learn mode: the next button press, hat direction or encoder detent is captured
@@ -967,11 +1063,184 @@ impl Engine {
         Ok(())
     }
 
-    fn virtual_control(&self, id: &str) -> Result<&VirtualControl, EngineError> {
+    // --- Profiles -------------------------------------------------------------------------
+    //
+    // Switching profiles never runs actions: each profile's radios keep their states and are
+    // simply shown again.
+
+    /// Makes the profile at `index` active. Returns whether it changed.
+    fn activate_profile(&mut self, index: usize) -> bool {
+        let id = &self.setup.profiles[index].id;
+        if *id == self.setup.active_profile {
+            return false;
+        }
+        self.setup.active_profile.clone_from(id);
+        self.dirty.setup = true;
+        true
+    }
+
+    /// The user picks a profile (selector in the main window). It stays until the next
+    /// foreground change to a program that a profile lists.
+    pub fn select_profile(&mut self, id: &str) -> Result<(), EngineError> {
+        let index = self.profile_index(id)?;
+        self.auto_switch.manual_switch();
+        self.activate_profile(index);
+        Ok(())
+    }
+
+    /// The foreground window changed to the program `exe` (`None`: Detent itself, or a
+    /// program whose name cannot be read). Switches profiles as set; returns whether anything
+    /// visible changed.
+    pub fn foreground_changed(&mut self, exe: Option<&str>) -> bool {
+        let before = self.auto_switch.foreground().map(str::to_owned);
+        let switch = self.auto_switch.foreground_changed(
+            exe,
+            &self.setup.profiles,
+            self.setup.active_index(),
+            self.setup.profile_switching,
+        );
+        let switched = switch.is_some_and(|i| self.activate_profile(i));
+        switched || before.as_deref() != self.auto_switch.foreground()
+    }
+
+    /// The program in the foreground as auto-switching last saw it.
+    pub fn foreground(&self) -> Option<&str> {
+        self.auto_switch.foreground()
+    }
+
+    pub fn set_profile_switching(&mut self, switching: ProfileSwitching) {
+        self.setup.profile_switching = switching;
+        self.dirty.setup = true;
+    }
+
+    /// Creates an empty profile and makes it active, so it can be set up. Returns its id.
+    pub fn create_profile(&mut self, name: &str) -> String {
+        let id = next_id("profile", self.setup.profiles.iter().map(|p| p.id.as_str()));
+        let name = match name.trim() {
+            "" => format!("Profile {}", self.setup.profiles.len() + 1),
+            name => name.to_owned(),
+        };
+        self.setup.profiles.push(Profile::new(id.clone(), name));
+        self.auto_switch.manual_switch();
+        self.activate_profile(self.setup.profiles.len() - 1);
+        id
+    }
+
+    /// Copies a profile with all its controls, widgets and radio states, and makes the copy
+    /// active. The copy lists no executables, so it never takes over from the original
+    /// automatically. Its controls get new ids. Returns the new profile's id.
+    pub fn duplicate_profile(&mut self, id: &str, name: &str) -> Result<String, EngineError> {
+        let source = self.profile_index(id)?;
+        let mut copy = self.setup.profiles[source].clone();
+        copy.id = next_id("profile", self.setup.profiles.iter().map(|p| p.id.as_str()));
+        copy.name = match name.trim() {
+            "" => format!("{} copy", copy.name),
+            name => name.to_owned(),
+        };
+        copy.executables.clear();
+        let mut taken: Vec<String> = self.all_controls().map(|c| c.id.clone()).collect();
+        let mut renamed = HashMap::new();
+        for control in &mut copy.virtual_controls {
+            let new = next_id("vc", taken.iter().map(String::as_str));
+            taken.push(new.clone());
+            if let Some(memory) = self.memory.get(&control.id).cloned() {
+                self.memory.insert(new.clone(), memory);
+                self.dirty.controls = true;
+            }
+            renamed.insert(std::mem::replace(&mut control.id, new.clone()), new);
+        }
+        copy.overlay_widgets.rename_virtual_controls(&renamed);
+        let new_id = copy.id.clone();
+        self.setup.profiles.push(copy);
+        self.auto_switch.manual_switch();
+        self.activate_profile(self.setup.profiles.len() - 1);
+        Ok(new_id)
+    }
+
+    pub fn rename_profile(&mut self, id: &str, name: &str) -> Result<(), EngineError> {
+        let index = self.profile_index(id)?;
+        if !name.trim().is_empty() {
+            self.setup.profiles[index].name = name.trim().to_owned();
+            self.dirty.setup = true;
+        }
+        Ok(())
+    }
+
+    /// Deletes a profile with its controls; not the last one. If it was active, the default
+    /// profile (the first remaining) takes over.
+    pub fn delete_profile(&mut self, id: &str) -> Result<(), EngineError> {
+        let index = self.profile_index(id)?;
+        if self.setup.profiles.len() == 1 {
+            return Err(EngineError::LastProfile);
+        }
+        let removed = self.setup.profiles.remove(index);
+        for control in &removed.virtual_controls {
+            self.memory.remove(&control.id);
+        }
+        if removed.id == self.setup.active_profile {
+            self.setup.active_profile = self.setup.profiles[0].id.clone();
+        }
+        self.dirty.setup = true;
+        self.dirty.controls = true;
+        Ok(())
+    }
+
+    /// Makes a profile the default one by moving it to the front of the list.
+    pub fn make_default_profile(&mut self, id: &str) -> Result<(), EngineError> {
+        let index = self.profile_index(id)?;
+        let profile = self.setup.profiles.remove(index);
+        self.setup.profiles.insert(0, profile);
+        self.dirty.setup = true;
+        Ok(())
+    }
+
+    /// Replaces the programs that make a profile active. Names are cleaned up (a full path
+    /// keeps only the file name, `.exe` is added when there is no extension) and duplicates
+    /// dropped.
+    pub fn set_profile_executables(
+        &mut self,
+        id: &str,
+        executables: Vec<String>,
+    ) -> Result<(), EngineError> {
+        let index = self.profile_index(id)?;
+        let mut clean: Vec<String> = Vec::new();
+        for name in executables {
+            let exe = normalize_executable(&name).ok_or(EngineError::BadExecutable(name))?;
+            if !clean
+                .iter()
+                .any(|e| crate::profile::same_executable(e, &exe))
+            {
+                clean.push(exe);
+            }
+        }
+        self.setup.profiles[index].executables = clean;
+        self.dirty.setup = true;
+        Ok(())
+    }
+
+    fn profile_index(&self, id: &str) -> Result<usize, EngineError> {
         self.setup
-            .virtual_controls
+            .profiles
             .iter()
-            .find(|c| c.id == id)
+            .position(|p| p.id == id)
+            .ok_or_else(|| EngineError::UnknownProfile(id.into()))
+    }
+
+    /// The controls of all profiles.
+    fn all_controls(&self) -> impl Iterator<Item = &VirtualControl> {
+        self.setup.profiles.iter().flat_map(|p| &p.virtual_controls)
+    }
+
+    /// Profile index and index within it of a control, in any profile.
+    fn control_position(&self, id: &str) -> Result<(usize, usize), EngineError> {
+        self.setup
+            .profiles
+            .iter()
+            .enumerate()
+            .find_map(|(p, profile)| {
+                let c = profile.virtual_controls.iter().position(|c| c.id == id)?;
+                Some((p, c))
+            })
             .ok_or_else(|| EngineError::UnknownControl(id.into()))
     }
 
@@ -1008,19 +1277,6 @@ fn run_radio_command(
         }
         None => false,
     }
-}
-
-fn next_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
-    let max = existing
-        .filter_map(|id| {
-            id.strip_prefix(prefix)?
-                .strip_prefix('-')?
-                .parse::<u32>()
-                .ok()
-        })
-        .max()
-        .unwrap_or(0);
-    format!("{prefix}-{}", max + 1)
 }
 
 #[cfg(test)]
@@ -1271,9 +1527,7 @@ mod tests {
             .into_iter()
             .flat_map(|a| match a.action {
                 Action::KeyboardMacro { steps, .. } => steps,
-                Action::MouseMacro { .. } | Action::Soundpad { .. } | Action::Discord { .. } => {
-                    vec![]
-                }
+                _ => vec![],
             })
             .filter_map(|s| match s {
                 KeyStep::KeyTap { key, .. } => Some(key),
@@ -1394,7 +1648,7 @@ mod tests {
         assert!(restarted.take_actions().is_empty());
 
         let mut setup = engine.setup().clone();
-        setup.virtual_controls[0].radio_mut().startup = Startup::Empty;
+        setup.profile_mut().virtual_controls[0].radio_mut().startup = Startup::Empty;
         let mut empty = Engine::new(engine.registry().clone(), setup, &BTreeMap::new());
         empty.restore_active_states(&saved);
         assert_eq!(active(&empty, &id), None);
@@ -1456,7 +1710,7 @@ mod tests {
         vjoy.fingerprint.serial = None;
         engine.apply(BackendEvent::Added(vjoy));
         let vjoy_id = DeviceId("1234:bead#1".into());
-        let mut control = engine.setup().virtual_controls[0].clone();
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
         control.radio_mut().states[0].select.push(Trigger::Button {
             device: vjoy_id,
             index: 3,
@@ -1491,7 +1745,7 @@ mod tests {
         let (mut engine, id) = engine_with_radio(|_| {});
         press(&mut engine, 0, 0);
         engine.take_actions();
-        let mut control = engine.setup().virtual_controls[0].clone();
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
         control.radio_mut().states.swap(0, 1);
         control.radio_mut().states[0].name = "Bravo".into();
         engine.save_virtual_control(control.clone()).unwrap();
@@ -1506,7 +1760,7 @@ mod tests {
     #[test]
     fn new_control_goes_on_the_overlay_and_removal_cleans_up() {
         let (mut engine, id) = engine_with_radio(|_| {});
-        assert!(engine.setup().overlay.has_virtual_control(&id));
+        assert!(engine.overlay().widgets.has_virtual_control(&id));
         assert!(!engine.toggle_overlay_virtual_control(&id).unwrap());
         assert!(engine.toggle_overlay_virtual_control(&id).unwrap());
         press(&mut engine, 0, 0);
@@ -1548,7 +1802,7 @@ mod tests {
         ));
         r.states[0].on_activate = vec![tap("f1")];
         let id = engine.save_virtual_control(control(r)).unwrap();
-        let saved = &engine.setup().virtual_controls[0];
+        let saved = &engine.setup().profile().virtual_controls[0];
         assert_eq!(
             (saved.id.as_str(), saved.name.as_str()),
             (id.as_str(), "Radio")
@@ -1561,7 +1815,7 @@ mod tests {
     fn removing_encoder_removes_its_triggers() {
         let (mut engine, id) = engine_with_radio(|_| {});
         engine.remove_encoder("enc-1").unwrap();
-        let radio = engine.setup().virtual_controls[0].radio().clone();
+        let radio = engine.setup().profile().virtual_controls[0].radio().clone();
         assert!(radio.increment.is_empty() && radio.decrement.is_empty());
         assert_eq!(radio.clear.len(), 1);
         press(&mut engine, 11, 0);
@@ -1702,7 +1956,7 @@ mod tests {
         engine
             .set_overlay_positions(vec![p(0.1, 0.2), p(2.0, -1.0)])
             .unwrap();
-        let widgets = &engine.setup().overlay.widgets;
+        let widgets = &engine.overlay().widgets;
         assert_eq!(widgets[0].position, p(0.1, 0.2));
         assert_eq!(widgets[1].position, p(1.0, 0.0));
         assert_eq!(
@@ -1713,14 +1967,14 @@ mod tests {
             })
         );
 
-        let mut radio = engine.setup().overlay.widgets[0].clone();
+        let mut radio = engine.overlay().widgets[0].clone();
         radio.widget = OverlayWidget::Radio {
             control: id.clone(),
             layout: RadioLayout::Horizontal,
         };
         radio.position = None;
         engine.set_overlay_widget(0, radio.clone()).unwrap();
-        assert_eq!(engine.setup().overlay.widgets[0], radio);
+        assert_eq!(engine.overlay().widgets[0], radio);
 
         let other = OverlayItem::from(OverlayWidget::Function {
             function: "fn-9".into(),
@@ -1746,7 +2000,7 @@ mod tests {
             height: 1440,
         };
         engine.set_overlay_monitor(Some(monitor.clone()));
-        assert_eq!(engine.setup().overlay.monitor, Some(monitor));
+        assert_eq!(engine.overlay().monitor, Some(monitor));
         assert!(engine.take_dirty().setup);
         engine.set_overlay_editing(true);
         assert!(engine.snapshot().overlay_editing);
@@ -1806,7 +2060,7 @@ mod tests {
 
         // Starting empty: the state active at shutdown is the one toggle off brings back.
         let mut setup = engine.setup().clone();
-        setup.virtual_controls[0].radio_mut().startup = Startup::Empty;
+        setup.profile_mut().virtual_controls[0].radio_mut().startup = Startup::Empty;
         let mut before = restart(&engine, engine.setup().clone());
         press(&mut before, 5, 0); // B active at shutdown
         let mut empty = restart(&before, setup);
@@ -1820,7 +2074,7 @@ mod tests {
         let (mut engine, id) = engine_with_radio(|r| r.toggle_off.push(button(5)));
         press(&mut engine, 0, 0); // B
         press(&mut engine, 5, 100); // off, remembers B
-        let mut control = engine.setup().virtual_controls[0].clone();
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
         control.radio_mut().states.remove(1);
         engine.save_virtual_control(control).unwrap();
         assert!(!engine.active_states().contains_key(&id));
@@ -1838,6 +2092,377 @@ mod tests {
         press(&mut engine, 5, 0);
         assert_eq!(active(&engine, &id).as_deref(), Some("C"));
     }
+
+    // --- Profiles -------------------------------------------------------------------------
+
+    use crate::profile::{DEFAULT_PROFILE_ID, NoMatch};
+
+    fn switch_to(target: ProfileTarget) -> Action {
+        Action::SwitchProfile { target }
+    }
+
+    fn active_profile_name(engine: &Engine) -> String {
+        engine.setup().profile().name.clone()
+    }
+
+    /// The default profile with the radio "Comms" (button 0 selects B), and "DCS" (DCS.exe),
+    /// a copy of it whose radio got its own id. The default profile is active.
+    fn engine_with_two_profiles() -> (Engine, String, String) {
+        let (mut engine, default_radio) = engine_with_radio(|_| {});
+        let dcs = engine.duplicate_profile(DEFAULT_PROFILE_ID, "DCS").unwrap();
+        engine
+            .set_profile_executables(&dcs, vec!["DCS.exe".into()])
+            .unwrap();
+        let dcs_radio = engine.setup().profile().virtual_controls[0].id.clone();
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        (engine, default_radio, dcs_radio)
+    }
+
+    fn profile_id(engine: &Engine, index: usize) -> String {
+        engine.setup().profiles[index].id.clone()
+    }
+
+    #[test]
+    fn new_setup_has_one_default_profile() {
+        let engine = Engine::new(
+            DeviceRegistry::default(),
+            Setup::default(),
+            &BTreeMap::new(),
+        );
+        let snap = engine.snapshot();
+        assert_eq!(snap.profiles.len(), 1);
+        assert_eq!(snap.profiles[0].name, "Default");
+        assert_eq!(snap.active_profile, DEFAULT_PROFILE_ID);
+        assert!(snap.profile_switching.auto_switch);
+        assert_eq!(snap.foreground, None);
+    }
+
+    #[test]
+    fn duplicate_is_a_deep_copy_with_new_ids() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        assert_ne!(default_radio, dcs_radio);
+        let setup = engine.setup();
+        let (default, dcs) = (&setup.profiles[0], &setup.profiles[1]);
+        assert_eq!(dcs.name, "DCS");
+        assert_eq!(dcs.executables, ["DCS.exe"]);
+        assert!(default.executables.is_empty());
+        assert_eq!(
+            dcs.virtual_controls[0].radio(),
+            default.virtual_controls[0].radio()
+        );
+        // The copy's overlay shows the copy's radio.
+        assert!(dcs.overlay_widgets.has_virtual_control(&dcs_radio));
+        assert!(!dcs.overlay_widgets.has_virtual_control(&default_radio));
+        // Editing the copy leaves the original alone.
+        engine.select_profile(&profile_id(&engine, 1)).unwrap();
+        let mut copy = engine.setup().profile().virtual_controls[0].clone();
+        copy.name = "Comms DCS".into();
+        copy.radio_mut().states.pop();
+        engine.save_virtual_control(copy).unwrap();
+        let setup = engine.setup();
+        assert_eq!(setup.profiles[0].virtual_controls[0].name, "Comms");
+        assert_eq!(
+            setup.profiles[0].virtual_controls[0].radio().states.len(),
+            3
+        );
+        assert_eq!(
+            setup.profiles[1].virtual_controls[0].radio().states.len(),
+            2
+        );
+        // A duplicate without a name gets one, and becomes active.
+        let id = engine.duplicate_profile(DEFAULT_PROFILE_ID, " ").unwrap();
+        assert_eq!(active_profile_name(&engine), "Default copy");
+        assert_eq!(engine.setup().active_profile, id);
+        // Control ids stay unique over all profiles.
+        let mut ids: Vec<_> = engine.all_controls().map(|c| c.id.clone()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn profiles_keep_their_own_radio_states_and_switching_is_silent() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        // Button 0 selects B in the active (default) profile only.
+        press(&mut engine, 0, 0);
+        assert_eq!(keys(&mut engine), ["F3"]);
+        assert_eq!(active(&engine, &default_radio).as_deref(), Some("B"));
+        assert!(!engine.active_states().contains_key(&dcs_radio));
+        // Switching to DCS runs nothing and shows DCS's radio, with nothing active.
+        engine.take_dirty();
+        assert!(engine.foreground_changed(Some("dcs.exe")));
+        assert!(engine.take_dirty().setup);
+        assert!(engine.take_actions().is_empty());
+        assert_eq!(active_profile_name(&engine), "DCS");
+        let snap = engine.snapshot();
+        assert_eq!(snap.virtual_controls.len(), 1);
+        assert_eq!(snap.virtual_controls[0].control.id, dcs_radio);
+        assert_eq!(snap.virtual_controls[0].active, None);
+        assert_eq!(snap.foreground.as_deref(), Some("dcs.exe"));
+        // Input now reaches DCS's radio only.
+        press(&mut engine, 0, 100);
+        assert_eq!(keys(&mut engine), ["F3"]);
+        pulse(&mut engine, 11, 200);
+        assert_eq!(keys(&mut engine), ["F4", "F5"]);
+        assert_eq!(active(&engine, &dcs_radio).as_deref(), Some("C"));
+        assert_eq!(
+            engine.active_states()[&default_radio].active.as_deref(),
+            Some("st-2")
+        );
+        // Back to the default profile: its state is still B, again without actions.
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        assert!(engine.take_actions().is_empty());
+        assert_eq!(active(&engine, &default_radio).as_deref(), Some("B"));
+        // Both are persisted and restored after a restart.
+        let states = engine.active_states();
+        assert_eq!(states[&default_radio].active.as_deref(), Some("st-2"));
+        assert_eq!(states[&dcs_radio].active.as_deref(), Some("st-3"));
+        let mut restarted = restart(&engine, engine.setup().clone());
+        restarted.select_profile(&profile_id(&engine, 1)).unwrap();
+        assert_eq!(active(&restarted, &dcs_radio).as_deref(), Some("C"));
+        assert!(restarted.take_actions().is_empty());
+    }
+
+    #[test]
+    fn foreground_switching_follows_the_settings() {
+        let (mut engine, ..) = engine_with_two_profiles();
+        assert!(engine.foreground_changed(Some("DCS.exe")));
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // Alt-tab to Discord keeps the game's profile by default.
+        engine.foreground_changed(Some("Discord.exe"));
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // Detent's own window never switches.
+        engine.foreground_changed(None);
+        assert_eq!(active_profile_name(&engine), "DCS");
+        engine.set_profile_switching(ProfileSwitching {
+            auto_switch: true,
+            no_match: NoMatch::SwitchToDefault,
+        });
+        engine.foreground_changed(Some("Discord.exe"));
+        assert_eq!(active_profile_name(&engine), "Default");
+        // Auto-switch off: only manual selection.
+        engine.set_profile_switching(ProfileSwitching {
+            auto_switch: false,
+            no_match: NoMatch::SwitchToDefault,
+        });
+        engine.foreground_changed(Some("DCS.exe"));
+        assert_eq!(active_profile_name(&engine), "Default");
+        assert_eq!(engine.snapshot().foreground.as_deref(), Some("DCS.exe"));
+        // The same program again changes nothing visible.
+        assert!(!engine.foreground_changed(Some("dcs.exe")));
+    }
+
+    #[test]
+    fn switch_profile_action_switches_after_the_trigger_and_wins_until_a_match() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        let dcs = profile_id(&engine, 1);
+        engine.set_profile_switching(ProfileSwitching {
+            auto_switch: true,
+            no_match: NoMatch::SwitchToDefault,
+        });
+        // In the default profile, state B switches to DCS.
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
+        control.radio_mut().states[1].on_activate = vec![
+            tap("F3"),
+            switch_to(ProfileTarget::Profile {
+                profile: dcs.clone(),
+            }),
+        ];
+        engine.save_virtual_control(control).unwrap();
+        // In DCS, state B goes to the next profile (wraps to the default profile).
+        engine.select_profile(&dcs).unwrap();
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
+        control.radio_mut().states[1].on_activate = vec![switch_to(ProfileTarget::Next)];
+        engine.save_virtual_control(control).unwrap();
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+
+        press(&mut engine, 0, 0);
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // The request stays queued (for the log); only the default profile's radio moved.
+        let queued = engine.take_actions();
+        assert_eq!(queued.len(), 2);
+        assert!(matches!(queued[1].action, Action::SwitchProfile { .. }));
+        assert_eq!(active(&engine, &dcs_radio), None);
+        assert_eq!(
+            engine.active_states()[&default_radio].active.as_deref(),
+            Some("st-2")
+        );
+
+        // The manual choice wins: a program no profile lists does not fall back.
+        engine.foreground_changed(Some("Discord.exe"));
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // DCS's state B: next profile, wrapping to the first.
+        press(&mut engine, 0, 100);
+        assert_eq!(active_profile_name(&engine), "Default");
+        // DCS comes to the front: a listed program wins over the manual choice.
+        engine.foreground_changed(Some("DCS.exe"));
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // Previous from the first wraps to the last; also from the UI's radio command.
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
+        control.radio_mut().states[0].on_activate = vec![switch_to(ProfileTarget::Previous)];
+        engine.save_virtual_control(control).unwrap();
+        engine.set_radio_active(&default_radio, None).unwrap();
+        engine
+            .command_radio(&default_radio, RadioCommand::Increment)
+            .unwrap();
+        assert_eq!(active_profile_name(&engine), "DCS");
+        // A target that does not exist is refused when saving.
+        let mut control = engine.setup().profile().virtual_controls[0].clone();
+        control.radio_mut().states[0].on_activate = vec![switch_to(ProfileTarget::Profile {
+            profile: "profile-99".into(),
+        })];
+        assert_eq!(
+            engine.save_virtual_control(control),
+            Err(EngineError::UnknownProfile("profile-99".into()))
+        );
+    }
+
+    #[test]
+    fn overlay_widgets_belong_to_the_profile_and_settings_are_global() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        let dcs = profile_id(&engine, 1);
+        assert!(engine.toggle_overlay_profile_name());
+        engine
+            .set_overlay_positions(vec![Some(WidgetPosition { x: 0.5, y: 0.5 }), None])
+            .unwrap();
+        let mut overlay = engine.overlay();
+        overlay.scale = 2.0;
+        overlay.hotkey = "Ctrl+F12".into();
+        engine.set_overlay(overlay);
+        engine.set_overlay_visible(false);
+
+        engine.select_profile(&dcs).unwrap();
+        let snap = engine.snapshot();
+        assert_eq!(snap.overlay.widgets.len(), 1);
+        assert!(snap.overlay.widgets.has_virtual_control(&dcs_radio));
+        assert_eq!(snap.overlay.widgets[0].position, None);
+        assert!(!snap.overlay.widgets.has_profile_name());
+        assert_eq!(snap.overlay.scale, 2.0);
+        assert_eq!(snap.overlay.hotkey, "Ctrl+F12");
+        assert!(!snap.overlay.visible);
+        // Widgets never end up in the global part of the setup file.
+        assert!(engine.setup().overlay.widgets.is_empty());
+        let saved = Setup::from_json(&engine.setup().to_json()).unwrap();
+        assert_eq!(&saved, engine.setup());
+
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        let widgets = engine.overlay().widgets;
+        assert_eq!(widgets[0].position, Some(WidgetPosition { x: 0.5, y: 0.5 }));
+        assert!(widgets.has_virtual_control(&default_radio));
+        assert!(widgets.has_profile_name());
+        // Removing a counter removes its widget from every profile.
+        let f = engine.setup().functions[0].id.clone();
+        engine.toggle_overlay_function(&f).unwrap();
+        engine.select_profile(&dcs).unwrap();
+        engine.toggle_overlay_function(&f).unwrap();
+        assert_eq!(engine.overlay().widgets.len(), 2);
+        engine.remove_function(&f).unwrap();
+        assert_eq!(engine.setup().profiles[0].overlay_widgets.len(), 2);
+        assert_eq!(engine.setup().profiles[1].overlay_widgets.len(), 1);
+    }
+
+    #[test]
+    fn controls_are_found_in_any_profile() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        // The default profile is active; DCS's radio can still be set, edited and removed.
+        engine
+            .set_radio_active(&dcs_radio, Some("st-3".into()))
+            .unwrap();
+        assert_eq!(
+            engine.active_states()[&dcs_radio].active.as_deref(),
+            Some("st-3")
+        );
+        assert!(!engine.toggle_overlay_virtual_control(&dcs_radio).unwrap());
+        assert!(
+            !engine.setup().profiles[1]
+                .overlay_widgets
+                .has_virtual_control(&dcs_radio)
+        );
+        assert!(engine.overlay().widgets.has_virtual_control(&default_radio));
+        engine.remove_virtual_control(&dcs_radio).unwrap();
+        assert!(engine.setup().profiles[1].virtual_controls.is_empty());
+        assert_eq!(engine.setup().profiles[0].virtual_controls.len(), 1);
+        assert!(!engine.active_states().contains_key(&dcs_radio));
+        // Removing an encoder removes its triggers in every profile.
+        engine
+            .duplicate_profile(DEFAULT_PROFILE_ID, "Copy")
+            .unwrap();
+        engine.remove_encoder("enc-1").unwrap();
+        assert!(
+            engine
+                .all_controls()
+                .all(|c| c.radio().increment.is_empty() && c.radio().decrement.is_empty())
+        );
+    }
+
+    #[test]
+    fn profile_management() {
+        let (mut engine, _, dcs_radio) = engine_with_two_profiles();
+        let dcs = profile_id(&engine, 1);
+        // Create: empty and active.
+        let il2 = engine.create_profile("  ");
+        assert_eq!(active_profile_name(&engine), "Profile 3");
+        assert!(engine.snapshot().virtual_controls.is_empty());
+        assert!(engine.overlay().widgets.is_empty());
+        // Rename; an empty name is ignored.
+        engine.rename_profile(&il2, " IL-2 ").unwrap();
+        engine.rename_profile(&il2, " ").unwrap();
+        assert_eq!(active_profile_name(&engine), "IL-2");
+        // Executables are cleaned up and deduplicated.
+        engine
+            .set_profile_executables(
+                &il2,
+                vec![
+                    r"C:\Games\IL-2\bin\game\Il-2.exe".into(),
+                    "il-2.EXE".into(),
+                    "Launcher".into(),
+                ],
+            )
+            .unwrap();
+        assert_eq!(
+            engine.setup().profile().executables,
+            ["Il-2.exe", "Launcher.exe"]
+        );
+        assert_eq!(
+            engine.set_profile_executables(&il2, vec!["  ".into()]),
+            Err(EngineError::BadExecutable("  ".into()))
+        );
+        // Make default: moves to the front.
+        engine.make_default_profile(&il2).unwrap();
+        assert_eq!(engine.snapshot().profiles[0].name, "IL-2");
+        // Deleting the active profile: the (new) default one takes over.
+        engine.select_profile(&dcs).unwrap();
+        engine.delete_profile(&dcs).unwrap();
+        assert_eq!(active_profile_name(&engine), "IL-2");
+        assert!(!engine.active_states().contains_key(&dcs_radio));
+        assert_eq!(
+            engine.select_profile(&dcs),
+            Err(EngineError::UnknownProfile(dcs.clone()))
+        );
+        engine.delete_profile(&il2).unwrap();
+        assert_eq!(
+            engine.delete_profile(DEFAULT_PROFILE_ID),
+            Err(EngineError::LastProfile)
+        );
+        assert_eq!(active_profile_name(&engine), "Default");
+    }
+
+    #[test]
+    fn snapshot_json_has_profiles() {
+        let (engine, ..) = engine_with_two_profiles();
+        let json = serde_json::to_value(engine.snapshot()).unwrap();
+        assert_eq!(json["activeProfile"], DEFAULT_PROFILE_ID);
+        assert_eq!(json["profiles"][1]["name"], "DCS");
+        assert_eq!(json["profiles"][1]["executables"][0], "DCS.exe");
+        assert!(json["profiles"][1].get("virtualControls").is_none());
+        assert_eq!(json["profileSwitching"]["autoSwitch"], true);
+        assert_eq!(json["profileSwitching"]["noMatch"], "keepCurrent");
+        assert!(json["foreground"].is_null());
+        assert_eq!(json["overlay"]["widgets"][0]["type"], "radio");
+    }
+
+    // --- Settings and shell status ----------------------------------------------------------
 
     #[test]
     fn settings_are_saved_but_the_tray_notice_flag_stays_the_apps() {

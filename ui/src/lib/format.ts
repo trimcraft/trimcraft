@@ -8,6 +8,8 @@ import type {
   IdentityConfidence,
   KeyStep,
   MouseStep,
+  ProfileTarget,
+  ProfileView,
   SoundOutput,
   SoundpadCommand,
   Trigger,
@@ -165,7 +167,22 @@ export function discordText(c: DiscordCommand): string {
 }
 
 /** One-line summary, e.g. "Keys: ↓ LeftCtrl, F1, ↑ LeftCtrl". */
-export function actionText(a: Action): string {
+/** E.g. "next profile" or "\"DCS\"" (by name; a deleted target says so). */
+export function profileTargetText(t: ProfileTarget, profiles: ProfileView[] = []): string {
+  switch (t.type) {
+    case "next":
+      return "next profile";
+    case "previous":
+      return "previous profile";
+    case "profile": {
+      const p = profiles.find((x) => x.id === t.profile);
+      return p ? `"${p.name}"` : "deleted profile";
+    }
+  }
+}
+
+export function actionText(a: Action, profiles: ProfileView[] = []): string {
+  if (a.type === "switchProfile") return `Switch profile: ${profileTargetText(a.target, profiles)}`;
   if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
   if (a.type === "discord") return `Discord: ${discordText(a.command)}`;
   const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);

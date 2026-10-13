@@ -14,7 +14,9 @@
   }
 </script>
 
-{#if w.type === "function"}
+{#if w.type === "profileName"}
+  <div class="profile">{snapshot.profiles.find((p) => p.id === snapshot.activeProfile)?.name ?? ""}</div>
+{:else if w.type === "function"}
   {@const f = snapshot.functions.find((f) => f.id === w.function)}
   {#if f}<div class="fn"><span class="fname">{f.name}</span> <span class="fvalue">{f.display}</span></div>{/if}
 {:else if w.type === "radio"}
@@ -47,6 +49,7 @@
 {/if}
 
 <style>
+  .profile { font-size: 15px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
   .fn { font-size: 22px; white-space: nowrap; }
   .fname { color: var(--muted); }
   .fvalue { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }

@@ -1,53 +1,97 @@
-//! Warns when the foreground program runs as administrator and Detent does not: Windows then
-//! drops Detent's keys and mouse (UIPI). Event-driven through a WinEvent hook on foreground
-//! changes, on a thread of its own; it only reads the foreground process's token.
+//! The one foreground-window watcher. It feeds automatic profile switching
+//! ([`crate::profile_watch`]) and the warning about an elevated foreground program
+//! ([`crate::elevation::check_foreground`]).
 //!
-//! Only runs while Detent is not elevated; an elevated Detent reaches every program.
+//! Event-driven: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` on a thread of its own with a
+//! message loop; Windows calls back whenever another window comes to the front. Nothing is
+//! polled, and nothing is injected into the other process; it only reads the process's name
+//! and token.
 
-use crate::{Shared, elevation};
-use detent_core::settings::{ProcessElevation, foreground_warning};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, OnceLock};
+use crate::elevation;
+use detent_core::settings::ProcessElevation;
+use std::cell::RefCell;
 use windows_sys::Win32::Foundation::HWND;
-use windows_sys::Win32::System::Threading::GetCurrentProcessId;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetForegroundWindow, GetMessageW, GetWindowTextW,
     GetWindowThreadProcessId, MSG, TranslateMessage, WINEVENT_OUTOFCONTEXT,
 };
 
-/// The hook procedure is a plain function; it reaches the app through this.
-static SHARED: OnceLock<Arc<Shared>> = OnceLock::new();
+/// The program that just came to the front.
+#[derive(Debug, Clone)]
+pub struct Foreground {
+    /// It is Detent itself (one of its windows).
+    pub is_self: bool,
+    /// Executable file name, e.g. `DCS.exe`; `None` if it cannot be read.
+    pub exe: Option<String>,
+    /// Window title, as a fallback name.
+    pub title: Option<String>,
+    /// Not checked (`NotElevated`) for Detent itself.
+    pub elevation: ProcessElevation,
+}
 
-pub fn watch(shared: Arc<Shared>) {
-    if SHARED.set(shared).is_err() {
-        return;
+impl Foreground {
+    /// For the profile switch: `None` for Detent itself, so its windows never switch profiles.
+    pub fn program(&self) -> Option<&str> {
+        if self.is_self {
+            None
+        } else {
+            self.exe.as_deref()
+        }
     }
+
+    /// A name to show to the user.
+    pub fn name(&self) -> String {
+        self.exe
+            .clone()
+            .or_else(|| self.title.clone())
+            .unwrap_or_else(|| "The program in the foreground".into())
+    }
+}
+
+type Callback = Box<dyn Fn(&Foreground) + Send>;
+
+thread_local! {
+    /// The watcher's callback; only set on the watcher thread, where the hook runs.
+    static ON_CHANGE: RefCell<Option<Callback>> = const { RefCell::new(None) };
+}
+
+/// Starts the watcher thread. `on_change` runs on that thread, once at the start and then on
+/// every foreground change.
+pub fn watch(on_change: impl Fn(&Foreground) + Send + 'static) {
+    let on_change: Callback = Box::new(on_change);
     let spawned = std::thread::Builder::new()
         .name("detent-foreground".into())
-        .spawn(|| {
-            // SAFETY: the hook procedure is a valid callback for the life of the process;
-            // out-of-context hooks are delivered to this thread's message loop.
+        .spawn(move || {
+            // SAFETY: out-of-context hook without a module; the callback is a plain function
+            // and runs on this thread, inside GetMessageW below.
             let hook = unsafe {
                 SetWinEventHook(
                     EVENT_SYSTEM_FOREGROUND,
                     EVENT_SYSTEM_FOREGROUND,
                     std::ptr::null_mut(),
-                    Some(on_foreground),
+                    Some(on_event),
                     0,
                     0,
                     WINEVENT_OUTOFCONTEXT,
                 )
             };
             if hook.is_null() {
-                return log::error!("could not watch the foreground window");
+                log::error!(
+                    "cannot watch the foreground window; automatic profile switching and the \
+                     administrator warning are off"
+                );
+                return;
             }
-            // SAFETY: no preconditions.
-            check(unsafe { GetForegroundWindow() });
-            let mut msg = MSG::default();
-            // SAFETY: standard message loop on this thread.
+            // SAFETY: no arguments.
+            if let Some(fg) = inspect(unsafe { GetForegroundWindow() }) {
+                on_change(&fg);
+            }
+            ON_CHANGE.with(|c| *c.borrow_mut() = Some(on_change));
+            // SAFETY: a plain message loop; the hook is delivered through it.
+            let mut msg: MSG = unsafe { std::mem::zeroed() };
             while unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0 {
-                // SAFETY: as above.
+                // SAFETY: a message just retrieved by GetMessageW.
                 unsafe {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);
@@ -55,72 +99,74 @@ pub fn watch(shared: Arc<Shared>) {
             }
         });
     if let Err(e) = spawned {
-        log::error!("could not start the foreground watcher: {e}");
+        log::error!("cannot start the foreground watcher: {e}");
     }
 }
 
-unsafe extern "system" fn on_foreground(
+unsafe extern "system" fn on_event(
     _hook: HWINEVENTHOOK,
-    _event: u32,
+    event: u32,
     hwnd: HWND,
     _object: i32,
     _child: i32,
     _thread: u32,
     _time: u32,
 ) {
-    check(hwnd);
+    if event != EVENT_SYSTEM_FOREGROUND {
+        return;
+    }
+    let Some(fg) = inspect(hwnd) else { return };
+    ON_CHANGE.with(|c| {
+        if let Some(on_change) = &*c.borrow() {
+            on_change(&fg);
+        }
+    });
 }
 
-fn check(hwnd: HWND) {
-    let Some(shared) = SHARED.get() else { return };
+/// What is known about the program owning `hwnd`; `None` for no window.
+fn inspect(hwnd: HWND) -> Option<Foreground> {
     if hwnd.is_null() {
-        return;
+        return None;
     }
     let mut pid = 0;
-    // SAFETY: any window handle; a stale one gives pid 0.
+    // SAFETY: `pid` outlives the call; an invalid window gives 0.
     unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
     if pid == 0 {
-        return;
+        return None;
     }
-    // SAFETY: no preconditions.
-    let is_self = pid == unsafe { GetCurrentProcessId() };
+    let is_self = pid == std::process::id();
     let (elevation, exe) = if is_self {
         (ProcessElevation::NotElevated, None)
     } else {
         elevation::process_info(pid)
     };
-    let name = exe
-        .or_else(|| window_title(hwnd))
-        .unwrap_or_else(|| "The program in the foreground".into());
-
-    let mut engine = shared.engine();
-    let mut status = engine.shell_status().clone();
-    let warning = foreground_warning(
-        status.elevated,
+    Some(Foreground {
         is_self,
+        exe,
+        title: window_title(hwnd),
         elevation,
-        &name,
-        status.elevated_foreground.as_deref(),
-    );
-    if warning == status.elevated_foreground {
-        return;
-    }
-    match &warning {
-        Some(name) => log::warn!(
-            "{name} runs as administrator; Detent's keys and mouse will not reach it \
-             ({elevation:?})"
-        ),
-        None => log::info!("the foreground program no longer runs as administrator"),
-    }
-    status.elevated_foreground = warning;
-    if engine.set_shell_status(status) {
-        shared.changed.store(true, Ordering::Relaxed);
-    }
+    })
 }
 
-fn window_title(hwnd: HWND) -> Option<String> {
-    let mut buf = [0u16; 256];
-    // SAFETY: `buf` holds the given number of characters.
+pub fn window_title(hwnd: HWND) -> Option<String> {
+    let mut buf = [0u16; 512];
+    // SAFETY: `buf` holds `buf.len()` UTF-16 units.
     let len = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
     (len > 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore = "needs an interactive desktop"]
+    fn reports_the_foreground_program_at_the_start() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        super::watch(move |fg| {
+            let _ = tx.send(fg.clone());
+        });
+        let first = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("no report from the watcher");
+        println!("foreground: {first:?}");
+    }
 }

@@ -69,6 +69,8 @@
 
   function widgetName(w: OverlayItem): string {
     switch (w.type) {
+      case "profileName":
+        return "Profile name";
       case "function":
         return snapshot.functions.find((f) => f.id === w.function)?.name ?? w.function;
       case "radio":
@@ -94,10 +96,13 @@
   }
 
   const pct = (v: number) => Math.round(v * 1000) / 10;
+  const hasProfileName = $derived(snapshot.overlay.widgets.some((w) => w.type === "profileName"));
+  const profileName = $derived(snapshot.profiles.find((p) => p.id === snapshot.activeProfile)?.name ?? "");
 </script>
 
 <section class="panel">
   <h2>Overlay</h2>
+  <p class="muted small">Monitor, size, hotkey and visibility apply to all profiles; the widgets and their positions belong to the profile <b>{profileName}</b>.</p>
   {#if error}<p class="error">{error}</p>{/if}
   <div class="row">
     <button class:primary={snapshot.overlay.visible} onclick={() => run(async () => (await backend()).setOverlayVisible(!snapshot.overlay.visible))}>
@@ -108,6 +113,9 @@
     {:else}
       <button onclick={() => run(async () => (await backend()).setOverlayEditing(true))}>Edit layout</button>
     {/if}
+    <button class:active={hasProfileName} title="Shows the active profile's name on the overlay (set per profile)" onclick={() => run(async () => (await backend()).toggleOverlayProfileName())}>
+      {hasProfileName ? "Profile name shown" : "Show profile name"}
+    </button>
     {#if hotkeyDraft === null}
       <span class="muted">Hotkey <span class="mono">{snapshot.overlay.hotkey}</span></span>
       <button class="small" onclick={() => (hotkeyDraft = snapshot.overlay.hotkey)}>Change</button>

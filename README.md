@@ -14,6 +14,8 @@
 Turn your HOTAS into a smart cockpit: virtual radios, modes and switches, macros,
 vJoy output, Discord/Soundpad control and a click-through in-game overlay.
 
+**Website:** [trimcraft.github.io](https://trimcraft.github.io) · **Download:** [latest release](https://github.com/trimcraft/trimcraft/releases/latest)
+
 ## Features
 
 - **Devices:** every connected stick, throttle, pedal set and button box, live, with a stable

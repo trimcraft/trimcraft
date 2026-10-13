@@ -6,13 +6,15 @@
 //! gaps into waits, folding press-wait-release into taps and clicks, and thinning and
 //! simplifying mouse movement into paths of waypoints.
 //!
-//! A keyboard macro records only keys and a mouse macro only buttons, wheel and movement;
-//! the two kinds are never mixed.
+//! A recording takes keys, mouse buttons, wheel and movement, or both. When both are
+//! recorded, the two step lists are merged on one timeline (see [`merge`]): mouse paths are
+//! split where a key goes down or up, so a key held while moving the mouse stays in time.
 
 use crate::action::{
     Action, KeyInfo, KeyStep, MAX_DELAY_MS, MAX_STEPS, MouseButton, MouseStep, Movement, PathPoint,
-    Playback, RelPoint, key_by_scan, key_info,
+    RelPoint, key_by_scan, key_info,
 };
+use crate::macros::{InputMacro, MacroStep};
 use crate::overlay::MonitorRef;
 use crate::path::{self, Sample, Screens};
 use serde::{Deserialize, Serialize};
@@ -26,11 +28,27 @@ pub const COUNTDOWN_MS: u64 = 3_000;
 /// One wheel detent in Windows' units.
 const WHEEL_DELTA: i32 = 120;
 
+/// What a recording takes: keys, mouse (buttons, wheel, movement) or both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum RecordKind {
-    Keyboard,
-    Mouse,
+pub struct RecordKind {
+    pub keys: bool,
+    pub mouse: bool,
+}
+
+impl RecordKind {
+    pub const KEYBOARD: Self = Self {
+        keys: true,
+        mouse: false,
+    };
+    pub const MOUSE: Self = Self {
+        keys: false,
+        mouse: true,
+    };
+    pub const BOTH: Self = Self {
+        keys: true,
+        mouse: true,
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -549,25 +567,290 @@ pub fn finish(f: Finished<'_>) -> (Action, Vec<String>) {
     let mut events = f.events;
     let hotkey = Hotkey::parse(&f.config.stop_hotkey).ok();
     trim_stop(&mut events, f.stop, hotkey.as_ref());
-    match f.kind {
-        RecordKind::Keyboard => {
-            let (steps, notes) = keyboard_steps(&events);
-            (Action::keyboard(steps), notes)
+    let mut notes = Vec::new();
+    let keys = if f.kind.keys {
+        let (steps, n) = keyboard_steps(&events);
+        notes.extend(n);
+        steps.into_iter().map(MacroStep::from).collect()
+    } else {
+        Vec::new()
+    };
+    let (mouse, monitor) = if f.kind.mouse {
+        let (steps, monitor, n) = mouse_steps(&events, f.movement, f.screens, f.config.into());
+        notes.extend(n);
+        (steps.into_iter().map(MacroStep::from).collect(), monitor)
+    } else {
+        (Vec::new(), None)
+    };
+    let steps = match (keys.is_empty(), mouse.is_empty()) {
+        (_, true) => keys,
+        (true, false) => mouse,
+        (false, false) => {
+            // Each list starts at its own first event; line them up.
+            let first = |wanted: fn(&RawEvent) -> bool| {
+                events
+                    .iter()
+                    .find(|e| wanted(&e.event))
+                    .map_or(0, |e| e.t_us)
+            };
+            let key_start = first(|e| matches!(e, RawEvent::Key { .. }));
+            let mouse_start = first(|e| !matches!(e, RawEvent::Key { .. }));
+            let offset = |start: u64| {
+                let ms = ((start.saturating_sub(key_start.min(mouse_start))) as f64 / 1000.0)
+                    .round() as u32;
+                (ms > 0).then(|| MacroStep::delay(ms))
+            };
+            let keys: Vec<MacroStep> = offset(key_start).into_iter().chain(keys).collect();
+            let mouse: Vec<MacroStep> = offset(mouse_start).into_iter().chain(mouse).collect();
+            cap_steps(merge(&keys, &mouse), &mut notes)
         }
-        RecordKind::Mouse => {
-            let (steps, monitor, notes) =
-                mouse_steps(&events, f.movement, f.screens, f.config.into());
-            (
-                Action::MouseMacro {
-                    steps,
-                    playback: Playback::default(),
-                    movement: f.movement,
-                    monitor,
-                },
-                notes,
-            )
+    };
+    let mut m = InputMacro::new(steps);
+    m.movement = f.movement;
+    m.monitor = monitor;
+    (Action::InputMacro(m), notes)
+}
+
+/// A step at a time on the recording's timeline (ms from its start), with its duration.
+struct Placed {
+    at: u64,
+    duration: u64,
+    step: MacroStep,
+}
+
+/// A step list on a timeline: waits become positions, taps and clicks their press and
+/// release.
+fn place(steps: &[MacroStep]) -> Vec<Placed> {
+    let mut out = Vec::new();
+    let mut t = 0u64;
+    for step in steps {
+        if let Some(ms) = step.delay_ms() {
+            t += u64::from(ms);
+            continue;
+        }
+        let instant = |step: MacroStep| Placed {
+            at: t,
+            duration: 0,
+            step,
+        };
+        match step {
+            MacroStep::Key(KeyStep::KeyTap { key, hold_ms }) => {
+                let hold = u64::from(hold_ms.unwrap_or(0));
+                out.push(instant(MacroStep::Key(KeyStep::KeyDown {
+                    key: key.clone(),
+                })));
+                out.push(Placed {
+                    at: t + hold,
+                    duration: 0,
+                    step: MacroStep::Key(KeyStep::KeyUp { key: key.clone() }),
+                });
+                t += hold;
+            }
+            MacroStep::Mouse(MouseStep::Click { button, hold_ms }) => {
+                let hold = u64::from(hold_ms.unwrap_or(0));
+                out.push(instant(MacroStep::Mouse(MouseStep::ButtonDown {
+                    button: *button,
+                })));
+                out.push(Placed {
+                    at: t + hold,
+                    duration: 0,
+                    step: MacroStep::Mouse(MouseStep::ButtonUp { button: *button }),
+                });
+                t += hold;
+            }
+            MacroStep::Mouse(MouseStep::MovePath { points }) => {
+                let d = u64::from(points.last().map_or(0, |p| p.t));
+                out.push(Placed {
+                    at: t,
+                    duration: d,
+                    step: step.clone(),
+                });
+                t += d;
+            }
+            MacroStep::Mouse(MouseStep::MoveRelativePath { points }) => {
+                let d = u64::from(points.last().map_or(0, |p| p.t));
+                out.push(Placed {
+                    at: t,
+                    duration: d,
+                    step: step.clone(),
+                });
+                t += d;
+            }
+            other => out.push(instant(other.clone())),
         }
     }
+    out
+}
+
+/// Splits a path step at `at` ms after its start: the part before and the part after (which
+/// starts at its own time 0, and for relative paths at its own origin).
+fn split_path(step: &MacroStep, at: u32) -> Option<(MacroStep, MacroStep)> {
+    let lerp = |a: f64, b: f64, ta: u32, tb: u32| {
+        if tb == ta {
+            b
+        } else {
+            a + (b - a) * f64::from(at - ta) / f64::from(tb - ta)
+        }
+    };
+    match step {
+        MacroStep::Mouse(MouseStep::MovePath { points }) => {
+            let i = points.iter().position(|p| p.t >= at)?;
+            if i == 0 {
+                return None;
+            }
+            let (a, b) = (points[i - 1], points[i]);
+            let mid = PathPoint {
+                x: lerp(f64::from(a.x), f64::from(b.x), a.t, b.t) as f32,
+                y: lerp(f64::from(a.y), f64::from(b.y), a.t, b.t) as f32,
+                t: at,
+            };
+            let mut first = points[..i].to_vec();
+            first.push(mid);
+            let second = std::iter::once(PathPoint { t: 0, ..mid })
+                .chain(
+                    points[i..]
+                        .iter()
+                        .filter(|p| p.t > at)
+                        .map(|p| PathPoint { t: p.t - at, ..*p }),
+                )
+                .collect();
+            Some((
+                MacroStep::Mouse(MouseStep::MovePath { points: first }),
+                MacroStep::Mouse(MouseStep::MovePath { points: second }),
+            ))
+        }
+        MacroStep::Mouse(MouseStep::MoveRelativePath { points }) => {
+            // Offsets from the path's start, which is the origin at time 0.
+            let all: Vec<RelPoint> = std::iter::once(RelPoint { dx: 0, dy: 0, t: 0 })
+                .chain(points.iter().copied())
+                .collect();
+            let i = all.iter().position(|p| p.t >= at)?;
+            if i == 0 {
+                return None;
+            }
+            let (a, b) = (all[i - 1], all[i]);
+            let ox = lerp(f64::from(a.dx), f64::from(b.dx), a.t, b.t).round() as i32;
+            let oy = lerp(f64::from(a.dy), f64::from(b.dy), a.t, b.t).round() as i32;
+            let mut first: Vec<RelPoint> = all[1..i].to_vec();
+            first.push(RelPoint {
+                dx: ox,
+                dy: oy,
+                t: at,
+            });
+            let second = all[i..]
+                .iter()
+                .filter(|p| p.t > at)
+                .map(|p| RelPoint {
+                    dx: p.dx - ox,
+                    dy: p.dy - oy,
+                    t: p.t - at,
+                })
+                .collect();
+            Some((
+                MacroStep::Mouse(MouseStep::MoveRelativePath { points: first }),
+                MacroStep::Mouse(MouseStep::MoveRelativePath { points: second }),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Merges key and mouse steps recorded at the same time into one list, in time order, with
+/// waits between them. A mouse path during which keys go down or up is split there, because
+/// a macro plays its steps one after the other.
+pub fn merge(keys: &[MacroStep], mouse: &[MacroStep]) -> Vec<MacroStep> {
+    let keys = place(keys);
+    let key_times: Vec<u64> = keys.iter().map(|p| p.at).collect();
+    let mut placed: Vec<Placed> = Vec::new();
+    for p in place(mouse) {
+        let mut cuts: Vec<u64> = key_times
+            .iter()
+            .copied()
+            .filter(|&t| t > p.at && t < p.at + p.duration)
+            .collect();
+        cuts.dedup();
+        let mut rest = p;
+        for cut in cuts {
+            let Ok(offset) = u32::try_from(cut - rest.at) else {
+                break;
+            };
+            let Some((first, second)) = split_path(&rest.step, offset) else {
+                break;
+            };
+            placed.push(Placed {
+                at: rest.at,
+                duration: cut - rest.at,
+                step: first,
+            });
+            rest = Placed {
+                at: cut,
+                duration: rest.at + rest.duration - cut,
+                step: second,
+            };
+        }
+        placed.push(rest);
+    }
+    // Keys first at equal times: a modifier goes down before the click it modifies.
+    let mut all: Vec<(u64, u8, Placed)> = keys
+        .into_iter()
+        .map(|p| (p.at, 0, p))
+        .chain(placed.into_iter().map(|p| (p.at, 1, p)))
+        .collect();
+    all.sort_by_key(|(at, order, _)| (*at, *order));
+    let mut steps = Vec::new();
+    let mut t = 0u64;
+    for (at, _, p) in all {
+        if at > t {
+            let ms = u32::try_from(at - t)
+                .unwrap_or(MAX_DELAY_MS)
+                .min(MAX_DELAY_MS);
+            steps.push(MacroStep::delay(ms));
+            t = at;
+        }
+        t += p.duration;
+        steps.push(p.step);
+    }
+    fold_presses(steps)
+}
+
+/// Press, optional wait, release of the same key or button becomes a tap or click.
+fn fold_presses(steps: Vec<MacroStep>) -> Vec<MacroStep> {
+    let mut out = Vec::with_capacity(steps.len());
+    let mut i = 0;
+    while i < steps.len() {
+        let (hold, up_at) = match steps.get(i + 1).and_then(MacroStep::delay_ms) {
+            Some(ms) => (ms, i + 2),
+            None => (0, i + 1),
+        };
+        let folded = match (&steps[i], steps.get(up_at)) {
+            (
+                MacroStep::Key(KeyStep::KeyDown { key }),
+                Some(MacroStep::Key(KeyStep::KeyUp { key: up })),
+            ) if key == up => Some(MacroStep::Key(KeyStep::KeyTap {
+                key: key.clone(),
+                hold_ms: Some(hold),
+            })),
+            (
+                MacroStep::Mouse(MouseStep::ButtonDown { button }),
+                Some(MacroStep::Mouse(MouseStep::ButtonUp { button: up })),
+            ) if button == up => Some(MacroStep::Mouse(MouseStep::Click {
+                button: *button,
+                hold_ms: Some(hold),
+            })),
+            _ => None,
+        };
+        match folded {
+            Some(step) => {
+                out.push(step);
+                i = up_at + 1;
+            }
+            None => {
+                out.push(steps[i].clone());
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -995,7 +1278,7 @@ mod tests {
     fn finish_builds_the_macro_and_trims_the_stop() {
         let config = RecorderConfig::default();
         let (action, notes) = finish(Finished {
-            kind: RecordKind::Keyboard,
+            kind: RecordKind::KEYBOARD,
             movement: Movement::Absolute,
             events: vec![
                 key(0, "A", true),
@@ -1010,7 +1293,7 @@ mod tests {
         assert!(notes.is_empty());
         assert_eq!(action, Action::keyboard(vec![tap("A", 30)]));
         let (mouse, _) = finish(Finished {
-            kind: RecordKind::Mouse,
+            kind: RecordKind::MOUSE,
             movement: Movement::Relative,
             events: vec![ev(0, RawEvent::RawMove { dx: 1, dy: 1 })],
             stop: StopReason::Ui,
@@ -1020,7 +1303,7 @@ mod tests {
         assert_eq!(mouse.describe(), "mouse: relative path 1 points 0ms");
         // Keyboard recordings ignore mouse events and vice versa.
         let (keys, _) = finish(Finished {
-            kind: RecordKind::Keyboard,
+            kind: RecordKind::KEYBOARD,
             movement: Movement::Absolute,
             events: vec![click(0, true), click(10, false)],
             stop: StopReason::Hotkey,
@@ -1031,18 +1314,133 @@ mod tests {
     }
 
     #[test]
+    fn keys_and_mouse_are_merged_in_time() {
+        let config = RecorderConfig::default();
+        // Ctrl down, click, Ctrl up.
+        let (action, _) = finish(Finished {
+            kind: RecordKind::BOTH,
+            movement: Movement::Relative,
+            events: vec![
+                key(0, "LeftCtrl", true),
+                click(100, true),
+                click(140, false),
+                key(300, "LeftCtrl", false),
+            ],
+            stop: StopReason::Hotkey,
+            config: &config,
+            screens: &screens(),
+        });
+        let Action::InputMacro(m) = &action else {
+            panic!()
+        };
+        assert_eq!(
+            m.steps,
+            vec![
+                MacroStep::Key(KeyStep::KeyDown {
+                    key: "LeftCtrl".into()
+                }),
+                MacroStep::delay(100),
+                MacroStep::Mouse(MouseStep::Click {
+                    button: MouseButton::Left,
+                    hold_ms: Some(40)
+                }),
+                MacroStep::delay(160),
+                MacroStep::Key(KeyStep::KeyUp {
+                    key: "LeftCtrl".into()
+                }),
+            ]
+        );
+        assert_eq!(m.movement, Movement::Relative);
+        assert_eq!(
+            action.describe(),
+            "keys and mouse: down LeftCtrl, wait 100ms, click Left 40ms, wait 160ms, up LeftCtrl"
+        );
+    }
+
+    #[test]
+    fn a_path_is_split_where_a_key_changes() {
+        // W held from 100 to 300 ms while the mouse moves from 0 to 400 ms.
+        let keys = vec![
+            MacroStep::delay(100),
+            MacroStep::Key(KeyStep::KeyTap {
+                key: "W".into(),
+                hold_ms: Some(200),
+            }),
+        ];
+        let mouse = vec![MacroStep::Mouse(MouseStep::MoveRelativePath {
+            points: vec![RelPoint {
+                dx: 400,
+                dy: 0,
+                t: 400,
+            }],
+        })];
+        let merged = merge(&keys, &mouse);
+        let rel = |points: Vec<(i32, u32)>| {
+            MacroStep::Mouse(MouseStep::MoveRelativePath {
+                points: points
+                    .into_iter()
+                    .map(|(dx, t)| RelPoint { dx, dy: 0, t })
+                    .collect(),
+            })
+        };
+        assert_eq!(
+            merged,
+            vec![
+                rel(vec![(100, 100)]),
+                MacroStep::Key(KeyStep::KeyDown { key: "W".into() }),
+                rel(vec![(200, 200)]),
+                MacroStep::Key(KeyStep::KeyUp { key: "W".into() }),
+                rel(vec![(100, 100)]),
+            ]
+        );
+        // The pieces add up to the whole movement and duration.
+        let total: (i32, u32) = merged
+            .iter()
+            .filter_map(|s| match s {
+                MacroStep::Mouse(MouseStep::MoveRelativePath { points }) => {
+                    points.last().map(|p| (p.dx, p.t))
+                }
+                _ => None,
+            })
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        assert_eq!(total, (400, 400));
+        // Absolute paths too.
+        let abs = vec![MacroStep::Mouse(MouseStep::MovePath {
+            points: vec![
+                PathPoint {
+                    x: 0.0,
+                    y: 0.0,
+                    t: 0,
+                },
+                PathPoint {
+                    x: 0.4,
+                    y: 0.0,
+                    t: 400,
+                },
+            ],
+        })];
+        let merged = merge(&keys, &abs);
+        assert_eq!(merged.len(), 5);
+        let MacroStep::Mouse(MouseStep::MovePath { points }) = &merged[2] else {
+            panic!()
+        };
+        assert!((points[0].x - 0.1).abs() < 1e-6 && points[0].t == 0);
+        assert!((points.last().unwrap().x - 0.3).abs() < 1e-6 && points.last().unwrap().t == 200);
+    }
+
+    #[test]
     fn view_json_shape() {
         let view = RecorderView {
             session: 3,
             phase: RecorderPhase::Recording,
-            kind: Some(RecordKind::Mouse),
+            kind: Some(RecordKind::MOUSE),
             movement: Movement::Relative,
             result: None,
             error: None,
         };
         assert_eq!(
             serde_json::to_string(&view).unwrap(),
-            r#"{"session":3,"phase":"recording","kind":"mouse","movement":"relative","result":null,"error":null}"#
+            r#"{"session":3,"phase":"recording","kind":{"keys":false,"mouse":true},"movement":"relative","result":null,"error":null}"#
         );
         let config: RecorderConfig = serde_json::from_str(r#"{"stopHotkey":"Alt+F12"}"#).unwrap();
         assert_eq!(config.tolerance, 2.0);

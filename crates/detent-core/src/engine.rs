@@ -14,6 +14,7 @@ use crate::encoder::{
 };
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
+use crate::macro_run::Scope;
 use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
 use crate::profile::{AutoSwitch, Profile, ProfileSwitching, ProfileTarget, normalize_executable};
 use crate::recording::{
@@ -35,6 +36,15 @@ use crate::virtual_control::{
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
+
+/// What the macro player hears from the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacroSignal {
+    /// A control is in this state now; "while active" macros of another state of it stop.
+    State(Scope),
+    /// Another profile became active; all macros stop.
+    ProfileSwitched,
+}
 
 /// Which persisted parts changed since the last [`Engine::take_dirty`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -245,6 +255,8 @@ pub struct Engine {
     zones: HashMap<ZoneKey, bool>,
     /// Momentary controls and mode shifts held right now.
     runtime: Runtime,
+    /// For the macro player, until [`Engine::take_macro_signals`].
+    macro_signals: Vec<MacroSignal>,
     /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
     actions: Vec<ActionRequest>,
     learn: Learn,
@@ -286,6 +298,7 @@ impl Engine {
             presses: HashMap::new(),
             zones: HashMap::new(),
             runtime: Runtime::default(),
+            macro_signals: Vec::new(),
             actions: Vec::new(),
             learn: Learn::Off,
             overlay_editing: false,
@@ -744,7 +757,7 @@ impl Engine {
                 &mut self.actions,
                 self.diagnostics.as_ref().zip(text.as_deref()),
             );
-            tag_profile(&mut self.actions[from..], &self.setup.profiles[active].name);
+            self.after_command(active, ci, from);
         }
         let released = matches!(fired, Fired::Digital(_, PressEvent::Up))
             || matches!(fired, Fired::Zone { entered: false, .. });
@@ -787,7 +800,7 @@ impl Engine {
                 &mut self.actions,
                 self.diagnostics.as_ref(),
             );
-            tag_profile(&mut self.actions[from..], &self.setup.profiles[p].name);
+            self.after_command(p, c, from);
         }
     }
 
@@ -1357,6 +1370,7 @@ impl Engine {
             self.runtime.held.remove(&control.id);
             self.runtime.shifts.remove(&control.id);
         }
+        self.setup.assign_macro_ids();
         self.dirty.setup = true;
         Ok(control.id)
     }
@@ -1395,7 +1409,31 @@ impl Engine {
         }
         self.runtime.shifts.remove(id);
         self.dirty.controls = true;
+        self.after_command(p, c, self.actions.len());
         Ok(())
+    }
+
+    /// Tags the actions control `(p, c)` just emitted (from index `from`) with its profile
+    /// and the state it is in now, and tells the macro player that state, so "while active"
+    /// macros of an earlier state stop.
+    fn after_command(&mut self, p: usize, c: usize, from: usize) {
+        let profile = &self.setup.profiles[p];
+        let control = &profile.virtual_controls[c];
+        let scope = Scope {
+            control: control.id.clone(),
+            state: scope_state(control, self.memory.get(&control.id), &self.runtime),
+        };
+        for request in &mut self.actions[from..] {
+            request.profile.clone_from(&profile.name);
+            request.scope = Some(scope.clone());
+        }
+        self.macro_signals.push(MacroSignal::State(scope));
+    }
+
+    /// What the macro player needs to know since the last call: control states that changed
+    /// (or were confirmed) and profile switches.
+    pub fn take_macro_signals(&mut self) -> Vec<MacroSignal> {
+        std::mem::take(&mut self.macro_signals)
     }
 
     /// Sets a counter control's value without running actions.
@@ -1477,7 +1515,7 @@ impl Engine {
             &mut self.actions,
             self.diagnostics.as_ref().zip(Some("manual command")),
         );
-        tag_profile(&mut self.actions[queued..], &self.setup.profiles[p].name);
+        self.after_command(p, c, queued);
         self.run_profile_switches(queued);
         Ok(())
     }
@@ -1697,6 +1735,7 @@ impl Engine {
         }
         self.setup.active_profile.clone_from(id);
         self.dirty.setup = true;
+        self.macro_signals.push(MacroSignal::ProfileSwitched);
         true
     }
 
@@ -1969,11 +2008,28 @@ fn state_text(control: &VirtualControl, memory: &RadioMemory, runtime: &Runtime)
 /// Applies `command` to a control: updates its memory (and what is held) and queues the
 /// actions. Returns whether its state changed. `hold` is the input a held command is tied
 /// to. `log` is the event log with what caused the command, if recording.
-/// Fills in the `{profile}` placeholder value of just emitted actions: the profile of the
-/// control that emitted them.
-fn tag_profile(actions: &mut [ActionRequest], profile: &str) {
-    for request in actions {
-        request.profile = profile.to_owned();
+/// The control's state as a "while active" macro sees it: a radio or mode state id (empty
+/// when none), `on`/`off`, a counter's value.
+fn scope_state(
+    control: &VirtualControl,
+    memory: Option<&RadioMemory>,
+    runtime: &Runtime,
+) -> String {
+    let empty = RadioMemory::default();
+    let memory = memory.unwrap_or(&empty);
+    let on_off = |on: bool| if on { "on" } else { "off" }.to_owned();
+    match &control.kind {
+        VirtualControlKind::Radio(_) => memory.active.clone().unwrap_or_default(),
+        VirtualControlKind::Mode(m) => m
+            .active(memory)
+            .map(|i| m.states[i].id.clone())
+            .unwrap_or_default(),
+        VirtualControlKind::Toggle(_) => on_off(Toggle::is_on(memory)),
+        VirtualControlKind::Momentary(m) => {
+            let held = runtime.held.get(&control.id).is_some_and(|k| !k.is_empty());
+            on_off(m.active(held))
+        }
+        VirtualControlKind::Counter(c) => c.spec.format(c.value(memory)),
     }
 }
 
@@ -2587,11 +2643,11 @@ mod tests {
             .take_actions()
             .into_iter()
             .flat_map(|a| match a.action {
-                Action::KeyboardMacro { steps, .. } => steps,
+                Action::InputMacro(m) => m.steps,
                 _ => vec![],
             })
             .filter_map(|s| match s {
-                KeyStep::KeyTap { key, .. } => Some(key),
+                crate::macros::MacroStep::Key(KeyStep::KeyTap { key, .. }) => Some(key),
                 _ => None,
             })
             .collect()
@@ -2874,7 +2930,12 @@ mod tests {
             (saved.id.as_str(), saved.name.as_str()),
             (id.as_str(), "Radio")
         );
-        assert_eq!(saved.radio().unwrap().states[0].on_activate, [tap("F1")]);
+        let saved_macro = saved.radio().unwrap().states[0].on_activate[0]
+            .input_macro()
+            .unwrap();
+        assert_eq!(saved_macro.steps, tap("F1").input_macro().unwrap().steps);
+        // Saving gives the macro an id.
+        assert_eq!(saved_macro.id, "mac-1");
         assert_eq!(saved.radio().unwrap().states[0].name, "State 1");
     }
 
@@ -2969,11 +3030,11 @@ mod tests {
     fn recorder_sessions_hold_their_result_until_taken() {
         let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
         let s1 = engine
-            .begin_recording(RecordKind::Keyboard, Movement::Absolute)
+            .begin_recording(RecordKind::KEYBOARD, Movement::Absolute)
             .unwrap();
         assert!(engine.recording_active());
         assert_eq!(
-            engine.begin_recording(RecordKind::Mouse, Movement::Relative),
+            engine.begin_recording(RecordKind::MOUSE, Movement::Relative),
             Err(EngineError::Recording)
         );
         engine.set_recording_phase(s1, RecorderPhase::Recording);
@@ -2985,7 +3046,7 @@ mod tests {
         assert_eq!((result.session, result.action), (s1, tap("A")));
         // A late message from an old session changes nothing.
         let s2 = engine
-            .begin_recording(RecordKind::Mouse, Movement::Relative)
+            .begin_recording(RecordKind::MOUSE, Movement::Relative)
             .unwrap();
         assert!(engine.recorder().result.is_none());
         engine.finish_recording(s1, Err("old".into()));
@@ -3935,11 +3996,11 @@ mod control_tests {
             .take_actions()
             .into_iter()
             .flat_map(|a| match a.action {
-                Action::KeyboardMacro { steps, .. } => steps,
+                Action::InputMacro(m) => m.steps,
                 _ => vec![],
             })
             .filter_map(|s| match s {
-                KeyStep::KeyTap { key, .. } => Some(key),
+                crate::macros::MacroStep::Key(KeyStep::KeyTap { key, .. }) => Some(key),
                 _ => None,
             })
             .collect()
@@ -4565,5 +4626,46 @@ mod control_tests {
             assert!(refs.contains(&secret(n)), "secret {n} missing");
         }
         assert_eq!(refs.len(), 9);
+    }
+
+    #[test]
+    fn actions_carry_their_control_state_and_state_changes_are_signalled() {
+        let mut e = engine();
+        let id = add(
+            &mut e,
+            "Fire",
+            VirtualControlKind::Momentary(Momentary {
+                triggers: vec![button(0)],
+                on_press: vec![key("P")],
+                on_release: vec![key("R")],
+                invert: false,
+            }),
+        );
+        e.take_macro_signals();
+        down(&mut e, 0, 0);
+        let pressed = e.take_actions();
+        let on_scope = Scope {
+            control: id.clone(),
+            state: "on".into(),
+        };
+        assert_eq!(pressed[0].scope.as_ref(), Some(&on_scope));
+        assert_eq!(e.take_macro_signals(), [MacroSignal::State(on_scope)]);
+        up(&mut e, 0, 50);
+        let released = e.take_actions();
+        let off_scope = Scope {
+            control: id.clone(),
+            state: "off".into(),
+        };
+        assert_eq!(released[0].scope.as_ref(), Some(&off_scope));
+        assert_eq!(e.take_macro_signals(), [MacroSignal::State(off_scope)]);
+        // A profile switch is signalled too.
+        let other = e.create_profile("Other");
+        e.select_profile(crate::profile::DEFAULT_PROFILE_ID)
+            .unwrap();
+        assert!(
+            e.take_macro_signals()
+                .contains(&MacroSignal::ProfileSwitched)
+        );
+        assert!(!other.is_empty());
     }
 }

@@ -15,6 +15,8 @@ pub mod engine;
 pub mod event;
 pub mod function;
 pub mod launch;
+pub mod macro_run;
+pub mod macros;
 pub mod overlay;
 pub mod path;
 pub mod placeholder;
@@ -39,7 +41,7 @@ pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualD
 pub use diagnostics::{ActionEvent, Category, Diagnostics, Entry, Level, Record};
 pub use discord::{DiscordCommand, VoiceState};
 pub use encoder::{DetectorConfig, EncoderBinding};
-pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, ManualCommand};
+pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, MacroSignal, ManualCommand};
 pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
 pub use overlay::{

@@ -23,7 +23,13 @@ pub struct AppSettings {
     /// The one-time "Detent keeps running in the tray" notification was shown. Set by the
     /// app, not by the Settings page.
     pub tray_notice_shown: bool,
+    /// Global hotkey that stops all macros and releases every input they hold. Missing in
+    /// files from before it.
+    pub panic_hotkey: String,
 }
+
+/// Default panic hotkey.
+pub const DEFAULT_PANIC_HOTKEY: &str = "Ctrl+Shift+F12";
 
 impl Default for AppSettings {
     fn default() -> Self {
@@ -33,6 +39,7 @@ impl Default for AppSettings {
             start_minimized: true,
             run_as_admin: false,
             tray_notice_shown: false,
+            panic_hotkey: DEFAULT_PANIC_HOTKEY.into(),
         }
     }
 }
@@ -266,6 +273,7 @@ mod tests {
         assert!(s.start_minimized);
         assert!(!s.run_as_admin);
         assert!(!s.tray_notice_shown);
+        assert_eq!(s.panic_hotkey, "Ctrl+Shift+F12");
     }
 
     #[test]

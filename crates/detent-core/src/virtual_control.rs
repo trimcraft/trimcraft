@@ -14,6 +14,7 @@
 
 use crate::action::{Action, ActionError};
 use crate::function::{CounterSpec, EndBehavior, SpecError};
+use crate::macro_run::Scope;
 use crate::placeholder::Placeholders;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -218,6 +219,9 @@ pub struct ActionRequest {
     /// Name of the profile the emitting control belongs to, for `{profile}`; the engine
     /// fills it in.
     pub profile: String,
+    /// The control state the action was emitted in, for "while active" macros; the engine
+    /// fills it in.
+    pub scope: Option<Scope>,
 }
 
 impl ActionRequest {
@@ -229,6 +233,7 @@ impl ActionRequest {
             action: action.clone(),
             value: None,
             profile: String::new(),
+            scope: None,
         }
     }
 
@@ -804,7 +809,8 @@ impl VirtualControl {
         lists.into_iter().flatten().collect()
     }
 
-    fn actions_mut(&mut self) -> Vec<&mut Action> {
+    /// Every action list, to change.
+    pub fn actions_mut(&mut self) -> Vec<&mut Action> {
         let lists: Vec<&mut Vec<Action>> = match &mut self.kind {
             VirtualControlKind::Radio(r) => r
                 .states

@@ -43,8 +43,8 @@ impl ConnectorId {
             Action::Soundpad { .. } => Some(ConnectorId::Soundpad),
             Action::Discord { .. } => Some(ConnectorId::Discord),
             Action::Voicemeeter { .. } => Some(ConnectorId::Voicemeeter),
-            Action::KeyboardMacro { .. }
-            | Action::MouseMacro { .. }
+            Action::InputMacro(_)
+            | Action::StopMacros { .. }
             | Action::SwitchProfile { .. }
             | Action::Speak(_)
             | Action::PlaySound(_)

@@ -1,24 +1,51 @@
 version: 2
+
+# One grouped PR per ecosystem and week for minor and patch updates. Major updates come as
+# separate PRs (one per dependency) because they usually need code changes.
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, rust]
     groups:
       cargo:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # glib 0.18 only reaches the build through Tauri's Linux backend (gtk 0.18, via
+      # tray-icon/libappindicator/wry); Trimcraft builds for Windows only, so it is never
+      # compiled. Its advisory (GHSA-wrw7-89jp-8q8g, fixed in glib 0.20) cannot be resolved
+      # until Tauri moves to gtk-rs 0.20+, and the security update job fails every time it
+      # tries. Remove this once `cargo tree -i glib --target all` shows 0.20 or newer.
+      - dependency-name: glib
 
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, javascript]
     groups:
       npm:
         patterns: ["*"]
         update-types: [minor, patch]
+    ignore:
+      # svelte-check 4.7 declares typescript "^5.0.0 || ^6.0.0" as a peer dependency, so
+      # TypeScript 7 breaks `npm ci`. Revisit when svelte-check supports TypeScript 7.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: [dependencies, github_actions]
+    groups:
+      github-actions:
+        patterns: ["*"]

@@ -232,25 +232,21 @@ struct Http;
 
 impl TokenEndpoint for Http {
     fn post(&mut self, form: &[(&'static str, String)]) -> Result<(u16, String), DiscordError> {
-        let pairs: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(20))
-            .build();
-        match agent.post(discord::TOKEN_URL).send_form(&pairs) {
-            Ok(r) => {
-                let status = r.status();
-                let body = r
-                    .into_string()
-                    .map_err(|e| DiscordError::Http(format!("token request: {e}")))?;
-                Ok((status, body))
-            }
-            Err(ureq::Error::Status(status, r)) => {
-                Ok((status, r.into_string().unwrap_or_default()))
-            }
-            Err(ureq::Error::Transport(t)) => Err(DiscordError::Http(format!(
-                "cannot reach discord.com ({})",
-                t.kind()
-            ))),
+        let mut response = crate::webhook::agent(Duration::from_secs(20))
+            .post(discord::TOKEN_URL)
+            .send_form(form.iter().map(|(k, v)| (*k, v.as_str())))
+            .map_err(|e| {
+                DiscordError::Http(format!(
+                    "cannot reach discord.com ({})",
+                    crate::webhook::error_text(&e)
+                ))
+            })?;
+        let status = response.status().as_u16();
+        match response.body_mut().read_to_string() {
+            Ok(body) => Ok((status, body)),
+            // An error status counts even when its body cannot be read.
+            Err(_) if status >= 400 => Ok((status, String::new())),
+            Err(e) => Err(DiscordError::Http(format!("token request: {e}"))),
         }
     }
 }

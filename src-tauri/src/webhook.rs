@@ -11,32 +11,54 @@ use trimcraft_core::webhook::{HeaderValue, Prepared, SECRET_PREFIX, redact_url};
 /// Sends the request. Returns the outcome for the event log, e.g. "HTTP 204"; a 4xx or 5xx
 /// status is an error.
 pub fn send(request: &Prepared) -> Result<String, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_millis(u64::from(request.timeout_ms)))
-        .build();
-    let mut call = agent.request(request.method.as_str(), &request.url);
+    let agent = agent(Duration::from_millis(u64::from(request.timeout_ms)));
+    let mut call = ureq::http::Request::builder()
+        .method(request.method.as_str())
+        .uri(&request.url);
     for (name, value) in &request.headers {
         let value = match value {
             HeaderValue::Plain(v) => v.clone(),
             HeaderValue::Secret(secret) => secret_value(name, secret)?,
         };
-        call = call.set(name, &value);
+        call = call.header(name, value);
     }
     let result = match &request.body {
-        Some(body) => call.send_string(body),
-        None => call.call(),
-    };
+        Some(body) => call.body(body.as_str()).map(|r| agent.run(r)),
+        None => call.body(()).map(|r| agent.run(r)),
+    }
+    .map_err(|e| format!("{} (invalid request: {e})", redact_url(&request.url)))?;
     match result {
-        Ok(response) => Ok(format!("HTTP {}", response.status())),
-        Err(ureq::Error::Status(code, response)) => {
-            Err(format!("HTTP {code} {}", response.status_text()))
+        Ok(response) => {
+            let status = response.status();
+            if status.is_client_error() || status.is_server_error() {
+                Err(format!(
+                    "HTTP {} {}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or_default()
+                ))
+            } else {
+                Ok(format!("HTTP {}", status.as_u16()))
+            }
         }
-        Err(ureq::Error::Transport(t)) => Err(format!(
-            "{} ({}{})",
-            redact_url(&request.url),
-            t.kind(),
-            t.message().map(|m| format!(": {m}")).unwrap_or_default()
-        )),
+        Err(e) => Err(format!("{} ({})", redact_url(&request.url), error_text(&e))),
+    }
+}
+
+/// An agent that returns 4xx and 5xx responses instead of turning them into errors.
+pub(crate) fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(timeout))
+        .http_status_as_error(false)
+        .build()
+        .into()
+}
+
+/// Describes a failed request without the URL: some ureq errors repeat it, query included.
+pub(crate) fn error_text(error: &ureq::Error) -> String {
+    match error {
+        ureq::Error::BadUri(_) => "invalid URL".into(),
+        ureq::Error::RequireHttpsOnly(_) => "HTTPS required".into(),
+        other => other.to_string(),
     }
 }
 

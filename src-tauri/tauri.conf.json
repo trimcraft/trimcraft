@@ -47,7 +47,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRBQTRFNTc3NTI2QTRBRTcKUldUblNtcFNkK1drU3RFb3hxRTNCVTZIR0I3aFhHS2IvZnAxaEZqQmNOdkx4bmJlbVNOK3NlYTcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk0OTQ3NUY3NjU0RDY0MjUKUldRbFpFMWw5M1dVbExFbE0wVDN6NG1aeTZjaUgzZkcweGt0ZTN4TEdYaDRZRGtDUjhQcy9reWMK",
       "endpoints": [
         "https://github.com/trimcraft/trimcraft/releases/latest/download/latest.json"
       ],

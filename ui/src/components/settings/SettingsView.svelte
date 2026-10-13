@@ -6,6 +6,8 @@
   import GeneralSettings from "./GeneralSettings.svelte";
   import BackupSettings from "./BackupSettings.svelte";
   import OverlayAppearanceSettings from "./OverlayAppearanceSettings.svelte";
+  import UpdatesSettings from "./UpdatesSettings.svelte";
+  import { settingsNav } from "../../lib/nav.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
@@ -13,17 +15,17 @@
   const GENERAL: Section = { id: "general", title: "General", component: GeneralSettings };
   const BACKUP: Section = { id: "backup", title: "Backup & transfer", component: BackupSettings };
   const APPEARANCE: Section = { id: "appearance", title: "Overlay appearance", component: OverlayAppearanceSettings };
-  const SECTIONS: Section[] = [GENERAL, APPEARANCE, BACKUP];
+  const UPDATES: Section = { id: "updates", title: "Updates", component: UpdatesSettings };
+  const SECTIONS: Section[] = [GENERAL, APPEARANCE, BACKUP, UPDATES];
 
-  let current = $state(GENERAL.id);
-  let section = $derived(SECTIONS.find((s) => s.id === current) ?? GENERAL);
+  let section = $derived(SECTIONS.find((s) => s.id === settingsNav.section) ?? GENERAL);
 </script>
 
 <div class="settings">
   <nav aria-label="Settings sections">
     <h2>Settings</h2>
     {#each SECTIONS as s (s.id)}
-      <button class:current={s.id === section.id} onclick={() => (current = s.id)}>{s.title}</button>
+      <button class:current={s.id === section.id} onclick={() => (settingsNav.section = s.id)}>{s.title}</button>
     {/each}
   </nav>
   <div class="body">

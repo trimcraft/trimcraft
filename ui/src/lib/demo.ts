@@ -208,7 +208,9 @@ export function createDemo(): Backend {
     },
     toastPosition: null,
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
-    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false, panicHotkey: "Ctrl+Shift+F12" },
+    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false, panicHotkey: "Ctrl+Shift+F12", checkUpdatesOnStartup: true },
+    // The demo pretends a newer release exists, so the badge and the Updates page show it.
+    update: { state: "available", version: "0.2.0", notes: "### Added\n- Something new (demo)\n\n### Fixed\n- A bug (demo)", date: "2026-11-02T10:00:00Z" },
     // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
     // banner shows. "Restart as administrator" clears both.
     shell: { elevated: false, autostart: "off", autostartNote: null, elevatedForeground: "DemoGame.exe" },
@@ -1107,6 +1109,30 @@ export function createDemo(): Backend {
           ? "Registered without administrator rights for now (UAC prompt at logon); Trimcraft switches to a Task Scheduler task at the next start as administrator."
           : null;
       await ok();
+    },
+    async checkForUpdates() {
+      s.update = { state: "checking" };
+      emit();
+      await new Promise((r) => setTimeout(r, 600));
+      s.update = { state: "available", version: "0.2.0", notes: "### Added\n- Something new (demo)", date: "2026-11-02T10:00:00Z" };
+      await ok();
+      return structuredClone(s.update);
+    },
+    updateBusy: async () => ({ macros: 1, vjoy: false }),
+    async installUpdate() {
+      if (s.update.state !== "available") throw new Error("there is no update to install");
+      const version = s.update.version;
+      for (let p = 0; p <= 100; p += 25) {
+        s.update = { state: "downloading", version, percent: p };
+        emit();
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      s.update = { state: "installing", version };
+      emit();
+      await new Promise((r) => setTimeout(r, 800));
+      // A real update restarts Trimcraft; the demo just reports success.
+      s.update = { state: "upToDate", noReleases: false };
+      emit();
     },
     async restartElevated() {
       s.shell.elevated = true;

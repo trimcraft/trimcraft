@@ -32,3 +32,11 @@ export function show(section: Section) {
     // Only a convenience; the app works without it.
   }
 }
+
+/** The Settings page's section; the header's update badge opens "updates". */
+export const settingsNav = $state<{ section: string }>({ section: "general" });
+
+export function showSettings(section: string) {
+  settingsNav.section = section;
+  show("settings");
+}

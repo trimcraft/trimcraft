@@ -35,6 +35,8 @@ import type {
   RecordKind,
   RecorderConfig,
   SecretRef,
+  UpdateBusy,
+  UpdateState,
   Sound,
   VirtualControlDef,
   VoiceRef,
@@ -140,6 +142,12 @@ export interface Backend {
   setSettings(settings: AppSettings): Promise<void>;
   /** Starts Trimcraft as administrator (UAC prompt) and quits this instance. */
   restartElevated(): Promise<void>;
+  /** Looks for a new release now; the result is also in the snapshot. */
+  checkForUpdates(): Promise<UpdateState>;
+  /** What an update would interrupt (running macros, vJoy). */
+  updateBusy(): Promise<UpdateBusy>;
+  /** Downloads and installs the update; Trimcraft quits and restarts. */
+  installUpdate(): Promise<void>;
   /** Makes a profile active (no actions run). */
   selectProfile(id: string): Promise<void>;
   /** Creates an empty profile and makes it active; resolves with its id. */
@@ -246,6 +254,9 @@ async function tauriBackend(): Promise<Backend> {
     testToast: () => invoke("test_toast"),
     setSettings: (settings) => invoke("set_settings", { settings }),
     restartElevated: () => invoke("restart_elevated"),
+    checkForUpdates: () => invoke("check_for_updates"),
+    updateBusy: () => invoke("update_busy"),
+    installUpdate: () => invoke("install_update"),
     selectProfile: (id) => invoke("select_profile", { id }),
     createProfile: (name) => invoke("create_profile", { name }),
     duplicateProfile: (id, name) => invoke("duplicate_profile", { id, name }),

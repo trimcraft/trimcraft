@@ -16,7 +16,7 @@
   import ProfileSelector from "./components/ProfileSelector.svelte";
   import ProfilesPanel from "./components/ProfilesPanel.svelte";
   import VjoyMappingsPanel from "./components/VjoyMappingsPanel.svelte";
-  import { SECTIONS, nav, show } from "./lib/nav.svelte";
+  import { SECTIONS, nav, show, showSettings } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
   let meta = $state<AppMeta | null>(null);
@@ -48,6 +48,9 @@
   {#if meta}
     {#if !isTauri}<span class="badge warn">browser demo, not connected to devices</span>{/if}
     <span class="version muted mono" title="Trimcraft {meta.version} · input backend: {meta.backend} · running as administrator: {elevated ? 'yes' : 'no'}">v{meta.version}</span>
+    {#if snapshot?.update.state === "available"}
+      <button class="update-badge" title="Trimcraft {snapshot.update.version} is available" onclick={() => showSettings("updates")}>update</button>
+    {/if}
   {/if}
   <button class="gear" class:current={nav.section === "settings"} title="Settings" aria-label="Settings" onclick={() => show("settings")}>⚙</button>
 </header>
@@ -137,6 +140,7 @@
   .info { font-size: 11px; word-break: break-all; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
   .banner { padding: 8px 16px; margin: 0; }
   .pad { padding: 16px; }
+  .update-badge { font-size: 11px; padding: 0 6px; border-radius: 10px; border-color: var(--accent); color: var(--accent); background: none; }
   .gear { border-color: transparent; background: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 6px; }
   .gear.current { color: var(--accent); border-color: var(--accent); }
   .warn.banner { color: var(--warn); background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }

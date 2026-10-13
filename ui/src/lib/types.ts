@@ -235,6 +235,8 @@ export interface EngineSnapshot {
   /** App-wide settings (Settings page). */
   settings: AppSettings;
   shell: ShellStatus;
+  /** The update check (Settings, Updates; header badge). */
+  update: UpdateState;
 }
 
 export interface AppMeta {
@@ -777,6 +779,26 @@ export interface AppSettings {
   trayNoticeShown: boolean;
   /** Stops all macros and releases every input they hold. */
   panicHotkey: string;
+  /** Look for a new release when Trimcraft starts. */
+  checkUpdatesOnStartup: boolean;
+}
+
+// --- Updates (trimcraft-core: updates.rs) ------------------------------------------------------
+
+export type UpdateState =
+  | { state: "idle" }
+  | { state: "checking" }
+  /** noReleases: no release published yet. */
+  | { state: "upToDate"; noReleases: boolean }
+  | { state: "available"; version: string; notes: string; date: string | null }
+  | { state: "downloading"; version: string; percent: number | null }
+  | { state: "installing"; version: string }
+  | { state: "failed"; message: string };
+
+/** What an update would interrupt. */
+export interface UpdateBusy {
+  macros: number;
+  vjoy: boolean;
 }
 
 /** How Trimcraft is started at logon: Run registry value or elevated Task Scheduler task. */

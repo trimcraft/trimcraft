@@ -1,11 +1,11 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
-use crate::{Meta, Shared, overlay, secrets};
+use crate::{Meta, Shared, elevation, overlay, secrets};
 use detent_core::connection::{DiscordSettings, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
-    Action, ActionRequest, Anchor, ButtonPair, Connections, ConnectorId, ControlRef,
+    Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
     DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, MonitorRef, Movement, OverlayItem,
     Phase, RadioCommand, Sound, VirtualControl, WidgetPosition,
 };
@@ -61,6 +61,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         clear_recording,
         set_recorder_config,
         test_action,
+        set_settings,
+        restart_elevated,
     ]
 }
 
@@ -523,6 +525,28 @@ fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     Ok(())
 }
 
+/// Saves the Settings page ("General") and registers or removes autostart to match.
+#[tauri::command]
+fn set_settings(shared: State<'_, Arc<Shared>>, settings: AppSettings) -> Res<()> {
+    with(&shared, |e| {
+        e.set_settings(settings);
+        Ok(())
+    })?;
+    crate::sync_autostart(&shared);
+    Ok(())
+}
+
+/// "Restart as administrator": starts an elevated Detent (UAC prompt) with its window shown,
+/// and quits this one. Async: the prompt must not block the UI thread.
+#[tauri::command]
+async fn restart_elevated(app: AppHandle) -> Res<()> {
+    tauri::async_runtime::spawn_blocking(|| elevation::relaunch(true))
+        .await
+        .map_err(|e| e.to_string())??;
+    app.exit(0);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     //! The UI sends these payloads (see ui/src/lib/backend.ts); they must deserialise.
@@ -643,6 +667,13 @@ mod tests {
         assert_eq!(setup["portalUrl"], discord::PORTAL_URL);
         assert_eq!(setup["scopes"].as_array().unwrap().len(), 3);
 
+        // Settings page: as the UI sends it (the tray notice flag is ignored by the engine).
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"closeToTray":false,"startWithWindows":true,"startMinimized":true,
+                "runAsAdmin":true,"trayNoticeShown":false}"#,
+        )
+        .unwrap();
+        assert!(settings.start_with_windows && settings.run_as_admin && !settings.close_to_tray);
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
         let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();

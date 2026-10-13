@@ -11,11 +11,13 @@
   import RecorderSettings from "./components/RecorderSettings.svelte";
   import RecordingBanner from "./components/RecordingBanner.svelte";
   import ConnectionsView from "./components/ConnectionsView.svelte";
+  import DiagnosticsView from "./components/DiagnosticsView.svelte";
   import { SECTIONS, nav, show } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
   let meta = $state<AppMeta | null>(null);
   let selected = $state<string | null>(null);
+  let hardwareTab = $state<"devices" | "log">("devices");
 
   let device = $derived(snapshot?.devices.find((d) => d.id === selected) ?? snapshot?.devices[0]);
 
@@ -46,6 +48,17 @@
 {#if snapshot}
   {#if snapshot.backendError}<p class="error banner">Input backend failed: {snapshot.backendError}</p>{/if}
   {#if nav.section === "hardware"}
+    <div class="tabs" role="tablist">
+      <button role="tab" aria-selected={hardwareTab === "devices"} class:current={hardwareTab === "devices"} onclick={() => (hardwareTab = "devices")}>Devices</button>
+      <button role="tab" aria-selected={hardwareTab === "log"} class:current={hardwareTab === "log"} onclick={() => (hardwareTab = "log")}>Event log</button>
+    </div>
+  {#if hardwareTab === "log"}
+    <main class="single wide">
+      <div class="content">
+        <DiagnosticsView />
+      </div>
+    </main>
+  {:else}
     <main>
       <aside>
         <h2>Devices</h2>
@@ -65,6 +78,7 @@
         <OverlayPanel {snapshot} />
       </div>
     </main>
+  {/if}
   {:else if nav.section === "connections"}
     <main class="single">
       <div class="content">
@@ -91,8 +105,12 @@
   .version { cursor: default; }
   nav button { border-color: transparent; background: none; color: var(--muted); }
   nav button.current { color: var(--accent); border-color: var(--accent); }
+  .tabs { display: flex; gap: 4px; padding: 8px 16px 0; }
+  .tabs button { border-radius: 4px 4px 0 0; border-bottom-color: transparent; background: none; color: var(--muted); }
+  .tabs button.current { color: var(--accent); border-color: var(--accent); }
   main { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: 16px; padding: 16px; }
   main.single { grid-template-columns: minmax(0, 1100px); }
+  main.single.wide { grid-template-columns: minmax(0, 1600px); }
   aside { display: flex; flex-direction: column; gap: 8px; }
   .content { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
   .info { font-size: 11px; word-break: break-all; margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }

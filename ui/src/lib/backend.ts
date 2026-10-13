@@ -11,6 +11,7 @@ import type {
   DetectorConfig,
   DiscordSetup,
   DeviceId,
+  DiagEntry,
   EngineSnapshot,
   FunctionDef,
   KeyInfo,
@@ -85,6 +86,11 @@ export interface Backend {
   setRecorderConfig(config: RecorderConfig): Promise<void>;
   /** Plays the action after the countdown. */
   testAction(action: Action): Promise<void>;
+  /** Calls `onBatch` with the buffered entries first, then with new ones about every 100 ms. Entries may repeat; drop them by `seq`. */
+  subscribeDiagnostics(onBatch: (entries: DiagEntry[]) => void): Promise<() => void>;
+  clearDiagnostics(): Promise<void>;
+  /** Opens the log folder in the file manager. */
+  openLogFolder(): Promise<void>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -142,6 +148,14 @@ async function tauriBackend(): Promise<Backend> {
     clearRecording: () => invoke("clear_recording"),
     setRecorderConfig: (config) => invoke("set_recorder_config", { config }),
     testAction: (action) => invoke("test_action", { action }),
+    async subscribeDiagnostics(onBatch) {
+      // Listen first, then fetch the buffer: nothing is missed, a few entries may arrive twice.
+      const unlisten = await listen<DiagEntry[]>("detent://diagnostics", (e) => onBatch(e.payload));
+      onBatch(await invoke<DiagEntry[]>("get_diagnostics"));
+      return unlisten;
+    },
+    clearDiagnostics: () => invoke("clear_diagnostics"),
+    openLogFolder: () => invoke("open_log_folder"),
   };
 }
 

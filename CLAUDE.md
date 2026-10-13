@@ -52,6 +52,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   (Discord RPC frames, messages, OAuth login flow over a `Transport` trait, idempotent
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
+  `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
   `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
@@ -63,9 +64,11 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `commands.rs` (IPC; payload shapes are tested),
-  `storage.rs` (atomic JSON files).
+  `storage.rs` (atomic JSON files). The event log is a `Diagnostics` handle shared by the engine, executor and log bridge (`lib.rs`);
+  a thread sends new entries to the UI every 100 ms (`detent://diagnostics`).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test), `Overlay.svelte`
-  (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  (overlay window), `components/DiagnosticsView.svelte` + `lib/diagnostics.svelte.ts` (event log tab),
+  `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload

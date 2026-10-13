@@ -5,6 +5,7 @@ import type { Backend } from "./backend";
 import type {
   Action,
   DeviceSnapshot,
+  DiagEntry,
   DiscordCommand,
   GuideStep,
   EngineSnapshot,
@@ -317,6 +318,62 @@ export function createDemo(): Backend {
     emit();
   }, 33);
 
+  // --- Event log: a made-up stream, one entry batch per 100 ms while a window listens -------
+  const diagLog: DiagEntry[] = [];
+  const diagListeners = new Set<(entries: DiagEntry[]) => void>();
+  let diagSeq = 0;
+  let diagAxis = 0;
+  const pushDiag = (e: Omit<DiagEntry, "seq" | "timeMs" | "level" | "device" | "deviceName" | "detail"> & Partial<DiagEntry>, out: DiagEntry[]) => {
+    const entry: DiagEntry = { seq: ++diagSeq, timeMs: Date.now(), level: "info", device: null, deviceName: null, detail: null, ...e };
+    diagLog.push(entry);
+    if (diagLog.length > 5000) diagLog.shift();
+    out.push(entry);
+  };
+  const STICK = { device: "f00d:0001#1", deviceName: "Demo Stick" };
+  const PANEL = { device: "f00d:0003#1", deviceName: "Demo Panel" };
+  /** One random "scene" of related entries, like the engine would write for an input. */
+  function diagScene(out: DiagEntry[]) {
+    const r = Math.random();
+    const n = 1 + Math.floor(Math.random() * 16);
+    if (r < 0.4) {
+      diagAxis = Math.max(-100, Math.min(100, diagAxis + (Math.random() - 0.4) * 12));
+      const v = diagAxis.toFixed(1);
+      pushDiag({ category: "input", ...STICK, text: `Axis 2: ${diagAxis >= 0 ? "+" : ""}${v} %`, detail: `value ${(diagAxis / 100).toFixed(4)} (range -1..1)` }, out);
+    } else if (r < 0.6) {
+      pushDiag({ category: "input", ...PANEL, text: `Button ${n} pressed` }, out);
+      pushDiag({ category: "trigger", text: `Demo Panel · Button ${n} → Comms: select "Squad"`, detail: "state changed" }, out);
+      pushDiag({ category: "control", text: "Comms: Command → Squad", detail: "select \"Squad\"; 1 action(s) queued" }, out);
+      pushDiag({ category: "action", text: "Queued: keys: tap F3", detail: "Comms / Squad (activate): keys: tap F3" }, out);
+      pushDiag({ category: "action", text: `Executed in ${(2 + Math.random() * 30).toFixed(0)} ms: keys: tap F3`, detail: "Comms / Squad (activate): keys: tap F3" }, out);
+      pushDiag({ category: "input", ...PANEL, text: `Button ${n} released` }, out);
+    } else if (r < 0.72) {
+      const up = Math.random() < 0.5;
+      pushDiag({ category: "input", ...PANEL, text: `Encoder Radio knob: detent ${up ? "+" : "−"}`, detail: `from button ${up ? 12 : 11} pressed` }, out);
+      pushDiag({ category: "trigger", text: `Radio knob ${up ? "+" : "−"} → Comms: ${up ? "next state" : "previous state"}`, detail: "no change (already in that state or at the end)" }, out);
+    } else if (r < 0.82) {
+      pushDiag({ category: "input", ...STICK, text: "Hat 1: centered → up-right" }, out);
+      pushDiag({ category: "input", ...STICK, text: "Hat 1: up-right → centered" }, out);
+    } else if (r < 0.88) {
+      pushDiag({ category: "action", text: "Skipped (its connection is disabled): soundpad: play \"Siren\"", level: "warn", detail: "Alarm / On (activate): soundpad: play \"Siren\"" }, out);
+    } else if (r < 0.92) {
+      pushDiag({ category: "action", text: "Failed (SendInput delivered 0 of 2 inputs (error Access is denied.)): keys: tap F5", level: "error", detail: "Comms / Wing (activate): keys: tap F5" }, out);
+    } else if (r < 0.96) {
+      pushDiag({ category: "connector", text: "Discord: connected", detail: "Connected as Sam" }, out);
+      pushDiag({ category: "connector", text: "Soundpad: error: pipe closed", level: "error" }, out);
+    } else {
+      pushDiag({ category: "log", text: "could not read Soundpad's sound list: timed out", level: "warn", detail: "log target: detent_app::soundpad" }, out);
+    }
+  }
+  for (let i = 0; i < 12; i++) diagScene([]);
+  setInterval(() => {
+    if (diagListeners.size === 0) return;
+    const batch: DiagEntry[] = [];
+    // Mostly a few entries, now and then a burst, like a quickly turned axis or knob.
+    const scenes = Math.random() < 0.08 ? 40 : Math.floor(Math.random() * 3);
+    for (let i = 0; i < scenes; i++) diagScene(batch);
+    if (batch.length) diagListeners.forEach((cb) => cb(structuredClone(batch)));
+  }, 100);
+
   let nextEnc = 1;
   let nextFn = 1;
   let nextVc = 1;
@@ -588,6 +645,17 @@ export function createDemo(): Backend {
     },
     async testAction(action) {
       setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
+    },
+    async subscribeDiagnostics(cb) {
+      diagListeners.add(cb);
+      cb(structuredClone(diagLog));
+      return () => diagListeners.delete(cb);
+    },
+    async clearDiagnostics() {
+      diagLog.length = 0;
+    },
+    async openLogFolder() {
+      throw new Error("not available in the browser demo");
     },
   };
 }

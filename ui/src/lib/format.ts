@@ -1,4 +1,5 @@
 import type {
+  DiagEntry,
   Action,
   ControlRef,
   DiscordCommand,
@@ -171,4 +172,21 @@ export function actionText(a: Action): string {
   const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
   const speed = a.playback.speedPercent === 100 ? "" : ` (${a.playback.speedPercent}%)`;
   return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}${speed}: ${steps.join(", ") || "no steps"}`;
+}
+
+// --- Event log ---------------------------------------------------------------------------------
+
+/** Local time with milliseconds, e.g. "14:03:07.042". */
+export function diagTime(timeMs: number): string {
+  const d = new Date(timeMs);
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+/** One entry as a line of plain text (for copying). */
+export function diagLine(e: DiagEntry): string {
+  const device = e.deviceName ? ` ${e.deviceName}:` : "";
+  const level = e.level === "info" ? "" : ` ${e.level.toUpperCase()}`;
+  const detail = e.detail ? `  (${e.detail})` : "";
+  return `${diagTime(e.timeMs)} [${e.category}]${level}${device} ${e.text}${detail}`;
 }

@@ -434,3 +434,22 @@ export interface KeyInfo {
 
 /** Radio commands the UI can run; they fire actions like a trigger would. */
 export type RadioCommand = "increment" | "decrement" | "clear" | "toggleOff";
+
+// --- Diagnostics event log (detent-core diagnostics::Entry) ------------------------------------
+
+export type DiagCategory = "input" | "trigger" | "control" | "action" | "connector" | "log";
+export type DiagLevel = "info" | "warn" | "error";
+
+export interface DiagEntry {
+  /** Increases by one per entry; used to drop entries received twice. */
+  seq: number;
+  /** Milliseconds since the Unix epoch. */
+  timeMs: number;
+  category: DiagCategory;
+  level: DiagLevel;
+  /** Stable device id, when the entry belongs to a device. */
+  device: string | null;
+  deviceName: string | null;
+  text: string;
+  detail: string | null;
+}

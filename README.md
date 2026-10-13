@@ -29,6 +29,14 @@ Widgets that were never placed stay stacked in the chosen corner, as in earlier 
 
 The main window has three sections: **Virtual Controls** (opened by default), **Connections** and
 **Hardware Test** (everything above).
+
+Hardware Test has two tabs. **Devices** is the live view of all controls. **Event log** records what Detent
+sees and does, newest at the bottom: button, hat and encoder input (axes only when they moved at least
+2 %, at most 10 entries per second per axis), trigger matches, state changes of virtual controls,
+actions (queued, executed with duration, skipped, failed), connector status changes, and warnings and
+errors from the app log. The last 5000 entries are kept in memory. Filter by category, device or text,
+pause the view while recording continues, copy what is visible, or open the log folder. The file log
+(`%LOCALAPPDATA%oud.breu.detentogsdetent.log`) is unchanged.
 A virtual control is built from physical inputs and can run actions. The first kind is the
 **radio**: several states of which at most one is active, like the preset buttons of a car radio.
 

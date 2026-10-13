@@ -2,6 +2,7 @@
 // falls back to a small in-page demo so the UI can be developed and checked without the app.
 
 import type {
+  AboutLink,
   Action,
   AppMeta,
   AppSettings,
@@ -116,6 +117,10 @@ export interface Backend {
   clearDiagnostics(): Promise<void>;
   /** Opens the log folder in the file manager. */
   openLogFolder(): Promise<void>;
+  /** Opens one of the fixed links on Settings > About in the browser. */
+  openAboutLink(link: AboutLink): Promise<void>;
+  /** The licences of the third-party software built into Trimcraft, as plain text. */
+  thirdPartyLicenses(): Promise<string>;
   /** Saves the configuration, or the given profiles, to a file chosen in a dialog; credentials are left out. Resolves with the path, null if cancelled. */
   exportSetup(profiles: string[] | null): Promise<string | null>;
   /** Opens a file dialog and checks the file; null if cancelled, rejects with the reason when the file cannot be imported. */
@@ -227,6 +232,8 @@ async function tauriBackend(): Promise<Backend> {
     },
     clearDiagnostics: () => invoke("clear_diagnostics"),
     openLogFolder: () => invoke("open_log_folder"),
+    openAboutLink: (link) => invoke("open_about_link", { link }),
+    thirdPartyLicenses: () => invoke("third_party_licenses"),
     exportSetup: (profiles) => invoke("export_setup", { profiles }),
     pickImportFile: () => invoke("pick_import_file"),
     cancelImport: () => invoke("cancel_import"),

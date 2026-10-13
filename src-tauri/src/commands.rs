@@ -73,6 +73,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
+        open_about_link,
+        third_party_licenses,
         crate::transfer::export_setup,
         crate::transfer::pick_import_file,
         crate::transfer::cancel_import,
@@ -729,6 +731,40 @@ fn open_log_folder(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
         .map_err(|e| format!("cannot open the log folder: {e}"))
 }
 
+/// Links on Settings > About. Only these fixed URLs can be opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum AboutLink {
+    Repository,
+    Issues,
+    License,
+}
+
+impl AboutLink {
+    fn url(self) -> &'static str {
+        match self {
+            Self::Repository => "https://github.com/trimcraft/trimcraft",
+            Self::Issues => "https://github.com/trimcraft/trimcraft/issues/new/choose",
+            Self::License => "https://www.gnu.org/licenses/gpl-3.0.html",
+        }
+    }
+}
+
+#[tauri::command]
+fn open_about_link(app: AppHandle, link: AboutLink) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(link.url(), None::<&str>)
+        .map_err(|e| format!("cannot open the browser: {e}"))
+}
+
+/// The licences of the third-party software built into Trimcraft (THIRD_PARTY_LICENSES, also
+/// installed next to the program).
+#[tauri::command]
+fn third_party_licenses() -> &'static str {
+    include_str!("../../THIRD_PARTY_LICENSES")
+}
+
 /// Saves the Settings page ("General") and registers or removes autostart to match.
 #[tauri::command]
 fn set_settings(
@@ -837,6 +873,19 @@ mod tests {
     #[test]
     fn ui_payloads_deserialise() {
         let _: ControlRef = serde_json::from_str(r#"{"type":"axis","index":2}"#).unwrap();
+        for (link, url) in [
+            ("repository", "https://github.com/trimcraft/trimcraft"),
+            (
+                "issues",
+                "https://github.com/trimcraft/trimcraft/issues/new/choose",
+            ),
+            ("license", "https://www.gnu.org/licenses/gpl-3.0.html"),
+        ] {
+            let parsed: AboutLink = serde_json::from_str(&format!("\"{link}\"")).unwrap();
+            assert_eq!(parsed.url(), url);
+        }
+        assert!(serde_json::from_str::<AboutLink>(r#""https://example.com""#).is_err());
+        assert!(third_party_licenses().starts_with("Third-party licences for Trimcraft"));
         let _: ButtonPair =
             serde_json::from_str(r#"{"device":"f00d:0003#1","decrement":10,"increment":11}"#)
                 .unwrap();

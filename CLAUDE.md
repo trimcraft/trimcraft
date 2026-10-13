@@ -51,6 +51,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
+  `audio` (speech, sound file, volume and media key actions), `voicemeeter` (parameters,
+  gain math), `launch` (launch targets, URL check), `webhook` (HTTP requests, secret header
+  references, URL redaction), `placeholder` (`{control}` and friends in action texts),
   `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `discord`
   (Discord RPC frames, messages, OAuth login flow over a `Transport` trait, idempotent
   mute/deafen), `path`
@@ -62,6 +65,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
   `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
+  `voicemeeter.rs` (Voicemeeter connector: VoicemeeterRemote64.dll loaded at runtime),
+  `speech.rs` (SAPI thread), `sound.rs` (rodio thread), `volume.rs` (Core Audio),
+  `launch.rs` (CreateProcess, ShellExecuteW), `webhook.rs` (ureq, secret header values),
   `discord.rs` (Discord connector: IPC pipe, token endpoint over HTTPS, worker thread with
   reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
@@ -88,11 +94,12 @@ or bump `SETUP_SCHEMA_VERSION`.
 
 Some things need real hardware and an interactive desktop: devices through DirectInput/RawInput,
 the overlay over a borderless game, the global hotkey while the game has focus, encoder pulse
-timing, the macro recorder (low-level hooks, Raw Input), Soundpad and Discord, the tray, autostart and
-elevation (UAC, Task Scheduler). Ignored tests need
+timing, the macro recorder (low-level hooks, Raw Input), Soundpad, Discord and Voicemeeter, the
+tray, autostart and elevation (UAC, Task Scheduler), speech, sound and volume. Ignored tests need
 such a setup:
 `cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
 without playing anything; reads Discord voice settings with saved, authorized credentials and
 `DETENT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
-Detent autostart enabled).
+Detent autostart enabled; lists voices, sound outputs and audio programs without playing anything;
+asks a running Voicemeeter for its edition).
 Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.

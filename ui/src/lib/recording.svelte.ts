@@ -1,7 +1,7 @@
 // Shared state of the macro recorder in this window: which editor started the recording,
 // and countdowns (the backend does the real timing; these only display it).
 
-import type { MonitorRef, MouseStep } from "./types";
+import type { MonitorRef, MacroStep } from "./types";
 
 /** Same as detent-core's recording::COUNTDOWN_MS. */
 export const COUNTDOWN_MS = 3000;
@@ -38,7 +38,7 @@ export function countdown(active: () => boolean): { left: number } {
  * Re-expresses absolute positions recorded on monitor `from` as fractions of monitor `to`,
  * so steps recorded on another monitor can be appended to a macro.
  */
-export function reproject(steps: MouseStep[], from: MonitorRef, to: MonitorRef): MouseStep[] {
+export function reproject(steps: MacroStep[], from: MonitorRef, to: MonitorRef): MacroStep[] {
   const fx = (x: number) => (from.x + x * from.width - to.x) / to.width;
   const fy = (y: number) => (from.y + y * from.height - to.y) / to.height;
   return steps.map((s) => {

@@ -52,37 +52,52 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   commands and transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
-  `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
+  `action` (actions, key table with scan codes, expansion to input ops), `macros` (input macros:
+  mixed steps, repetition, retrigger), `macro_run` (macro player decisions: repetition state,
+  held-input bookkeeping, registry),
+  `audio` (speech, sound file, volume and media key actions), `voicemeeter` (parameters,
+  gain math), `launch` (launch targets, URL check), `webhook` (HTTP requests, secret header
+  references, URL redaction), `placeholder` (`{control}` and friends in action texts),
   `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `discord`
   (Discord RPC frames, messages, OAuth login flow over a `Transport` trait, idempotent
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
+  `toast` (toast queue: newest first, one per control, at most 3, expiry),
   `vjoy` (vJoy targets, axis curves, mappings, desired output state and its diff),
-  `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
+  `transfer` (export files, secret stripping, import validation, profile merge), `backup` (backup file names
+  and retention),
+  `recording` (recorder events to macro steps, key/mouse timeline merge, stop trimming, hotkey
+  parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
-- `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
+- `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread), `player.rs` (input macro
+  player: repetition, stop, release of held inputs, panic), `input.rs` (`SendInput`),
   `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
+  `voicemeeter.rs` (Voicemeeter connector: VoicemeeterRemote64.dll loaded at runtime),
+  `speech.rs` (SAPI thread), `sound.rs` (rodio thread), `volume.rs` (Core Audio),
+  `launch.rs` (CreateProcess, ShellExecuteW), `webhook.rs` (ureq, secret header values),
   `discord.rs` (Discord connector: IPC pipe, token endpoint over HTTPS, worker thread with
   reconnect), `vjoy.rs` (vJoy connector: `vJoyInterface.dll` loaded at run time behind the
   `VjoyApi` trait, worker thread writing output diffs), `secrets.rs` (credential store via
   `keyring`),
   `recorder.rs` (macro recorder:
-  low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
+  low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey), `toasts.rs` (toast queue thread; shows the window without activating it),
   `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),
   `elevation.rs` (token elevation, UAC relaunch, single instance across elevation levels,
   elevated-foreground warning), `foreground.rs` (the one `SetWinEventHook` foreground watcher,
   feeding profile switching and the elevation warning), `profile_watch.rs` (profile switching
   from the foreground program, process window list),
   `commands.rs` (IPC; payload shapes are tested),
+  `backups.rs` (automatic setup backups, hooked into the setup save), `transfer.rs` (export/import/restore
+  commands and their dialogs),
   `storage.rs` (atomic JSON files). The event log is a `Diagnostics` handle shared by the engine, executor and log bridge (`lib.rs`);
   a thread sends new entries to the UI every 100 ms (`detent://diagnostics`).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
   via the gear, one component per section in `components/settings`), `Overlay.svelte`
   (overlay window), `components/DiagnosticsView.svelte` + `lib/diagnostics.svelte.ts` (event log tab),
-  `ProfilesPanel`/`ProfileSelector` (profiles), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  `ProfilesPanel`/`ProfileSelector` (profiles), `ToastView`, `lib/overlay-style.ts` (themes as CSS variables), `lib/widget-visibility.svelte.ts` (only-after-change widgets), `ImportFlow` + `settings/BackupSettings` (export, import, backups), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload
@@ -93,11 +108,12 @@ or bump `SETUP_SCHEMA_VERSION`.
 
 Some things need real hardware and an interactive desktop: devices through DirectInput/RawInput,
 the overlay over a borderless game, the global hotkey while the game has focus, encoder pulse
-timing, the macro recorder (low-level hooks, Raw Input), Soundpad and Discord, the tray, autostart and
-elevation (UAC, Task Scheduler). Ignored tests need
+timing, the macro recorder (low-level hooks, Raw Input), Soundpad, Discord and Voicemeeter, the
+tray, autostart and elevation (UAC, Task Scheduler), speech, sound and volume. Ignored tests need
 such a setup:
 `cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
 without playing anything; reads Discord voice settings with saved, authorized credentials and
 `DETENT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
-Detent autostart enabled).
+Detent autostart enabled; lists voices, sound outputs and audio programs without playing anything;
+asks a running Voicemeeter for its edition).
 Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.

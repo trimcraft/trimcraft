@@ -327,6 +327,14 @@ pub enum ActionEvent {
     Handed {
         connector: String,
     },
+    /// A long-running action (speech, sound, launch, HTTP) started in the background; the
+    /// queue goes on. Its result follows as `Finished` or `Failed`.
+    Started,
+    /// A long-running action finished, with what came of it (e.g. "HTTP 204").
+    Finished {
+        ms: f64,
+        outcome: String,
+    },
     Skipped {
         reason: String,
     },
@@ -352,6 +360,14 @@ pub fn action_record(event: &ActionEvent, origin: &str, description: &str) -> Re
         ActionEvent::Handed { connector } => {
             record(format!("Sent to {connector}: {description}"), Level::Info)
         }
+        ActionEvent::Started => record(
+            format!("Started in the background: {description}"),
+            Level::Info,
+        ),
+        ActionEvent::Finished { ms, outcome } => record(
+            format!("{outcome} after {}: {description}", duration_text(*ms)),
+            Level::Info,
+        ),
         ActionEvent::Skipped { reason } => {
             record(format!("Skipped ({reason}): {description}"), Level::Warn)
         }
@@ -537,6 +553,24 @@ mod tests {
             desc,
         );
         assert_eq!(sent.text, "Sent to Soundpad: keys: tap F1");
+        let started = action_record(&ActionEvent::Started, origin, "http: POST https://x.test");
+        assert_eq!(
+            started.text,
+            "Started in the background: http: POST https://x.test"
+        );
+        let finished = action_record(
+            &ActionEvent::Finished {
+                ms: 230.0,
+                outcome: "HTTP 204".into(),
+            },
+            origin,
+            "http: POST https://x.test",
+        );
+        assert_eq!(
+            finished.text,
+            "HTTP 204 after 230 ms: http: POST https://x.test"
+        );
+        assert_eq!(finished.level, Level::Info);
 
         let skipped = action_record(
             &ActionEvent::Skipped {

@@ -65,6 +65,7 @@
 <div class="editor">
   <div class="row">
     <label class="name">{typeName} name <input bind:value={draft.name} placeholder={typeName} /></label>
+    <label class="toast" title="A short message on the overlay when this control's state or value changes (duration and position: Settings > Overlay appearance)"><input type="checkbox" bind:checked={draft.showToast} /> Show toast on change</label>
   </div>
 
   {#if draft.kind.type === "radio"}
@@ -215,6 +216,7 @@
   .editor :global(button) { font-size: 12px; }
   h3 { margin: 10px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .name { display: flex; gap: 6px; align-items: center; color: var(--muted); }
+  .toast { display: flex; gap: 6px; align-items: center; color: var(--muted); }
   .settings label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
   .settings input[type="number"] { width: 6em; }
   .check { cursor: pointer; }

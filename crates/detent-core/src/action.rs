@@ -12,12 +12,17 @@
 //! (see [`crate::path`]), or by relative amounts. Recorded movement is kept as paths of
 //! waypoints with timestamps; playback interpolates between them.
 
+use crate::audio::{self, MediaKey, SoundFile, Speech, VolumeCommand, VolumeTarget};
 use crate::discord::DiscordCommand;
+use crate::launch::{self, Launch, LaunchTarget};
+use crate::macros::{InputMacro, MAX_PAUSE_MS, MAX_TIMES, MacroStep, Repeat};
 use crate::overlay::MonitorRef;
 use crate::path::{self, Sample, Screens};
 use crate::profile::ProfileTarget;
 use crate::soundpad::SoundpadCommand;
 use crate::vjoy::{VjoyCommand, VjoyError};
+use crate::voicemeeter::{self, VmCommand, VmTarget};
+use crate::webhook::{self, HttpRequest};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -44,22 +49,12 @@ pub const PATH_TICK_MS: f64 = 8.0;
     tag = "type"
 )]
 pub enum Action {
-    KeyboardMacro {
-        steps: Vec<KeyStep>,
-        #[serde(default)]
-        playback: Playback,
-    },
-    MouseMacro {
-        steps: Vec<MouseStep>,
-        #[serde(default)]
-        playback: Playback,
-        /// How this macro records movement. Steps keep their own kind either way.
-        #[serde(default)]
-        movement: Movement,
-        /// The monitor absolute positions refer to; `None` is the primary monitor.
-        #[serde(default)]
-        monitor: Option<MonitorRef>,
-    },
+    /// Keyboard and mouse steps in any order. Keyboard and mouse macros of schema 3 and older
+    /// load as this, with all their settings.
+    #[serde(alias = "keyboardMacro", alias = "mouseMacro")]
+    InputMacro(InputMacro),
+    /// Stops running input macros (all, or one) and releases what they hold.
+    StopMacros { target: MacroTarget },
     /// A remote control command for Soundpad.
     Soundpad { command: SoundpadCommand },
     /// Mute or deafen in Discord.
@@ -69,6 +64,41 @@ pub enum Action {
     /// Presses a vJoy button, sets an axis or a POV. The engine handles it (vJoy output is
     /// part of its state), so it takes effect when it fires, not after earlier macros.
     Vjoy { command: VjoyCommand },
+    /// Speaks a text with Windows speech.
+    Speak(Speech),
+    /// Plays a sound file.
+    PlaySound(SoundFile),
+    /// Windows volume of the default output device or of a program.
+    Volume {
+        target: VolumeTarget,
+        command: VolumeCommand,
+    },
+    /// Gain or mute of a Voicemeeter strip or bus.
+    Voicemeeter {
+        target: VmTarget,
+        command: VmCommand,
+    },
+    /// A media or volume key.
+    MediaKey { key: MediaKey },
+    /// Starts a program, opens a web page, a file or a folder.
+    Launch(Launch),
+    /// Sends an HTTP request (webhook).
+    Http(HttpRequest),
+}
+
+/// Which macros a "Stop macros" action stops.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
+pub enum MacroTarget {
+    All,
+    /// One macro, by its id.
+    Macro {
+        id: String,
+    },
 }
 
 /// How a mouse macro records movement.
@@ -242,6 +272,11 @@ pub enum InputOp {
     Sleep {
         ms: u32,
     },
+    /// A key by virtual-key code (media keys have no useful scan code).
+    VirtualKey {
+        vk: u16,
+        down: bool,
+    },
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -262,6 +297,52 @@ pub enum ActionError {
     BadSpeed,
     #[error(transparent)]
     Vjoy(#[from] VjoyError),
+    #[error("repeat 1 to {MAX_TIMES} times, with at most {} s pause between runs", MAX_PAUSE_MS / 1000)]
+    BadRepeat,
+    #[error("choose the macro to stop")]
+    NoMacro,
+    #[error(
+        "enter the text to speak (at most {} characters)",
+        audio::MAX_SPEECH_CHARS
+    )]
+    NoText,
+    #[error(
+        "speech rate must be between {} and {}",
+        audio::MIN_RATE,
+        audio::MAX_RATE
+    )]
+    BadRate,
+    #[error("volume must be between 0 and 100%")]
+    BadVolume,
+    #[error("choose a sound file")]
+    NoFile,
+    #[error("enter the program's executable name, e.g. Discord.exe")]
+    NoProcess,
+    #[error("change the volume by -100 to 100 percentage points")]
+    BadVolumeChange,
+    #[error(
+        "Voicemeeter strips and buses go from 1 to {}, gain from {} to {} dB",
+        u32::from(voicemeeter::MAX_INDEX) + 1,
+        voicemeeter::MIN_GAIN_DB,
+        voicemeeter::MAX_GAIN_DB
+    )]
+    BadVoicemeeter,
+    #[error("enter the program to start")]
+    NoProgram,
+    #[error("only http and https addresses can be opened, e.g. https://example.com")]
+    BadUrl,
+    #[error("enter the file or folder to open")]
+    NoPath,
+    #[error(
+        "header \"{0}\" is not valid (names: letters, digits and - only; values: no line breaks)"
+    )]
+    BadHeader(String),
+    #[error(
+        "the timeout must be between {} and {} ms",
+        webhook::MIN_TIMEOUT_MS,
+        webhook::MAX_TIMEOUT_MS
+    )]
+    BadTimeout,
 }
 
 /// A key Detent can send: stable name and its set-1 scan code.
@@ -423,6 +504,11 @@ pub fn key_by_scan(scan: u16, extended: bool) -> Option<&'static KeyInfo> {
         .find(|k| k.scan == scan && k.extended == extended)
 }
 
+/// A path as pasted, e.g. from Explorer's "Copy as path": without quotes and spaces around.
+fn unquote(path: &str) -> String {
+    path.trim().trim_matches('"').trim().to_owned()
+}
+
 fn check_ms(ms: u32) -> Result<(), ActionError> {
     if ms > MAX_DELAY_MS {
         Err(ActionError::TooLong)
@@ -464,19 +550,21 @@ fn check_position(x: f32, y: f32) -> Result<(), ActionError> {
 }
 
 impl Action {
+    /// An input macro of keyboard steps.
     pub fn keyboard(steps: Vec<KeyStep>) -> Self {
-        Action::KeyboardMacro {
-            steps,
-            playback: Playback::default(),
-        }
+        Action::InputMacro(InputMacro::new(steps.into_iter().map(Into::into).collect()))
     }
 
+    /// An input macro of mouse steps.
     pub fn mouse(steps: Vec<MouseStep>) -> Self {
-        Action::MouseMacro {
-            steps,
-            playback: Playback::default(),
-            movement: Movement::default(),
-            monitor: None,
+        Action::InputMacro(InputMacro::new(steps.into_iter().map(Into::into).collect()))
+    }
+
+    /// The input macro, if this is one.
+    pub fn input_macro(&self) -> Option<&InputMacro> {
+        match self {
+            Action::InputMacro(m) => Some(m),
+            _ => None,
         }
     }
 
@@ -484,46 +572,32 @@ impl Action {
     /// waypoints in time order.
     pub fn normalize(&mut self) -> Result<(), ActionError> {
         match self {
-            Action::KeyboardMacro { steps, playback } => {
-                check_playback(playback)?;
-                if steps.len() > MAX_STEPS {
+            Action::InputMacro(m) => {
+                check_playback(&m.playback)?;
+                if m.steps.len() > MAX_STEPS {
                     return Err(ActionError::TooManySteps);
                 }
-                for step in steps {
+                match m.repeat {
+                    Repeat::Times { count } if !(1..=MAX_TIMES).contains(&count) => {
+                        return Err(ActionError::BadRepeat);
+                    }
+                    _ => {}
+                }
+                if m.pause_ms > MAX_PAUSE_MS {
+                    return Err(ActionError::BadRepeat);
+                }
+                for step in &mut m.steps {
                     match step {
-                        KeyStep::KeyDown { key } | KeyStep::KeyUp { key } => canonical_key(key)?,
-                        KeyStep::KeyTap { key, hold_ms } => {
-                            canonical_key(key)?;
-                            check_ms(hold_ms.unwrap_or(0))?;
-                        }
-                        KeyStep::Delay { ms } => check_ms(*ms)?,
+                        MacroStep::Key(step) => check_key_step(step)?,
+                        MacroStep::Mouse(step) => check_mouse_step(step)?,
                     }
                 }
             }
-            Action::MouseMacro {
-                steps, playback, ..
-            } => {
-                check_playback(playback)?;
-                if steps.len() > MAX_STEPS {
-                    return Err(ActionError::TooManySteps);
-                }
-                for step in steps {
-                    match step {
-                        MouseStep::Click { hold_ms, .. } => check_ms(hold_ms.unwrap_or(0))?,
-                        MouseStep::Delay { ms } => check_ms(*ms)?,
-                        MouseStep::MoveTo { x, y } => check_position(*x, *y)?,
-                        MouseStep::MovePath { points } => {
-                            check_path(points, |p| p.t)?;
-                            for p in points.iter() {
-                                check_position(p.x, p.y)?;
-                            }
-                        }
-                        MouseStep::MoveRelativePath { points } => check_path(points, |p| p.t)?,
-                        MouseStep::ButtonDown { .. }
-                        | MouseStep::ButtonUp { .. }
-                        | MouseStep::Wheel { .. }
-                        | MouseStep::MoveRelative { .. } => {}
-                    }
+            Action::StopMacros { target } => {
+                if let MacroTarget::Macro { id } = target
+                    && id.trim().is_empty()
+                {
+                    return Err(ActionError::NoMacro);
                 }
             }
             Action::Soundpad { command } => {
@@ -536,17 +610,142 @@ impl Action {
                 }
             }
             Action::Vjoy { command } => command.validate()?,
-            Action::Discord { .. } | Action::SwitchProfile { .. } => {}
+            Action::Discord { .. } | Action::SwitchProfile { .. } | Action::MediaKey { .. } => {}
+            Action::Speak(speech) => {
+                let text = speech.text.trim();
+                if text.is_empty() || text.chars().count() > audio::MAX_SPEECH_CHARS {
+                    return Err(ActionError::NoText);
+                }
+                if !(audio::MIN_RATE..=audio::MAX_RATE).contains(&speech.rate) {
+                    return Err(ActionError::BadRate);
+                }
+                if speech.volume > 100 {
+                    return Err(ActionError::BadVolume);
+                }
+            }
+            Action::PlaySound(sound) => {
+                sound.path = unquote(&sound.path);
+                if sound.path.is_empty() {
+                    return Err(ActionError::NoFile);
+                }
+                if sound.volume > 100 {
+                    return Err(ActionError::BadVolume);
+                }
+                if sound.device.as_deref().is_some_and(|d| d.trim().is_empty()) {
+                    sound.device = None;
+                }
+            }
+            Action::Volume { target, command } => {
+                if let VolumeTarget::App { process } = target {
+                    *process = launch::exe_name(process).to_owned();
+                    if process.is_empty() {
+                        return Err(ActionError::NoProcess);
+                    }
+                }
+                match *command {
+                    VolumeCommand::Set { percent } if percent > 100 => {
+                        return Err(ActionError::BadVolume);
+                    }
+                    VolumeCommand::Change { delta } if !(-100..=100).contains(&delta) => {
+                        return Err(ActionError::BadVolumeChange);
+                    }
+                    _ => {}
+                }
+            }
+            Action::Voicemeeter { target, command } => {
+                if target.index > voicemeeter::MAX_INDEX || !command.valid() {
+                    return Err(ActionError::BadVoicemeeter);
+                }
+            }
+            Action::Launch(l) => match &mut l.target {
+                LaunchTarget::Program {
+                    path, working_dir, ..
+                } => {
+                    *path = unquote(path);
+                    *working_dir = unquote(working_dir);
+                    if path.is_empty() {
+                        return Err(ActionError::NoProgram);
+                    }
+                }
+                LaunchTarget::Url { url } => {
+                    *url = url.trim().to_owned();
+                    if !launch::web_url(url) {
+                        return Err(ActionError::BadUrl);
+                    }
+                }
+                LaunchTarget::Open { path } => {
+                    *path = unquote(path);
+                    if path.is_empty() {
+                        return Err(ActionError::NoPath);
+                    }
+                }
+            },
+            Action::Http(r) => {
+                r.url = r.url.trim().to_owned();
+                if !launch::web_url(&r.url) {
+                    return Err(ActionError::BadUrl);
+                }
+                if !(webhook::MIN_TIMEOUT_MS..=webhook::MAX_TIMEOUT_MS).contains(&r.timeout_ms) {
+                    return Err(ActionError::BadTimeout);
+                }
+                // Rows the user added and left empty.
+                r.headers.retain(|h| {
+                    !(h.name.trim().is_empty() && h.value.is_empty() && h.secret.is_none())
+                });
+                for h in &mut r.headers {
+                    h.name = h.name.trim().to_owned();
+                    // A secret value lives in the credential store only.
+                    if h.secret.is_some() {
+                        h.value.clear();
+                    }
+                    if !webhook::valid_header_name(&h.name)
+                        || !webhook::valid_header_value(&h.value)
+                    {
+                        return Err(ActionError::BadHeader(h.name.clone()));
+                    }
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Whether the action may take long (speech, sound, launch, HTTP): it runs in the
+    /// background unless [`Self::waits`].
+    pub fn long_running(&self) -> bool {
+        matches!(
+            self,
+            Action::Speak(_) | Action::PlaySound(_) | Action::Launch(_) | Action::Http(_)
+        )
+    }
+
+    /// "Wait until finished": the action queue waits for this action.
+    pub fn waits(&self) -> bool {
+        match self {
+            Action::Speak(s) => s.wait,
+            Action::PlaySound(s) => s.wait,
+            Action::Launch(l) => l.wait,
+            Action::Http(r) => r.wait,
+            _ => false,
+        }
+    }
+
+    /// Secret references the action uses (HTTP header values).
+    pub fn secrets(&self) -> Vec<&crate::connection::SecretRef> {
+        match self {
+            Action::Http(r) => r.headers.iter().filter_map(|h| h.secret.as_ref()).collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// Whether playing needs the monitor layout (absolute moves).
     pub fn needs_screens(&self) -> bool {
         match self {
-            Action::MouseMacro { steps, .. } => steps
-                .iter()
-                .any(|s| matches!(s, MouseStep::MoveTo { .. } | MouseStep::MovePath { .. })),
+            Action::InputMacro(m) => m.steps.iter().any(|s| {
+                matches!(
+                    s,
+                    MacroStep::Mouse(MouseStep::MoveTo { .. } | MouseStep::MovePath { .. })
+                )
+            }),
             _ => false,
         }
     }
@@ -559,23 +758,34 @@ impl Action {
         let mut ops = Vec::new();
         let mut warnings = Vec::new();
         match self {
-            Action::KeyboardMacro { steps, playback } => {
-                expand_keys(steps, playback, &mut ops, &mut warnings);
-            }
-            Action::MouseMacro {
-                steps,
-                playback,
-                monitor,
-                ..
-            } => {
-                let target = screens.and_then(|s| Some((s, s.target(monitor.as_ref())?)));
-                for step in steps {
-                    expand_mouse_step(step, playback, target, &mut ops, &mut warnings);
+            Action::InputMacro(m) => {
+                let target = screens.and_then(|s| Some((s, s.target(m.monitor.as_ref())?)));
+                for step in &m.steps {
+                    match step {
+                        MacroStep::Key(step) => {
+                            expand_key_step(step, &m.playback, &mut ops, &mut warnings);
+                        }
+                        MacroStep::Mouse(step) => {
+                            expand_mouse_step(step, &m.playback, target, &mut ops, &mut warnings);
+                        }
+                    }
                 }
+            }
+            Action::MediaKey { key } => {
+                let vk = key.vk();
+                ops.push(InputOp::VirtualKey { vk, down: true });
+                ops.push(InputOp::VirtualKey { vk, down: false });
             }
             Action::Soundpad { .. }
             | Action::Discord { .. }
             | Action::SwitchProfile { .. }
+            | Action::StopMacros { .. }
+            | Action::Speak(_)
+            | Action::PlaySound(_)
+            | Action::Volume { .. }
+            | Action::Voicemeeter { .. }
+            | Action::Launch(_)
+            | Action::Http(_)
             | Action::Vjoy { .. } => {}
         }
         (ops, warnings)
@@ -592,48 +802,68 @@ impl Action {
                 return format!("switch profile: {}", target.describe());
             }
             Action::Vjoy { command } => return format!("vjoy: {}", command.describe()),
-            Action::KeyboardMacro { steps, playback } => (
-                "keys",
-                steps
+            Action::Speak(s) => {
+                return format!("speak: \"{}\"", audio::shorten(s.text.trim(), 40));
+            }
+            Action::PlaySound(s) => return format!("play sound: {}", audio::file_name(&s.path)),
+            Action::Volume { target, command } => {
+                return format!("volume: {} {}", target.describe(), command.describe());
+            }
+            Action::Voicemeeter { target, command } => {
+                return format!("voicemeeter: {} {}", target.describe(), command.describe());
+            }
+            Action::MediaKey { key } => return format!("media key: {}", key.describe()),
+            Action::Launch(l) => return format!("launch: {}", l.target.describe()),
+            Action::Http(r) => return format!("http: {}", r.describe()),
+            Action::StopMacros { target } => {
+                return match target {
+                    MacroTarget::All => "stop macros: all".into(),
+                    MacroTarget::Macro { id } => format!("stop macros: {id}"),
+                };
+            }
+            Action::InputMacro(m) => (
+                match (m.has_keys(), m.has_mouse()) {
+                    (_, false) => "keys",
+                    (false, true) => "mouse",
+                    (true, true) => "keys and mouse",
+                },
+                m.steps
                     .iter()
                     .map(|s| match s {
-                        KeyStep::KeyDown { key } => format!("down {key}"),
-                        KeyStep::KeyUp { key } => format!("up {key}"),
-                        KeyStep::KeyTap { key, hold_ms } => format!("tap {key}{}", hold(hold_ms)),
-                        KeyStep::Delay { ms } => format!("wait {ms}ms"),
+                        MacroStep::Key(s) => match s {
+                            KeyStep::KeyDown { key } => format!("down {key}"),
+                            KeyStep::KeyUp { key } => format!("up {key}"),
+                            KeyStep::KeyTap { key, hold_ms } => {
+                                format!("tap {key}{}", hold(hold_ms))
+                            }
+                            KeyStep::Delay { ms } => format!("wait {ms}ms"),
+                        },
+                        MacroStep::Mouse(s) => match s {
+                            MouseStep::ButtonDown { button } => format!("down {button:?}"),
+                            MouseStep::ButtonUp { button } => format!("up {button:?}"),
+                            MouseStep::Click { button, hold_ms } => {
+                                format!("click {button:?}{}", hold(hold_ms))
+                            }
+                            MouseStep::Wheel { delta } => format!("wheel {delta}"),
+                            MouseStep::MoveRelative { dx, dy } => format!("move {dx},{dy}"),
+                            MouseStep::MoveTo { x, y } => {
+                                format!("to {},{}", percent(*x), percent(*y))
+                            }
+                            MouseStep::MovePath { points } => format!(
+                                "path {} points {}ms",
+                                points.len(),
+                                points.last().map_or(0, |p| p.t)
+                            ),
+                            MouseStep::MoveRelativePath { points } => format!(
+                                "relative path {} points {}ms",
+                                points.len(),
+                                points.last().map_or(0, |p| p.t)
+                            ),
+                            MouseStep::Delay { ms } => format!("wait {ms}ms"),
+                        },
                     })
                     .collect(),
-                playback,
-            ),
-            Action::MouseMacro {
-                steps, playback, ..
-            } => (
-                "mouse",
-                steps
-                    .iter()
-                    .map(|s| match s {
-                        MouseStep::ButtonDown { button } => format!("down {button:?}"),
-                        MouseStep::ButtonUp { button } => format!("up {button:?}"),
-                        MouseStep::Click { button, hold_ms } => {
-                            format!("click {button:?}{}", hold(hold_ms))
-                        }
-                        MouseStep::Wheel { delta } => format!("wheel {delta}"),
-                        MouseStep::MoveRelative { dx, dy } => format!("move {dx},{dy}"),
-                        MouseStep::MoveTo { x, y } => format!("to {},{}", percent(*x), percent(*y)),
-                        MouseStep::MovePath { points } => format!(
-                            "path {} points {}ms",
-                            points.len(),
-                            points.last().map_or(0, |p| p.t)
-                        ),
-                        MouseStep::MoveRelativePath { points } => format!(
-                            "relative path {} points {}ms",
-                            points.len(),
-                            points.last().map_or(0, |p| p.t)
-                        ),
-                        MouseStep::Delay { ms } => format!("wait {ms}ms"),
-                    })
-                    .collect(),
-                playback,
+                &m.playback,
             ),
         };
         let speed = if playback.speed_percent == 100 {
@@ -641,8 +871,53 @@ impl Action {
         } else {
             format!(" at {}%", playback.speed_percent)
         };
-        format!("{kind}{speed}: {}", parts.join(", "))
+        let repeat = match self {
+            Action::InputMacro(m) => match m.repeat {
+                Repeat::Once => String::new(),
+                Repeat::Times { count } => format!(" ({count} times)"),
+                Repeat::WhileActive => " (while active)".into(),
+            },
+            _ => String::new(),
+        };
+        format!("{kind}{speed}{repeat}: {}", parts.join(", "))
     }
+}
+
+fn check_key_step(step: &mut KeyStep) -> Result<(), ActionError> {
+    match step {
+        KeyStep::KeyDown { key } | KeyStep::KeyUp { key } => canonical_key(key),
+        KeyStep::KeyTap { key, hold_ms } => {
+            canonical_key(key)?;
+            check_ms(hold_ms.unwrap_or(0))
+        }
+        KeyStep::Delay { ms } => check_ms(*ms),
+    }
+}
+
+fn check_mouse_step(step: &mut MouseStep) -> Result<(), ActionError> {
+    match step {
+        MouseStep::Click { hold_ms, .. } => check_ms(hold_ms.unwrap_or(0)),
+        MouseStep::Delay { ms } => check_ms(*ms),
+        MouseStep::MoveTo { x, y } => check_position(*x, *y),
+        MouseStep::MovePath { points } => {
+            check_path(points, |p| p.t)?;
+            points.iter().try_for_each(|p| check_position(p.x, p.y))
+        }
+        MouseStep::MoveRelativePath { points } => check_path(points, |p| p.t),
+        MouseStep::ButtonDown { .. }
+        | MouseStep::ButtonUp { .. }
+        | MouseStep::Wheel { .. }
+        | MouseStep::MoveRelative { .. } => Ok(()),
+    }
+}
+
+fn expand_key_step(
+    step: &KeyStep,
+    playback: &Playback,
+    ops: &mut Vec<InputOp>,
+    warnings: &mut Vec<String>,
+) {
+    expand_keys(std::slice::from_ref(step), playback, ops, warnings);
 }
 
 fn expand_keys(
@@ -927,23 +1202,44 @@ mod tests {
             .collect()
     }
 
+    /// An input macro with these settings.
+    fn mac(
+        steps: Vec<MacroStep>,
+        playback: Playback,
+        movement: Movement,
+        monitor: Option<MonitorRef>,
+    ) -> Action {
+        Action::InputMacro(InputMacro {
+            playback,
+            movement,
+            monitor,
+            ..InputMacro::new(steps)
+        })
+    }
+
+    fn steps_of(a: &Action) -> &[MacroStep] {
+        &a.input_macro().expect("input macro").steps
+    }
+
     #[test]
     fn speed_scales_waits_but_not_holds_and_short_waits_can_be_dropped() {
-        let steps = vec![
+        let steps = [
             KeyStep::Delay { ms: 100 },
             tap("A", Some(40)),
             KeyStep::Delay { ms: 5 },
             tap("B", None),
         ];
         let play = |speed_percent, min_delay_ms| {
-            let a = Action::KeyboardMacro {
-                steps: steps.clone(),
-                playback: Playback {
+            let a = mac(
+                steps.iter().cloned().map(Into::into).collect(),
+                Playback {
                     speed_percent,
                     min_delay_ms,
                     endpoint_only: false,
                 },
-            };
+                Movement::Absolute,
+                None,
+            );
             sleeps(&a.expand(None).0)
         };
         assert_eq!(play(100, 0), [100, 40, 5, 50]);
@@ -951,16 +1247,19 @@ mod tests {
         assert_eq!(play(50, 0), [200, 40, 10, 50]);
         // Waits below 10 ms are dropped; holds stay.
         assert_eq!(play(100, 10), [100, 40, 50]);
-        let mouse = Action::MouseMacro {
-            steps: vec![MouseStep::Delay { ms: 30 }, MouseStep::Delay { ms: 300 }],
-            playback: Playback {
+        let mouse = mac(
+            vec![
+                MouseStep::Delay { ms: 30 }.into(),
+                MouseStep::Delay { ms: 300 }.into(),
+            ],
+            Playback {
                 speed_percent: 300,
                 min_delay_ms: 50,
                 endpoint_only: false,
             },
-            movement: Movement::Relative,
-            monitor: None,
-        };
+            Movement::Relative,
+            None,
+        );
         assert_eq!(sleeps(&mouse.expand(None).0), [100]);
     }
 
@@ -987,28 +1286,31 @@ mod tests {
     }
 
     fn abs_path(endpoint_only: bool, monitor: Option<MonitorRef>) -> Action {
-        Action::MouseMacro {
-            steps: vec![MouseStep::MovePath {
-                points: vec![
-                    PathPoint {
-                        x: 0.0,
-                        y: 0.0,
-                        t: 0,
-                    },
-                    PathPoint {
-                        x: 0.5,
-                        y: 0.5,
-                        t: 16,
-                    },
-                ],
-            }],
-            playback: Playback {
+        mac(
+            vec![
+                MouseStep::MovePath {
+                    points: vec![
+                        PathPoint {
+                            x: 0.0,
+                            y: 0.0,
+                            t: 0,
+                        },
+                        PathPoint {
+                            x: 0.5,
+                            y: 0.5,
+                            t: 16,
+                        },
+                    ],
+                }
+                .into(),
+            ],
+            Playback {
                 endpoint_only,
                 ..Playback::default()
             },
-            movement: Movement::Absolute,
+            Movement::Absolute,
             monitor,
-        }
+        )
     }
 
     #[test]
@@ -1039,24 +1341,27 @@ mod tests {
 
     #[test]
     fn relative_paths_send_deltas_that_add_up() {
-        let a = Action::MouseMacro {
-            steps: vec![MouseStep::MoveRelativePath {
-                points: vec![
-                    RelPoint { dx: 3, dy: 0, t: 0 },
-                    RelPoint {
-                        dx: 100,
-                        dy: -10,
-                        t: 40,
-                    },
-                ],
-            }],
-            playback: Playback {
+        let a = mac(
+            vec![
+                MouseStep::MoveRelativePath {
+                    points: vec![
+                        RelPoint { dx: 3, dy: 0, t: 0 },
+                        RelPoint {
+                            dx: 100,
+                            dy: -10,
+                            t: 40,
+                        },
+                    ],
+                }
+                .into(),
+            ],
+            Playback {
                 speed_percent: 200,
                 ..Playback::default()
             },
-            movement: Movement::Relative,
-            monitor: None,
-        };
+            Movement::Relative,
+            None,
+        );
         let (ops, _) = a.expand(None);
         let (dx, dy) = ops.iter().fold((0, 0), |(x, y), op| match op {
             InputOp::Move { dx, dy } => (x + dx, y + dy),
@@ -1081,13 +1386,15 @@ mod tests {
             ms: MAX_DELAY_MS + 1,
         }]);
         assert_eq!(long.normalize(), Err(ActionError::TooLong));
-        let mut slow = Action::KeyboardMacro {
-            steps: vec![],
-            playback: Playback {
+        let mut slow = mac(
+            vec![],
+            Playback {
                 speed_percent: 5,
                 ..Playback::default()
             },
-        };
+            Movement::Absolute,
+            None,
+        );
         assert_eq!(slow.normalize(), Err(ActionError::BadSpeed));
         let mut empty_path = Action::mouse(vec![MouseStep::MovePath { points: vec![] }]);
         assert_eq!(empty_path.normalize(), Err(ActionError::BadPath));
@@ -1104,18 +1411,26 @@ mod tests {
             ],
         }]);
         unordered.normalize().unwrap();
-        let Action::MouseMacro { steps, .. } = &unordered else {
-            unreachable!()
-        };
         assert_eq!(
-            steps[0],
+            steps_of(&unordered)[0],
             MouseStep::MoveRelativePath {
                 points: vec![
                     RelPoint { dx: 1, dy: 0, t: 3 },
                     RelPoint { dx: 2, dy: 0, t: 9 },
                 ],
             }
+            .into()
         );
+        // Repetition limits.
+        let mut never = Action::InputMacro(InputMacro {
+            repeat: Repeat::Times { count: 0 },
+            ..InputMacro::new(vec![])
+        });
+        assert_eq!(never.normalize(), Err(ActionError::BadRepeat));
+        let mut no_target = Action::StopMacros {
+            target: MacroTarget::Macro { id: " ".into() },
+        };
+        assert_eq!(no_target.normalize(), Err(ActionError::NoMacro));
     }
 
     #[test]
@@ -1123,7 +1438,7 @@ mod tests {
         let a = Action::keyboard(vec![tap("F1", Some(20)), KeyStep::Delay { ms: 5 }]);
         assert_eq!(
             serde_json::to_string(&a).unwrap(),
-            r#"{"type":"keyboardMacro","steps":[{"type":"keyTap","key":"F1","holdMs":20},{"type":"delay","ms":5}],"playback":{"speedPercent":100,"minDelayMs":0,"endpointOnly":false}}"#
+            r#"{"type":"inputMacro","id":"","steps":[{"type":"keyTap","key":"F1","holdMs":20},{"type":"delay","ms":5}],"playback":{"speedPercent":100,"minDelayMs":0,"endpointOnly":false},"movement":"absolute","monitor":null,"repeat":{"type":"once"},"onEnd":"stopImmediately","pauseMs":0,"retrigger":"ignore"}"#
         );
         // Macros from before playback settings load with defaults.
         let m: Action = serde_json::from_str(
@@ -1132,17 +1447,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m.describe(), "mouse: click X2, move 1,2, wheel 1");
-        let Action::MouseMacro {
-            playback,
-            movement,
-            monitor,
-            ..
-        } = &m
-        else {
-            unreachable!()
-        };
+        let im = m.input_macro().unwrap();
         assert_eq!(
-            (playback, movement, monitor),
+            (&im.playback, &im.movement, &im.monitor),
             (&Playback::default(), &Movement::Absolute, &None)
         );
         let recorded: Action = serde_json::from_str(
@@ -1221,5 +1528,141 @@ mod tests {
             command: SoundpadCommand::Stop,
         };
         assert_eq!(stop.normalize(), Ok(()));
+    }
+
+    #[test]
+    fn new_action_types_round_trip_and_normalize() {
+        let json = r#"[
+            {"type":"speak","text":" Channel {value} ","voice":{"id":"HKLM/V/Zira","name":"Zira"},"rate":2,"volume":80,"wait":true},
+            {"type":"playSound","path":" \"C:/Sounds/a.wav\" ","volume":50,"device":"","stopPrevious":true,"wait":false},
+            {"type":"volume","target":{"type":"app","process":"C:/Apps/Discord.exe"},"command":{"type":"change","delta":-10}},
+            {"type":"volume","target":{"type":"master"},"command":{"type":"toggleMute"}},
+            {"type":"voicemeeter","target":{"kind":"bus","index":0},"command":{"type":"setGain","db":-6}},
+            {"type":"mediaKey","key":"next"},
+            {"type":"launch","target":{"type":"program","path":"C:/Games/x.exe","arguments":"-a \"b c\"","workingDir":"","onlyIfNotRunning":true},"wait":false},
+            {"type":"launch","target":{"type":"url","url":" https://example.com/{state} "}},
+            {"type":"launch","target":{"type":"open","path":"C:/Users"}},
+            {"type":"http","method":"POST","url":"https://hooks.test/x","headers":[
+                {"name":"Authorization","value":"leaked","secret":{"store":"windowsCredentialManager","target":"detent/http/1"}},
+                {"name":"","value":"","secret":null}],
+             "body":"{\"s\":\"{state}\"}","timeoutMs":5000,"wait":false}
+        ]"#;
+        let mut actions: Vec<Action> = serde_json::from_str(json).unwrap();
+        for a in &mut actions {
+            a.normalize().unwrap();
+        }
+        let Action::PlaySound(sound) = &actions[1] else {
+            panic!()
+        };
+        assert_eq!(sound.path, "C:/Sounds/a.wav");
+        assert_eq!(sound.device, None);
+        let Action::Volume { target, .. } = &actions[2] else {
+            panic!()
+        };
+        assert_eq!(
+            *target,
+            VolumeTarget::App {
+                process: "Discord.exe".into()
+            }
+        );
+        let Action::Http(r) = &actions[9] else {
+            panic!()
+        };
+        // The secret value never stays in the setup; empty rows are dropped.
+        assert_eq!(r.headers.len(), 1);
+        assert_eq!(r.headers[0].value, "");
+        assert_eq!(actions[9].secrets().len(), 1);
+        assert!(actions[0].long_running() && actions[0].waits());
+        assert!(actions[1].long_running() && !actions[1].waits());
+        assert!(!actions[2].long_running());
+        let back: Vec<Action> =
+            serde_json::from_str(&serde_json::to_string(&actions).unwrap()).unwrap();
+        assert_eq!(back, actions);
+        assert_eq!(
+            actions.iter().map(Action::describe).collect::<Vec<_>>(),
+            [
+                "speak: \"Channel {value}\"",
+                "play sound: a.wav",
+                "volume: Discord.exe -10%",
+                "volume: master toggle mute",
+                "voicemeeter: bus 1 gain -6 dB",
+                "media key: next track",
+                "launch: start x.exe -a \"b c\"",
+                "launch: open https://example.com/{state}",
+                "launch: open C:/Users",
+                "http: POST https://hooks.test/x",
+            ]
+        );
+        let (ops, _) = actions[5].expand(None);
+        assert_eq!(
+            ops,
+            [
+                InputOp::VirtualKey {
+                    vk: 0xB0,
+                    down: true
+                },
+                InputOp::VirtualKey {
+                    vk: 0xB0,
+                    down: false
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn new_action_types_are_checked() {
+        let bad = |json: &str| -> ActionError {
+            let mut a: Action = serde_json::from_str(json).unwrap();
+            a.normalize().unwrap_err()
+        };
+        assert_eq!(bad(r#"{"type":"speak","text":"  "}"#), ActionError::NoText);
+        assert_eq!(
+            bad(r#"{"type":"speak","text":"a","rate":11}"#),
+            ActionError::BadRate
+        );
+        assert_eq!(
+            bad(r#"{"type":"playSound","path":""}"#),
+            ActionError::NoFile
+        );
+        assert_eq!(
+            bad(
+                r#"{"type":"volume","target":{"type":"master"},"command":{"type":"set","percent":101}}"#
+            ),
+            ActionError::BadVolume
+        );
+        assert_eq!(
+            bad(
+                r#"{"type":"volume","target":{"type":"app","process":" "},"command":{"type":"mute"}}"#
+            ),
+            ActionError::NoProcess
+        );
+        assert_eq!(
+            bad(
+                r#"{"type":"voicemeeter","target":{"kind":"strip","index":8},"command":{"type":"mute"}}"#
+            ),
+            ActionError::BadVoicemeeter
+        );
+        assert_eq!(
+            bad(r#"{"type":"launch","target":{"type":"url","url":"file:///C:/x.exe"}}"#),
+            ActionError::BadUrl
+        );
+        assert_eq!(
+            bad(r#"{"type":"launch","target":{"type":"program","path":" "}}"#),
+            ActionError::NoProgram
+        );
+        assert_eq!(
+            bad(r#"{"type":"http","url":"ftp://x"}"#),
+            ActionError::BadUrl
+        );
+        assert_eq!(
+            bad(r#"{"type":"http","url":"https://x.test","timeoutMs":10}"#),
+            ActionError::BadTimeout
+        );
+        assert_eq!(
+            bad(
+                r#"{"type":"http","url":"https://x.test","headers":[{"name":"X","value":"a\r\nb"}]}"#
+            ),
+            ActionError::BadHeader("X".into())
+        );
     }
 }

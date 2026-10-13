@@ -14,7 +14,10 @@ use crate::encoder::{
 };
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
-use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
+use crate::macro_run::Scope;
+use crate::overlay::{
+    Appearance, ControlRef, MonitorRef, OverlayConfig, OverlayItem, ToastSettings, WidgetPosition,
+};
 use crate::profile::{AutoSwitch, Profile, ProfileSwitching, ProfileTarget, normalize_executable};
 use crate::recording::{
     RecordKind, RecorderConfig, RecorderError, RecorderPhase, RecorderView, RecordingResult,
@@ -24,6 +27,7 @@ use crate::settings::{AppSettings, ShellStatus};
 use crate::setup::{ButtonPair, Setup, next_id};
 use crate::state::ButtonEdge;
 use crate::state::{LiveState, Snapshot};
+use crate::toast::ToastRequest;
 use crate::trigger::{
     ButtonRef, Condition, DigitalKey, Fired, HatDirection, HoldKey, PressConfig, PressEvent,
     PressKind, PressTracker, StepDirection, Trigger, TriggerInput, ZoneKey, axis_percent,
@@ -39,6 +43,15 @@ use crate::vjoy::{
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
+
+/// What the macro player hears from the engine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacroSignal {
+    /// A control is in this state now; "while active" macros of another state of it stop.
+    State(Scope),
+    /// Another profile became active; all macros stop.
+    ProfileSwitched,
+}
 
 /// Which persisted parts changed since the last [`Engine::take_dirty`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -223,6 +236,8 @@ pub struct EngineSnapshot {
     pub connectors: Vec<ConnectorView>,
     /// Global overlay settings with the active profile's widgets.
     pub overlay: OverlayConfig,
+    /// Where the active profile puts the toast area; `None`: the default place.
+    pub toast_position: Option<WidgetPosition>,
     pub detector: DetectorConfig,
     /// App-wide settings (Settings page).
     pub settings: AppSettings,
@@ -253,6 +268,9 @@ pub struct Engine {
     vjoy_latch: VjoyState,
     /// vJoy buttons pressed briefly: (release time, button).
     vjoy_pulses: Vec<(u64, VjoyButton)>,
+    /// The panic hotkey released all vJoy buttons and centred the POVs; they stay so until a
+    /// control changes, a vJoy action runs, the profile changes or vJoy is switched.
+    vjoy_released: bool,
     /// The latest time seen (backend clock), for pulses.
     now_ns: u64,
     /// Press, long and double press tracking per button and hat direction.
@@ -261,6 +279,8 @@ pub struct Engine {
     zones: HashMap<ZoneKey, bool>,
     /// Momentary controls and mode shifts held right now.
     runtime: Runtime,
+    /// For the macro player, until [`Engine::take_macro_signals`].
+    macro_signals: Vec<MacroSignal>,
     /// Actions emitted by triggers, oldest first, until [`Engine::take_actions`].
     actions: Vec<ActionRequest>,
     learn: Learn,
@@ -273,6 +293,10 @@ pub struct Engine {
     /// Event log sink; without one nothing is recorded (tests, tools).
     diagnostics: Option<Diagnostics>,
     axis_throttle: AxisThrottle,
+    /// What each toast-enabled control showed when last looked at (see [`Engine::take_toasts`]).
+    toast_seen: HashMap<String, String>,
+    /// The profile `toast_seen` belongs to.
+    toast_profile: Option<String>,
 }
 
 impl Engine {
@@ -301,10 +325,12 @@ impl Engine {
             auto_switch: AutoSwitch::default(),
             vjoy_latch: VjoyState::default(),
             vjoy_pulses: Vec::new(),
+            vjoy_released: false,
             now_ns: 0,
             presses: HashMap::new(),
             zones: HashMap::new(),
             runtime: Runtime::default(),
+            macro_signals: Vec::new(),
             actions: Vec::new(),
             learn: Learn::Off,
             overlay_editing: false,
@@ -314,6 +340,8 @@ impl Engine {
             dirty: Dirty::default(),
             diagnostics: None,
             axis_throttle: AxisThrottle::default(),
+            toast_seen: HashMap::new(),
+            toast_profile: None,
         }
     }
 
@@ -507,6 +535,8 @@ impl Engine {
                 changed = true;
             }
             // Learning swallows input; held buttons start fresh afterwards.
+            self.toast_seen.clear();
+            self.toast_profile = None;
             self.presses.clear();
         } else if !fired.is_empty() {
             self.dispatch(fired);
@@ -759,7 +789,8 @@ impl Engine {
         for (ci, cmd, _) in chosen {
             let control = &self.setup.profiles[active].virtual_controls[ci];
             let id = control.id.clone();
-            if run_command(
+            let from = self.actions.len();
+            let changed = run_command(
                 control,
                 cmd,
                 hold.as_ref(),
@@ -767,8 +798,10 @@ impl Engine {
                 &mut self.runtime,
                 &mut self.actions,
                 self.diagnostics.as_ref().zip(text.as_deref()),
-            ) {
-                self.dirty.controls = true;
+            );
+            self.dirty.controls |= changed;
+            self.after_command(active, ci, from);
+            if changed {
                 self.pulse_entered(&id);
             }
         }
@@ -804,15 +837,18 @@ impl Engine {
                 continue;
             };
             let control = &self.setup.profiles[p].virtual_controls[c];
-            if release_hold(
+            let from = self.actions.len();
+            let changed = release_hold(
                 control,
                 key,
                 &mut self.memory,
                 &mut self.runtime,
                 &mut self.actions,
                 self.diagnostics.as_ref(),
-            ) {
-                self.dirty.controls = true;
+            );
+            self.dirty.controls |= changed;
+            self.after_command(p, c, from);
+            if changed {
                 self.pulse_entered(&id);
             }
         }
@@ -848,6 +884,7 @@ impl Engine {
     /// Applies a vJoy action (only while the vJoy connection is enabled): what it presses or
     /// sets stays until another action changes it, the profile changes or vJoy is disabled.
     pub fn run_vjoy_command(&mut self, command: &VjoyCommand) {
+        self.vjoy_released = false;
         if !self.setup.connections.vjoy.enabled {
             return;
         }
@@ -887,6 +924,7 @@ impl Engine {
 
     /// A control just changed state: a pulsed output of the state it entered starts now.
     fn pulse_entered(&mut self, control_id: &str) {
+        self.vjoy_released = false;
         if !self.setup.connections.vjoy.enabled {
             return;
         }
@@ -1016,8 +1054,22 @@ impl Engine {
             .chain(self.vjoy_pulses.iter().map(|(_, b)| b.device))
             .collect();
         s.devices.extend(actions);
+        if self.vjoy_released {
+            s.buttons.clear();
+            s.povs.clear();
+        }
         s.restrict_to_devices();
         s
+    }
+
+    /// The panic hotkey: releases every vJoy button and centres every POV (axes stay where
+    /// they are). What vJoy actions held is dropped; state outputs and mappings stay released
+    /// until a control changes, a vJoy action runs, the profile changes or vJoy is switched.
+    pub fn vjoy_release_all(&mut self) {
+        self.vjoy_latch.buttons.clear();
+        self.vjoy_latch.povs.clear();
+        self.vjoy_pulses.clear();
+        self.vjoy_released = true;
     }
 
     /// Replaces the active profile's vJoy mappings.
@@ -1243,6 +1295,7 @@ impl Engine {
                 })
                 .collect(),
             overlay: self.overlay(),
+            toast_position: self.setup.profile().toast_position,
             detector: self.setup.detector,
             settings: self.setup.settings.clone(),
             shell: self.shell.clone(),
@@ -1459,7 +1512,7 @@ impl Engine {
         if !slot.widget.same_target(&item.widget) {
             return Err(EngineError::WidgetKind);
         }
-        item.position = item.position.map(WidgetPosition::clamped);
+        item = item.sanitized();
         *slot = item;
         self.dirty.setup = true;
         Ok(())
@@ -1580,6 +1633,7 @@ impl Engine {
             self.runtime.held.remove(&control.id);
             self.runtime.shifts.remove(&control.id);
         }
+        self.setup.assign_macro_ids();
         self.dirty.setup = true;
         Ok(control.id)
     }
@@ -1618,7 +1672,31 @@ impl Engine {
         }
         self.runtime.shifts.remove(id);
         self.dirty.controls = true;
+        self.after_command(p, c, self.actions.len());
         Ok(())
+    }
+
+    /// Tags the actions control `(p, c)` just emitted (from index `from`) with its profile
+    /// and the state it is in now, and tells the macro player that state, so "while active"
+    /// macros of an earlier state stop.
+    fn after_command(&mut self, p: usize, c: usize, from: usize) {
+        let profile = &self.setup.profiles[p];
+        let control = &profile.virtual_controls[c];
+        let scope = Scope {
+            control: control.id.clone(),
+            state: scope_state(control, self.memory.get(&control.id), &self.runtime),
+        };
+        for request in &mut self.actions[from..] {
+            request.profile.clone_from(&profile.name);
+            request.scope = Some(scope.clone());
+        }
+        self.macro_signals.push(MacroSignal::State(scope));
+    }
+
+    /// What the macro player needs to know since the last call: control states that changed
+    /// (or were confirmed) and profile switches.
+    pub fn take_macro_signals(&mut self) -> Vec<MacroSignal> {
+        std::mem::take(&mut self.macro_signals)
     }
 
     /// Sets a counter control's value without running actions.
@@ -1691,7 +1769,7 @@ impl Engine {
     fn run_manual(&mut self, id: &str, command: Command) -> Result<(), EngineError> {
         let (p, c) = self.control_position(id)?;
         let queued = self.actions.len();
-        if run_command(
+        let changed = run_command(
             &self.setup.profiles[p].virtual_controls[c],
             command,
             None,
@@ -1699,8 +1777,10 @@ impl Engine {
             &mut self.runtime,
             &mut self.actions,
             self.diagnostics.as_ref().zip(Some("manual command")),
-        ) {
-            self.dirty.controls = true;
+        );
+        self.dirty.controls |= changed;
+        self.after_command(p, c, queued);
+        if changed {
             self.pulse_entered(id);
         }
         self.run_engine_actions(queued);
@@ -1743,6 +1823,7 @@ impl Engine {
         connections.validate()?;
         if !connections.vjoy.enabled {
             self.vjoy_latch = VjoyState::default();
+            self.vjoy_released = false;
             self.vjoy_pulses.clear();
         }
         self.setup.connections = connections;
@@ -1899,6 +1980,177 @@ impl Engine {
         Ok(())
     }
 
+    // --- Toasts and appearance -------------------------------------------------------------
+
+    /// What a toast-enabled control shows now, e.g. the active state or a counter's value.
+    fn toast_value(&self, control: &VirtualControl) -> String {
+        let default = RadioMemory::default();
+        let memory = self.memory.get(&control.id).unwrap_or(&default);
+        let on_off = |on: bool| if on { "On" } else { "Off" }.to_owned();
+        match &control.kind {
+            VirtualControlKind::Radio(r) => memory
+                .active
+                .as_deref()
+                .and_then(|id| r.index_of(id))
+                .map_or("–".to_owned(), |i| r.states[i].name.clone()),
+            VirtualControlKind::Mode(m) => m
+                .active(memory)
+                .map_or("–".to_owned(), |i| m.states[i].name.clone()),
+            VirtualControlKind::Toggle(_) => on_off(Toggle::is_on(memory)),
+            VirtualControlKind::Momentary(m) => {
+                let held = self
+                    .runtime
+                    .held
+                    .get(&control.id)
+                    .is_some_and(|k| !k.is_empty());
+                on_off(m.active(held))
+            }
+            VirtualControlKind::Counter(c) => c.spec.format(c.value(memory)),
+        }
+    }
+
+    /// The toasts to show for what changed since the last call: a control that has "Show
+    /// toast on change" set and now shows something else, and the new profile after a
+    /// switch (if set). The first sight of a control, and the controls of a profile just
+    /// switched to, only set the baseline. The app calls this after every engine operation.
+    pub fn take_toasts(&mut self) -> Vec<ToastRequest> {
+        let mut out = Vec::new();
+        let profile = self.setup.profile();
+        let switched = self.toast_profile.as_deref() != Some(profile.id.as_str());
+        let current: Vec<(&VirtualControl, String)> = profile
+            .virtual_controls
+            .iter()
+            .filter(|c| c.show_toast)
+            .map(|c| (c, self.toast_value(c)))
+            .collect();
+        if switched {
+            if self.toast_profile.is_some() && self.setup.overlay.toasts.profile_toast {
+                out.push(ToastRequest {
+                    key: "profile".into(),
+                    title: "Profile:".into(),
+                    text: profile.name.clone(),
+                });
+            }
+            self.toast_seen = current
+                .into_iter()
+                .map(|(c, v)| (c.id.clone(), v))
+                .collect();
+            self.toast_profile = Some(profile.id.clone());
+            return out;
+        }
+        let mut seen = std::mem::take(&mut self.toast_seen);
+        seen.retain(|id, _| current.iter().any(|(c, _)| &c.id == id));
+        for (control, value) in current {
+            match seen.get(&control.id) {
+                Some(old) if *old == value => continue,
+                Some(_) => out.push(ToastRequest {
+                    key: control.id.clone(),
+                    title: control.name.clone(),
+                    text: value.clone(),
+                }),
+                None => {}
+            }
+            seen.insert(control.id.clone(), value);
+        }
+        self.toast_seen = seen;
+        out
+    }
+
+    pub fn set_overlay_appearance(&mut self, appearance: Appearance) {
+        self.setup.overlay.appearance = appearance.sanitized();
+        self.dirty.setup = true;
+    }
+
+    pub fn set_toast_settings(&mut self, toasts: ToastSettings) {
+        self.setup.overlay.toasts = toasts.sanitized();
+        self.dirty.setup = true;
+    }
+
+    /// Places the toast area of the active profile (`None`: back to the default place).
+    pub fn set_toast_position(&mut self, position: Option<WidgetPosition>) {
+        self.setup.profile_mut().toast_position = position.map(WidgetPosition::clamped);
+        self.dirty.setup = true;
+    }
+
+    // --- Import and restore ----------------------------------------------------------------
+
+    /// Replaces the whole setup (import "Replace all", restoring a backup). Function values
+    /// and radio states of functions and controls that still exist are kept; the rest start
+    /// fresh. The caller has validated `setup` (see `transfer::parse_import`) and built it with
+    /// `transfer::prepare_replace`.
+    pub fn replace_setup(&mut self, setup: Setup) {
+        let values = self.values();
+        self.setup = setup;
+        self.positions = self
+            .setup
+            .functions
+            .iter()
+            .map(|f| {
+                let pos = match (&f.kind, values.get(&f.id)) {
+                    (FunctionKind::Counter { spec, .. }, Some(v)) => spec.position_of(*v),
+                    _ => f.initial_position(),
+                };
+                (f.id.clone(), pos)
+            })
+            .collect();
+        let mut memory = std::mem::take(&mut self.memory);
+        memory.retain(|id, m| {
+            let Some(control) = self
+                .setup
+                .profiles
+                .iter()
+                .flat_map(|p| &p.virtual_controls)
+                .find(|c| &c.id == id)
+            else {
+                return false;
+            };
+            m.retain_existing(control);
+            !m.is_empty()
+        });
+        self.memory = memory;
+        self.detector = EncoderDetector::new(self.setup.detector);
+        self.steps.clear();
+        self.presses.clear();
+        self.zones.clear();
+        self.runtime = Runtime::default();
+        self.learn = Learn::Off;
+        self.overlay_editing = false;
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        self.dirty.controls = true;
+        if let Some(log) = &self.diagnostics {
+            log.record(Record::new(
+                Category::Log,
+                "Configuration replaced (import or restore)",
+            ));
+        }
+    }
+
+    /// Adds profiles of an imported setup (see `transfer::merge_profiles`). Nothing changes on
+    /// error.
+    pub fn import_profiles(
+        &mut self,
+        source: &Setup,
+        selected: &[String],
+    ) -> Result<crate::transfer::MergeReport, crate::transfer::TransferError> {
+        let report = crate::transfer::merge_profiles(&mut self.setup, source, selected)?;
+        for f in &self.setup.functions {
+            self.positions
+                .entry(f.id.clone())
+                .or_insert_with(|| f.initial_position());
+        }
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        if let Some(log) = &self.diagnostics {
+            let names: Vec<&str> = report.added.iter().map(|p| p.name.as_str()).collect();
+            log.record(Record::new(
+                Category::Log,
+                format!("Imported {} profile(s): {}", names.len(), names.join(", ")),
+            ));
+        }
+        Ok(report)
+    }
+
     // --- Profiles -------------------------------------------------------------------------
     //
     // Switching profiles never runs actions: each profile's radios keep their states and are
@@ -1926,9 +2178,11 @@ impl Engine {
         }
         self.setup.active_profile.clone_from(id);
         self.dirty.setup = true;
+        self.macro_signals.push(MacroSignal::ProfileSwitched);
         // What the old profile's vJoy actions held goes; its state outputs follow the profile.
         self.vjoy_latch = VjoyState::default();
         self.vjoy_pulses.clear();
+        self.vjoy_released = false;
         true
     }
 
@@ -2201,6 +2455,31 @@ fn state_text(control: &VirtualControl, memory: &RadioMemory, runtime: &Runtime)
 /// Applies `command` to a control: updates its memory (and what is held) and queues the
 /// actions. Returns whether its state changed. `hold` is the input a held command is tied
 /// to. `log` is the event log with what caused the command, if recording.
+/// The control's state as a "while active" macro sees it: a radio or mode state id (empty
+/// when none), `on`/`off`, a counter's value.
+fn scope_state(
+    control: &VirtualControl,
+    memory: Option<&RadioMemory>,
+    runtime: &Runtime,
+) -> String {
+    let empty = RadioMemory::default();
+    let memory = memory.unwrap_or(&empty);
+    let on_off = |on: bool| if on { "on" } else { "off" }.to_owned();
+    match &control.kind {
+        VirtualControlKind::Radio(_) => memory.active.clone().unwrap_or_default(),
+        VirtualControlKind::Mode(m) => m
+            .active(memory)
+            .map(|i| m.states[i].id.clone())
+            .unwrap_or_default(),
+        VirtualControlKind::Toggle(_) => on_off(Toggle::is_on(memory)),
+        VirtualControlKind::Momentary(m) => {
+            let held = runtime.held.get(&control.id).is_some_and(|k| !k.is_empty());
+            on_off(m.active(held))
+        }
+        VirtualControlKind::Counter(c) => c.spec.format(c.value(memory)),
+    }
+}
+
 fn run_command(
     control: &VirtualControl,
     command: Command,
@@ -2788,6 +3067,7 @@ mod tests {
         radio(&mut r);
         let id = engine
             .save_virtual_control(VirtualControl {
+                show_toast: false,
                 id: String::new(),
                 name: "Comms".into(),
                 kind: VirtualControlKind::Radio(r),
@@ -2812,11 +3092,11 @@ mod tests {
             .take_actions()
             .into_iter()
             .flat_map(|a| match a.action {
-                Action::KeyboardMacro { steps, .. } => steps,
+                Action::InputMacro(m) => m.steps,
                 _ => vec![],
             })
             .filter_map(|s| match s {
-                KeyStep::KeyTap { key, .. } => Some(key),
+                crate::macros::MacroStep::Key(KeyStep::KeyTap { key, .. }) => Some(key),
                 _ => None,
             })
             .collect()
@@ -3066,6 +3346,7 @@ mod tests {
     fn validation() {
         let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
         let control = |radio: Radio| VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: "  ".into(),
             kind: VirtualControlKind::Radio(radio),
@@ -3099,7 +3380,12 @@ mod tests {
             (saved.id.as_str(), saved.name.as_str()),
             (id.as_str(), "Radio")
         );
-        assert_eq!(saved.radio().unwrap().states[0].on_activate, [tap("F1")]);
+        let saved_macro = saved.radio().unwrap().states[0].on_activate[0]
+            .input_macro()
+            .unwrap();
+        assert_eq!(saved_macro.steps, tap("F1").input_macro().unwrap().steps);
+        // Saving gives the macro an id.
+        assert_eq!(saved_macro.id, "mac-1");
         assert_eq!(saved.radio().unwrap().states[0].name, "State 1");
     }
 
@@ -3194,11 +3480,11 @@ mod tests {
     fn recorder_sessions_hold_their_result_until_taken() {
         let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
         let s1 = engine
-            .begin_recording(RecordKind::Keyboard, Movement::Absolute)
+            .begin_recording(RecordKind::KEYBOARD, Movement::Absolute)
             .unwrap();
         assert!(engine.recording_active());
         assert_eq!(
-            engine.begin_recording(RecordKind::Mouse, Movement::Relative),
+            engine.begin_recording(RecordKind::MOUSE, Movement::Relative),
             Err(EngineError::Recording)
         );
         engine.set_recording_phase(s1, RecorderPhase::Recording);
@@ -3210,7 +3496,7 @@ mod tests {
         assert_eq!((result.session, result.action), (s1, tap("A")));
         // A late message from an old session changes nothing.
         let s2 = engine
-            .begin_recording(RecordKind::Mouse, Movement::Relative)
+            .begin_recording(RecordKind::MOUSE, Movement::Relative)
             .unwrap();
         assert!(engine.recorder().result.is_none());
         engine.finish_recording(s1, Err("old".into()));
@@ -3548,6 +3834,155 @@ mod tests {
 
     fn engine_shell(engine: &Engine) -> ShellStatus {
         engine.shell_status().clone()
+    }
+
+    #[test]
+    fn replacing_the_setup_keeps_state_of_what_still_exists() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0); // B
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        let kept = engine.setup().clone();
+        let mut other = kept.clone();
+        other.profiles[0].virtual_controls.clear();
+        engine.replace_setup(other);
+        assert!(engine.active_states().is_empty());
+        assert!(engine.take_dirty().setup);
+        // Back to the original: the radio starts fresh (its memory went with the control).
+        engine.replace_setup(kept.clone());
+        assert_eq!(active(&engine, &id), None);
+        // A setup that keeps the control keeps its state.
+        press(&mut engine, 0, 100);
+        engine.replace_setup(kept);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn importing_profiles_adds_them_without_switching() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let source = engine.setup().clone();
+        let before = engine.setup().active_profile.clone();
+        let report = engine
+            .import_profiles(&source, &[DEFAULT_PROFILE_ID.into()])
+            .unwrap();
+        assert_eq!(report.added[0].name, "Default (2)");
+        assert_eq!(engine.setup().profiles.len(), 2);
+        assert_eq!(engine.setup().active_profile, before);
+        assert!(engine.take_dirty().setup);
+        assert!(engine.import_profiles(&source, &["ghost".into()]).is_err());
+        assert_eq!(engine.setup().profiles.len(), 2);
+    }
+
+    // --- Toasts ----------------------------------------------------------------------------
+
+    fn enable_toast(engine: &mut Engine, id: &str) {
+        let mut control = engine
+            .setup()
+            .profiles
+            .iter()
+            .flat_map(|p| p.virtual_controls.iter())
+            .find(|c| c.id == id)
+            .unwrap()
+            .clone();
+        control.show_toast = true;
+        engine.save_virtual_control(control).unwrap();
+    }
+
+    fn toast_texts(toasts: &[ToastRequest]) -> Vec<String> {
+        toasts
+            .iter()
+            .map(|t| format!("{} {}", t.title, t.text))
+            .collect()
+    }
+
+    #[test]
+    fn controls_toast_only_when_enabled_and_when_the_value_changes() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        // Off by default: nothing, however often it changes.
+        engine.take_toasts();
+        press(&mut engine, 0, 0);
+        assert!(engine.take_toasts().is_empty());
+
+        enable_toast(&mut engine, &id);
+        // Enabling sets the baseline (B is active); no toast for what already was.
+        assert!(engine.take_toasts().is_empty());
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Comms C"]);
+        // Nothing changed since: nothing again.
+        assert!(engine.take_toasts().is_empty());
+        // Re-selecting the active state is no change.
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        assert!(engine.take_toasts().is_empty());
+        engine.set_radio_active(&id, None).unwrap();
+        let toasts = engine.take_toasts();
+        assert_eq!(toast_texts(&toasts), ["Comms –"]);
+        assert_eq!(toasts[0].key, id);
+    }
+
+    #[test]
+    fn toggle_and_counter_controls_toast_too() {
+        use crate::virtual_control::Toggle;
+        let (mut engine, _) = engine_with_radio(|_| {});
+        engine
+            .save_virtual_control(VirtualControl {
+                show_toast: true,
+                id: String::new(),
+                name: "Gear".into(),
+                kind: VirtualControlKind::Toggle(Toggle {
+                    toggle: vec![button(5)],
+                    ..Toggle::default()
+                }),
+            })
+            .unwrap();
+        engine.take_toasts();
+        press(&mut engine, 5, 0);
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Gear On"]);
+        press(&mut engine, 5, 100);
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Gear Off"]);
+    }
+
+    #[test]
+    fn switching_profiles_toasts_the_profile_not_the_controls() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        enable_toast(&mut engine, &default_radio);
+        enable_toast(&mut engine, &dcs_radio);
+        engine.take_toasts();
+        engine.foreground_changed(Some("DCS.exe"));
+        // The profile toast only; the DCS controls start from their baseline.
+        let toasts = engine.take_toasts();
+        assert_eq!(toast_texts(&toasts), ["Profile: DCS"]);
+        assert_eq!(toasts[0].key, "profile");
+        assert!(engine.take_toasts().is_empty());
+        // And it can be switched off.
+        let mut settings = engine.setup().overlay.toasts;
+        settings.profile_toast = false;
+        engine.set_toast_settings(settings);
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        assert!(engine.take_toasts().is_empty());
+    }
+
+    #[test]
+    fn toast_settings_and_position_are_per_the_right_scope() {
+        let (mut engine, _, _) = engine_with_two_profiles();
+        engine.set_toast_settings(ToastSettings {
+            duration_ms: 10,
+            ..ToastSettings::default()
+        });
+        assert_eq!(
+            engine.setup().overlay.toasts.duration_ms,
+            crate::toast::MIN_DURATION_MS
+        );
+        // The position belongs to the profile, like the widgets.
+        engine.set_toast_position(Some(WidgetPosition { x: 0.3, y: 5.0 }));
+        assert_eq!(
+            engine.snapshot().toast_position,
+            Some(WidgetPosition { x: 0.3, y: 1.0 })
+        );
+        engine.foreground_changed(Some("DCS.exe"));
+        assert_eq!(engine.snapshot().toast_position, None);
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        assert!(engine.snapshot().toast_position.is_some());
+        engine.set_toast_position(None);
+        assert_eq!(engine.snapshot().toast_position, None);
     }
 
     #[test]
@@ -3992,6 +4427,24 @@ mod tests {
         assert_eq!(json["shell"]["autostart"], "off");
         assert_eq!(json["settings"]["closeToTray"], true);
     }
+
+    #[test]
+    fn emitted_actions_carry_the_placeholder_context() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        engine.take_actions();
+        press(&mut engine, 0, 0); // selects B
+        let queued = engine.take_actions();
+        assert!(!queued.is_empty());
+        let p = queued[0].placeholders();
+        assert_eq!(p.control, "Comms");
+        assert_eq!(p.state, "B");
+        assert_eq!(p.profile, engine.setup().profile().name);
+        assert_eq!(p.value, None);
+        assert_eq!(
+            p.fill("{profile}/{control}/{state}"),
+            format!("{}/Comms/B", p.profile)
+        );
+    }
 }
 
 /// Toggle, momentary, counter and mode controls; press kinds, modifiers, conditions, axis
@@ -4087,6 +4540,7 @@ mod control_tests {
     fn add(engine: &mut Engine, name: &str, kind: VirtualControlKind) -> String {
         engine
             .save_virtual_control(VirtualControl {
+                show_toast: false,
                 id: String::new(),
                 name: name.into(),
                 kind,
@@ -4142,11 +4596,11 @@ mod control_tests {
             .take_actions()
             .into_iter()
             .flat_map(|a| match a.action {
-                Action::KeyboardMacro { steps, .. } => steps,
+                Action::InputMacro(m) => m.steps,
                 _ => vec![],
             })
             .filter_map(|s| match s {
-                KeyStep::KeyTap { key, .. } => Some(key),
+                crate::macros::MacroStep::Key(KeyStep::KeyTap { key, .. }) => Some(key),
                 _ => None,
             })
             .collect()
@@ -4462,6 +4916,7 @@ mod control_tests {
         assert!(on(&e, &toggle));
         // Conditions are checked when saving.
         let bad = VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: "X".into(),
             kind: VirtualControlKind::Toggle(Toggle {
@@ -4638,6 +5093,7 @@ mod control_tests {
     fn held_controls_refuse_encoders_and_releases() {
         let mut e = engine();
         let err = e.save_virtual_control(VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: String::new(),
             kind: VirtualControlKind::Momentary(Momentary {
@@ -5038,6 +5494,42 @@ mod control_tests {
     }
 
     #[test]
+    fn panic_releases_vjoy_buttons_and_povs_until_something_changes() {
+        let mut e = engine();
+        vjoy_on(&mut e);
+        radio_with_outputs(&mut e);
+        tap_button(&mut e, 1, 0); // B: vJoy button 2 held
+        let x = VjoyAxisRef {
+            device: 1,
+            axis: VjoyAxis::X,
+        };
+        let pov = VjoyPov { device: 1, pov: 1 };
+        e.run_vjoy_command(&VjoyCommand::Button {
+            button: vb(7),
+            op: ButtonOp::Press,
+        });
+        e.run_vjoy_command(&VjoyCommand::Axis {
+            axis: x,
+            percent: 100.0,
+        });
+        e.run_vjoy_command(&VjoyCommand::Pov {
+            pov,
+            direction: Some(HatDirection::Up),
+        });
+        assert_eq!(pressed(&e), [2, 7]);
+        e.vjoy_release_all();
+        let s = e.vjoy_state();
+        assert!(s.buttons.is_empty() && s.povs.is_empty());
+        // Axes stay where they are; the devices stay owned.
+        assert_eq!(s.axes[&x], 1.0);
+        assert!(s.devices.contains(&1));
+        // The next change brings the state outputs back; what the action held is gone.
+        tap_button(&mut e, 0, 100); // A: button 1
+        assert_eq!(pressed(&e), [1]);
+        assert!(e.vjoy_state().povs.is_empty());
+    }
+
+    #[test]
     fn vjoy_devices_never_trigger_nor_feed_mappings() {
         let mut e = engine();
         vjoy_on(&mut e);
@@ -5106,5 +5598,156 @@ mod control_tests {
         send(&mut e, 0, false, 40);
         send(&mut e, 0, true, 50);
         assert_eq!(e.snapshot().learn.unwrap().captured, None);
+    }
+
+    #[test]
+    fn counter_value_reaches_speech_and_http_placeholders() {
+        use crate::audio::Speech;
+        use crate::webhook::HttpRequest;
+        let mut e = engine();
+        let speak = Action::Speak(Speech {
+            text: "COM1 {value} on {profile}".into(),
+            ..Speech::default()
+        });
+        let http = Action::Http(HttpRequest {
+            url: "https://hooks.test/{control}?f={value}".into(),
+            body: "{state}={value}".into(),
+            ..HttpRequest::default()
+        });
+        let id = add(
+            &mut e,
+            "COM1",
+            VirtualControlKind::Counter(CounterControl {
+                spec: CounterSpec {
+                    min: 118.0,
+                    max: 118.1,
+                    step: 0.025,
+                    initial: 118.0,
+                    end: EndBehavior::Clamp,
+                    decimals: 3,
+                },
+                increment: vec![button(1)],
+                on_change: vec![speak, http],
+                ..Default::default()
+            }),
+        );
+        e.take_actions();
+        e.command_control(&id, ManualCommand::Increment).unwrap();
+        let queued = e.take_actions();
+        assert_eq!(queued.len(), 2);
+        let profile = e.setup().profile().name.clone();
+        let Action::Speak(s) = &queued[0].action else {
+            panic!("speech expected")
+        };
+        assert_eq!(
+            queued[0].fill_placeholders(&s.text),
+            format!("COM1 118.025 on {profile}")
+        );
+        let Action::Http(r) = &queued[1].action else {
+            panic!("HTTP expected")
+        };
+        let prepared = r.prepare(&queued[1].placeholders());
+        assert_eq!(prepared.url, "https://hooks.test/COM1?f=118.025");
+        assert_eq!(
+            prepared.body.as_deref(),
+            Some(format!("{}=118.025", queued[1].state).as_str())
+        );
+    }
+
+    #[test]
+    fn secrets_of_every_control_type_are_found() {
+        use crate::connection::SecretRef;
+        use crate::webhook::{HttpHeader, HttpRequest};
+        let secret = |n: u32| SecretRef::WindowsCredentialManager {
+            target: format!("detent/http/{n}"),
+        };
+        let http = |n: u32| {
+            vec![Action::Http(HttpRequest {
+                url: "https://hooks.test".into(),
+                headers: vec![HttpHeader {
+                    name: "Authorization".into(),
+                    value: String::new(),
+                    secret: Some(secret(n)),
+                }],
+                ..HttpRequest::default()
+            })]
+        };
+        let mut e = engine();
+        let state = |n: u32, name: &str| ModeState {
+            name: name.into(),
+            on_activate: http(n),
+            on_deactivate: http(n + 1),
+            ..Default::default()
+        };
+        let kinds = vec![
+            VirtualControlKind::Toggle(Toggle {
+                on_on: http(1),
+                on_off: http(2),
+                ..Default::default()
+            }),
+            VirtualControlKind::Momentary(Momentary {
+                on_press: http(3),
+                on_release: http(4),
+                ..Default::default()
+            }),
+            VirtualControlKind::Counter(CounterControl {
+                on_change: http(5),
+                ..Default::default()
+            }),
+            VirtualControlKind::Mode(Mode {
+                states: vec![state(6, "A"), state(8, "B")],
+                ..Default::default()
+            }),
+        ];
+        for (i, kind) in kinds.into_iter().enumerate() {
+            add(&mut e, &format!("C{i}"), kind);
+        }
+        let refs = e.setup().secret_refs();
+        for n in 1..=9 {
+            assert!(refs.contains(&secret(n)), "secret {n} missing");
+        }
+        assert_eq!(refs.len(), 9);
+    }
+
+    #[test]
+    fn actions_carry_their_control_state_and_state_changes_are_signalled() {
+        let mut e = engine();
+        let id = add(
+            &mut e,
+            "Fire",
+            VirtualControlKind::Momentary(Momentary {
+                triggers: vec![button(0)],
+                on_press: vec![key("P")],
+                on_release: vec![key("R")],
+                invert: false,
+                output: None,
+            }),
+        );
+        e.take_macro_signals();
+        down(&mut e, 0, 0);
+        let pressed = e.take_actions();
+        let on_scope = Scope {
+            control: id.clone(),
+            state: "on".into(),
+        };
+        assert_eq!(pressed[0].scope.as_ref(), Some(&on_scope));
+        assert_eq!(e.take_macro_signals(), [MacroSignal::State(on_scope)]);
+        up(&mut e, 0, 50);
+        let released = e.take_actions();
+        let off_scope = Scope {
+            control: id.clone(),
+            state: "off".into(),
+        };
+        assert_eq!(released[0].scope.as_ref(), Some(&off_scope));
+        assert_eq!(e.take_macro_signals(), [MacroSignal::State(off_scope)]);
+        // A profile switch is signalled too.
+        let other = e.create_profile("Other");
+        e.select_profile(crate::profile::DEFAULT_PROFILE_ID)
+            .unwrap();
+        assert!(
+            e.take_macro_signals()
+                .contains(&MacroSignal::ProfileSwitched)
+        );
+        assert!(!other.is_empty());
     }
 }

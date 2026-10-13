@@ -47,10 +47,11 @@ A virtual control is built from physical inputs and can run actions. The first k
   none was active yet); this also works after a restart.
 - Each state has actions on activate and on deactivate. Switching from A to B runs A's
   deactivate actions, then B's activate actions.
-- Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
+- Actions are input macros: keyboard steps (key down, key up, tap with hold time, wait) and mouse steps
   (button down, up, click, wheel, relative move, move to a position, recorded paths, wait),
-  Soundpad commands, Discord mute/deafen and switching the profile (see Profiles). Keys are sent as scan codes so games that read
-  DirectInput or RawInput see them. Every executed action is logged.
+  Soundpad commands, Discord mute/deafen, switching the profile (see Profiles), and the actions
+  below. Keys are sent as scan codes so games that read DirectInput or RawInput see them. Every
+  executed action is logged. Add actions with **+ Add action…**.
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
   stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
@@ -60,6 +61,31 @@ A virtual control is built from physical inputs and can run actions. The first k
   set the state (nothing is sent when it already holds); the toggles go by Discord's live state,
   so muting by hand in Discord is taken into account. Discord must be running and the Discord
   connection enabled under **Connections**.
+- **Speak text**: Windows speech with a voice of your choice (the installed Windows voices),
+  rate and volume. A new speech interrupts the one still speaking.
+- **Play sound file**: wav, mp3, ogg or flac, with volume, on the default or a chosen output
+  device; optionally stops the sounds still playing first.
+- **Audio volume**: the master volume of the default output device, or a program's volume (by
+  executable name, e.g. `Discord.exe`, like the Windows volume mixer; the list offers programs
+  that have an audio session now): set to %, change by ±%, mute, unmute, toggle mute.
+- **Media key**: play/pause, next, previous, stop, volume up/down, mute, as a keyboard's media
+  keys.
+- **Launch**: start a program (path, arguments, working folder, optionally only if it is not
+  running yet), open a web page (http/https only) or a file or folder with its default app.
+  Programs are started directly, never through a command prompt.
+- **HTTP request** (webhook): method, address, headers and body, timeout (default 5 s). Header
+  values can be stored as **secret**: they go to the Windows Credential Manager
+  (`detent/http/…`) and never into `setup.json` or the log. The status and duration go to the
+  event log.
+- **Voicemeeter** (a connection, see below): set or change the gain of a strip or bus, mute,
+  unmute or toggle it.
+- Texts of speech and HTTP requests can contain placeholders: `{control}`, `{state}`,
+  `{profile}` and `{value}` (the control's value, for controls that have one; empty for
+  radios). In an HTTP address their values are URL-encoded.
+- Actions run one after the other, in order. Speech, sound files, launch and HTTP requests start
+  in the background and the next action runs at once, unless **Wait until finished** is ticked
+  (it waits at most 10 minutes). Their result, and any failure with its reason, goes to the event
+  log; a failing action never stops the ones after it. **▶ Test** runs an action as edited.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
@@ -105,7 +131,9 @@ one is due instead of polling.
 
 ### Recording macros
 
-Every keyboard and mouse macro has a **● Record** button. After a 3-second countdown (switch
+An **input macro** has keyboard and mouse steps in any order, e.g. Ctrl down, click, Ctrl up
+(the keyboard and mouse macros of earlier versions load as input macros with all their
+settings). Every input macro has a **● Record** button. After a 3-second countdown (switch
 to the game now) Detent records into that macro until you press the stop hotkey (default
 `Ctrl+Shift+F9`, configurable under *Macro recorder*) or **Stop**; **Esc** cancels. While
 recording, the main window shows a red banner and the overlay a red **REC** badge. The recording
@@ -113,8 +141,10 @@ is appended to the steps or replaces them, as chosen next to the button. The sto
 and the click on Stop are not recorded; Detent's own playback never is (injected input is
 ignored). Esc cannot be recorded; add it by hand if a macro needs it.
 
-- A keyboard macro records keys (as scan codes, like playback); a mouse macro records buttons,
-  wheel and movement. Gaps become waits, and press-wait-release becomes a tap or click.
+- Tick what to record: **keys** (as scan codes, like playback), **mouse** (buttons, wheel and
+  movement), or both (the default). Gaps become waits, and press-wait-release becomes a tap or
+  click. Recording both puts keys and mouse on one timeline; a mouse path during which a key
+  goes down or up is split there, so a key held while moving the mouse stays in time.
 - Mouse movement is **absolute** (cursor positions, stored relative to the monitor the
   recording started on, like overlay positions; for menus and maps) or **relative** (raw mouse
   deltas via Raw Input; for mouse-look, where the game keeps the cursor centred). Set it per
@@ -125,10 +155,34 @@ ignored). Esc cannot be recorded; add it by hand if a macro needs it.
 - Playback options per macro: speed (original, 0.25× to 4×; scales waits and paths, not hold
   times), skipping waits shorter than a threshold, and for absolute paths "endpoint only",
   which jumps straight to where each path ends.
-- The editor has a step list (select several to delete, drag ⋮⋮ to reorder, + inserts a step,
-  everything editable in place) and, for mouse macros, a preview of the movement on the
-  monitor outline where waypoints can be dragged. **▶ Test play** plays the macro as edited
-  after the same countdown.
+- The editor has a step list (⌨ keyboard, 🖱 mouse, ⏱ wait; select several to delete, drag ⋮⋮
+  to reorder, + inserts a step, everything editable in place, a step can change between key
+  and mouse) and, when the macro moves the mouse, a preview of the movement on the monitor
+  outline where waypoints can be dragged. **▶ Test play** plays the macro as edited after the
+  same countdown ("while active" plays once there).
+
+### Repeating and stopping macros
+
+- **Repeat**: once (default), **n times**, or **while active**: as long as the control state
+  that started the macro stays active (a momentary control held, a toggle on, a radio or mode
+  state active; for a long-press trigger on a momentary control, while the button is held). A
+  **pause** between runs can be set. For a "while active" macro, when the state ends it stops
+  immediately (default) or finishes the run in progress.
+- A macro that runs once plays in order with the other actions, as before. A repeating macro
+  runs in the background; the next actions do not wait for it.
+- The same macro never runs twice at once: a new trigger while it runs is **ignored**
+  (default) or **restarts** it.
+- Stopping a macro releases every key and mouse button it pressed and has not released, so
+  nothing stays stuck. Macros stop when their state ends, with the **Stop macros** action (all,
+  or one macro of the profile), with the **panic hotkey** (Settings, General; default
+  `Ctrl+Shift+F12`, works while a game has the focus), when another profile becomes active and
+  when Detent quits. The panic hotkey, a profile switch and quitting also release what macros
+  that already finished left pressed (e.g. a "Ctrl down" waiting for its "Ctrl up"). The
+  panic hotkey then also releases every vJoy button and centres the POVs (axes stay); they
+  stay released until a control changes, a vJoy action runs or the profile changes. On quit,
+  macros stop and release first, then vJoy releases its buttons and gives the devices back.
+- The event log shows a background macro's start, and for every stop the reason, the number of
+  runs and the keys released.
 
 Relative moves are sent as relative mouse input: games that read raw input see exactly the
 recorded deltas, while the Windows desktop applies its pointer speed and acceleration to them.
@@ -170,7 +224,8 @@ visibility are shared by all profiles. A setup from before profiles becomes the 
 
 ## Connections
 
-The **Connections** section lists the programs Detent can control. Soundpad is the first. Each
+The **Connections** section lists the programs Detent can control: Soundpad, Discord and
+Voicemeeter. Each
 connection can be enabled, has its own settings (for Soundpad: timeout per request, how old the
 cached sound list may get), a live status (disabled, connecting, connected, not reachable) and a
 **Test connection** button. While enabled, Detent checks the connection every few seconds and
@@ -181,6 +236,13 @@ connection that is later disabled stay saved, are shown greyed with a link to Co
 are skipped (with a log entry) when they fire. Keyboard and mouse macros need no connection.
 Connection settings are stored in `setup.json`; secrets are kept in the Windows Credential
 Manager (generic credentials `detent/discord/…`), never in the file or the log.
+
+### Voicemeeter
+
+Uses the VoicemeeterRemote API of a local Voicemeeter (Standard, Banana or Potato). Detent loads
+`VoicemeeterRemote64.dll` from the installation folder; without an installation the connection
+says so and its actions are not offered. Voicemeeter must be running; while the connection is
+enabled, Detent checks every few seconds and shows the edition.
 
 ### Discord
 
@@ -269,6 +331,43 @@ does not and the program in the foreground does, a banner in the main window war
 Detent's keys and mouse will not reach it (also in the log).
 
 Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
+
+## Backup and transfer
+
+Settings has a section **Backup & transfer**.
+
+- **Export** writes the configuration, or selected profiles, to a `.detent.json` file (also per profile in the profile
+  list). The file holds the schema version and the export time. Credentials are never exported: the Discord client secret
+  reference and any field named like a secret, token, password or authorization header are emptied, and the file lists
+  what was left out. After importing, enter those under Connections.
+- **Import** reads such a file (or a plain `setup.json`). Older schemas are converted; files from a newer Detent are
+  refused with a message. **Replace all** swaps the whole configuration (this computer's tray and startup settings stay,
+  and so do the Discord credentials when the file names the same Client ID) after a confirmation. **Add profiles** adds the
+  chosen profiles: names that are taken get a number ("DCS (2)"), ids are renumbered where they clash, the encoders and
+  counters the profiles use come along, and programs that another profile already lists are not taken over. Before
+  either, a backup of the current configuration is written; if that fails, nothing is imported.
+- **Automatic backups**: whenever `setup.json` is saved, at most every 5 minutes, and before every import and restore,
+  Detent copies it to `backups\setup-YYYYMMDD-HHMMSS.json` (UTC) in the config folder. It keeps the latest 20 and the
+  newest of each of the last 14 days. The list shows date, profile count and size; **Restore** (after a confirmation,
+  with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
+  in the event log.
+
+## Overlay toasts and appearance
+
+- **Toasts**: every virtual control has "Show toast on change" (off by default) in its editor. When its state or value
+  changes, a toast shows the name and the new state, e.g. "COM1 · 121.500" or "Radio · Kanal 2": it fades in and out, at
+  most 3 are stacked with the newest on top, and a repeated change of the same control updates its toast instead of
+  adding one. Switching the profile shows "Profile: <name>" (can be turned off). Duration (default 2 s), the profile
+  toast and "Show toasts while the overlay is hidden" are under Settings > Overlay appearance. With the overlay hidden by
+  the hotkey, only the toasts appear; the window stays click-through and is shown without activation, so a game keeps
+  the keyboard and mouse. The toast area is placed in Edit layout like a widget (default: top centre) and belongs to the
+  profile. "Show a test toast" in Settings tries it.
+- **Widget visibility**: in the Overlay panel each widget can be "Always" or "Only after a change" (shown for N seconds,
+  default 3, then it fades out), and can have its own size and opacity on top of the overlay's. In layout edit mode all
+  widgets are visible.
+- **Appearance** (Settings > Overlay appearance, all profiles): theme (Dark, Light, High contrast, HUD green), accent
+  color for active states, background opacity, text size and corner radius, with a live preview; the overlay window
+  follows while you adjust. The highlight of the active state never changes a widget's size in any theme.
 
 ## Layout
 

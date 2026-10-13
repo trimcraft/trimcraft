@@ -53,23 +53,23 @@
 {/if}
 
 <style>
-  .profile { font-size: 15px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
-  .fn { font-size: 22px; white-space: nowrap; }
+  .profile { font-size: calc(15px * var(--text-scale, 1)); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
+  .fn { font-size: calc(22px * var(--text-scale, 1)); white-space: nowrap; }
   .fname { color: var(--muted); }
   .fvalue { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
   .ctl { display: flex; flex-direction: column; gap: 2px; min-width: 240px; }
   .ctl:has(.lamp), .ctl:has(:global(.rose)) { flex-direction: row; align-items: center; gap: 8px; }
   .ctl.offline { opacity: 0.4; }
-  .clabel { font-size: 12px; color: var(--muted); }
+  .clabel { font-size: calc(12px * var(--text-scale, 1)); color: var(--muted); }
   .lamp { width: 14px; height: 14px; border-radius: 50%; background: var(--lamp-off); }
   .lamp.on { background: var(--lamp-on); box-shadow: 0 0 8px var(--lamp-on); }
   .switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
   .onoff { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
   .onoff.on { color: var(--accent); }
-  .radio.shifted li.on { outline: 2px dashed #111; outline-offset: -4px; }
+  .radio.shifted li.on { outline: 2px dashed var(--accent-text, #111); outline-offset: -4px; }
   .radio { display: flex; flex-direction: column; gap: 4px; }
   .radio.horizontal { flex-direction: row; align-items: center; gap: 10px; }
-  .rname { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+  .rname { color: var(--muted); font-size: calc(13px * var(--text-scale, 1)); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
   ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
   .horizontal ul { flex-direction: row; }
   /* The highlight must not change the size: every item has the same border, and the width of
@@ -78,14 +78,14 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    font-size: 16px;
+    font-size: calc(16px * var(--text-scale, 1));
     font-variant-numeric: tabular-nums;
     padding: 2px 10px;
-    border-radius: 4px;
-    border: 1px solid rgba(240, 160, 48, 0.25);
+    border-radius: var(--ov-radius-sm, 4px);
+    border: 1px solid var(--ov-line, rgba(240, 160, 48, 0.25));
     color: var(--text);
     white-space: nowrap;
   }
-  li.on { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 700; }
+  li.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text, #111); font-weight: 700; }
   li::after { content: attr(data-label); font-weight: 700; visibility: hidden; height: 0; overflow: hidden; }
 </style>

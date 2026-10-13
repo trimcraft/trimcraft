@@ -30,6 +30,9 @@ pub struct Profile {
     pub executables: Vec<String>,
     pub virtual_controls: Vec<VirtualControl>,
     pub overlay_widgets: WidgetList,
+    /// Top-left corner of the toast area on the overlay; `None`: the default place (top centre).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toast_position: Option<crate::overlay::WidgetPosition>,
     /// Physical axes, buttons and hats passed through to vJoy.
     pub vjoy_mappings: Vec<VjoyMapping>,
 }

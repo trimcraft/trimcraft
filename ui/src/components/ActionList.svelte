@@ -1,7 +1,8 @@
 <script lang="ts">
-  // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad and Discord
-  // commands, profile switches.
-  import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
+  // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad, Discord and
+  // Voicemeeter commands, profile switches, speech, sound files, volume, media keys, launch and
+  // HTTP requests (editors in ./actions).
+  import type { Action, ConnectorId, EngineSnapshot, InputMacro, KeyInfo, Playback } from "../lib/types";
   import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
   import MacroEditor from "./MacroEditor.svelte";
@@ -9,6 +10,13 @@
   import DiscordEditor from "./DiscordEditor.svelte";
   import VjoyActionEditor from "./VjoyActionEditor.svelte";
   import ProfileTargetEditor from "./ProfileTargetEditor.svelte";
+  import SpeakEditor from "./actions/SpeakEditor.svelte";
+  import PlaySoundEditor from "./actions/PlaySoundEditor.svelte";
+  import VolumeEditor from "./actions/VolumeEditor.svelte";
+  import VoicemeeterEditor from "./actions/VoicemeeterEditor.svelte";
+  import LaunchEditor from "./actions/LaunchEditor.svelte";
+  import HttpEditor from "./actions/HttpEditor.svelte";
+  import { MEDIA_KEYS, macroChoices } from "../lib/format";
 
   let {
     label,
@@ -19,10 +27,27 @@
 
   let open = $state<number | null>(null);
   /** The connector an action needs (keyboard and mouse macros are built in). */
-  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" || a.type === "discord" || a.type === "vjoy" ? a.type : null);
+  const connectorOf = (a: Action): ConnectorId | null =>
+    a.type === "soundpad" || a.type === "discord" || a.type === "voicemeeter" || a.type === "vjoy" ? a.type : null;
   const connectorView = (id: ConnectorId) => snapshot.connectors.find((c) => c.id === id);
-  /** A connector's actions are offered, and run, only while it is enabled. */
-  const enabled = (id: ConnectorId) => snapshot.connections[id].enabled;
+  /** A connector's actions are offered, and run, only while it is enabled (and installed). */
+  const enabled = (id: ConnectorId) => snapshot.connections[id].enabled && !connectorView(id)?.missing;
+
+  /** What "Add action" offers, in groups. */
+  let addable = $derived.by(() => {
+    const groups: [string, [Action["type"], string][]][] = [
+      ["Input", [["inputMacro", "Input macro (keys and mouse)"], ["mediaKey", "Media key"], ["stopMacros", "Stop macros"]]],
+      ["Sound", [["speak", "Speak text"], ["playSound", "Play sound file"], ["volume", "Audio volume"]]],
+      ["Programs", [["launch", "Launch program / open"], ["http", "HTTP request (webhook)"], ["switchProfile", "Switch profile"]]],
+    ];
+    const connectors: [Action["type"], string][] = [];
+    if (enabled("soundpad")) connectors.push(["soundpad", "Soundpad"]);
+    if (enabled("discord")) connectors.push(["discord", "Discord"]);
+    if (enabled("voicemeeter")) connectors.push(["voicemeeter", "Voicemeeter"]);
+    if (enabled("vjoy")) connectors.push(["vjoy", "vJoy (button, axis, POV)"]);
+    if (connectors.length) groups.push(["Connections", connectors]);
+    return groups;
+  });
   const inactive = (a: Action) => {
     const id = connectorOf(a);
     return id !== null && !enabled(id);
@@ -32,10 +57,21 @@
 
   function newAction(type: Action["type"]): Action {
     switch (type) {
-      case "keyboardMacro":
-        return { type, steps: [{ type: "keyTap", key: "F1", holdMs: null }], playback: playback() };
-      case "mouseMacro":
-        return { type, steps: [{ type: "click", button: "left", holdMs: null }], playback: playback(), movement: "absolute", monitor: null };
+      case "inputMacro":
+        return {
+          type,
+          id: "",
+          steps: [{ type: "keyTap", key: "F1", holdMs: null }],
+          playback: playback(),
+          movement: "absolute",
+          monitor: null,
+          repeat: { type: "once" },
+          onEnd: "stopImmediately",
+          pauseMs: 0,
+          retrigger: "ignore",
+        };
+      case "stopMacros":
+        return { type, target: { type: "all" } };
       case "soundpad":
         return { type, command: { type: "play", sound: { title: "", path: "" }, output: "both" } };
       case "discord":
@@ -44,6 +80,20 @@
         return { type, target: { type: "next" } };
       case "vjoy":
         return { type, command: { type: "button", button: { device: 1, button: 1 }, op: { type: "pulse", ms: 100 } } };
+      case "speak":
+        return { type, text: "{state}", voice: null, rate: 0, volume: 100, wait: false };
+      case "playSound":
+        return { type, path: "", volume: 100, device: null, stopPrevious: false, wait: false };
+      case "volume":
+        return { type, target: { type: "master" }, command: { type: "toggleMute" } };
+      case "voicemeeter":
+        return { type, target: { kind: "strip", index: 0 }, command: { type: "toggleMute" } };
+      case "mediaKey":
+        return { type, key: "playPause" };
+      case "launch":
+        return { type, target: { type: "program", path: "", arguments: "", workingDir: "", onlyIfNotRunning: true }, wait: false };
+      case "http":
+        return { type, method: "POST", url: "https://", headers: [], body: "", timeoutMs: 5000, wait: false };
     }
   }
 
@@ -88,8 +138,45 @@
               <VjoyActionEditor bind:command={action.command} {snapshot} />
             {:else if action.type === "switchProfile"}
               <ProfileTargetEditor bind:target={action.target} profiles={snapshot.profiles} />
+            {:else if action.type === "speak"}
+              <SpeakEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "playSound"}
+              <PlaySoundEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "volume"}
+              <VolumeEditor bind:target={action.target} bind:command={action.command} />
+            {:else if action.type === "voicemeeter"}
+              <VoicemeeterEditor bind:target={action.target} bind:command={action.command} connector={connectorView("voicemeeter")} />
+            {:else if action.type === "stopMacros"}
+              {@const choices = macroChoices(snapshot)}
+              <div class="row">
+                <select
+                  value={action.target.type === "all" ? "" : action.target.id}
+                  onchange={(e) => {
+                    const id = e.currentTarget.value;
+                    if (action.type === "stopMacros") action.target = id ? { type: "macro", id } : { type: "all" };
+                  }}
+                >
+                  <option value="">All running macros</option>
+                  {#each choices as c (c.id)}<option value={c.id}>{c.label}</option>{/each}
+                  {#if action.target.type === "macro" && !choices.some((c) => action.type === "stopMacros" && action.target.type === "macro" && c.id === action.target.id)}
+                    <option value={action.target.id}>{action.target.id} (saved macro of this profile)</option>
+                  {/if}
+                </select>
+              </div>
+              <p class="muted small">Stops the macro and releases the keys and mouse buttons it holds. Macros are listed once their control is saved.</p>
+            {:else if action.type === "mediaKey"}
+              <div class="row">
+                <select bind:value={action.key}>
+                  {#each MEDIA_KEYS as [value, text] (value)}<option {value}>{text}</option>{/each}
+                </select>
+                <span class="muted small">Sent like a keyboard's media key: the active media player or Windows reacts.</span>
+              </div>
+            {:else if action.type === "launch"}
+              <LaunchEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "http"}
+              <HttpEditor bind:action={actions[ai] as typeof action} />
             {:else}
-              <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
+              <MacroEditor bind:action={() => action as InputMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
           </div>
         {/if}
@@ -98,12 +185,22 @@
       <span class="muted small">none</span>
     {/each}
     <div class="row">
-      <button class="small" onclick={() => addAction("keyboardMacro")}>+ Keyboard macro</button>
-      <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
-      {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
-      {#if enabled("discord")}<button class="small" onclick={() => addAction("discord")}>+ Discord</button>{/if}
-      {#if enabled("vjoy")}<button class="small" onclick={() => addAction("vjoy")}>+ vJoy</button>{/if}
-      <button class="small" onclick={() => addAction("switchProfile")}>+ Switch profile</button>
+      <select
+        class="small add"
+        value=""
+        onchange={(e) => {
+          const type = e.currentTarget.value as Action["type"];
+          e.currentTarget.value = "";
+          if (type) addAction(type);
+        }}
+      >
+        <option value="" disabled>+ Add action…</option>
+        {#each addable as [group, types] (group)}
+          <optgroup label={group}>
+            {#each types as [value, text] (value)}<option {value}>{text}</option>{/each}
+          </optgroup>
+        {/each}
+      </select>
     </div>
   </div>
 </div>

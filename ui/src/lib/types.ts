@@ -115,7 +115,50 @@ export interface WidgetPosition {
 }
 
 /** A widget plus where it is; `position: null` stacks it in the anchored corner. */
-export type OverlayItem = OverlayWidget & { position: WidgetPosition | null };
+/** When a widget is shown. */
+export type WidgetVisibility = { mode: "always" } | { mode: "afterChange"; seconds: number };
+
+export type OverlayItem = OverlayWidget & {
+  position: WidgetPosition | null;
+  /** Missing: always. */
+  visibility?: WidgetVisibility;
+  /** Scale of this widget on top of the overlay's; missing: as the overlay. */
+  scale?: number;
+  /** 0..1; missing: 1. */
+  opacity?: number;
+};
+
+export type Theme = "dark" | "light" | "highContrast" | "hudGreen";
+
+export interface Appearance {
+  theme: Theme;
+  /** "#rrggbb"; null: the theme's own. */
+  accent: string | null;
+  /** Percent. */
+  backgroundOpacity: number;
+  /** Scale of the text only. */
+  textScale: number;
+  /** Pixels. */
+  cornerRadius: number;
+}
+
+export interface ToastSettings {
+  durationMs: number;
+  /** Toasts appear even when the overlay is hidden with the hotkey. */
+  whileHidden: boolean;
+  /** Switching profiles shows a toast. */
+  profileToast: boolean;
+}
+
+/** A toast on the overlay (detent-core toast::Toast). A title ending in ":" is followed by a space, any other by " · ". */
+export interface Toast {
+  id: number;
+  key: string;
+  title: string;
+  text: string;
+  /** Counts the updates of this toast. */
+  version: number;
+}
 
 export interface MonitorRef {
   name: string | null;
@@ -138,6 +181,8 @@ export interface OverlayConfig {
   anchor: Anchor;
   margin: number;
   scale: number;
+  appearance: Appearance;
+  toasts: ToastSettings;
   widgets: OverlayItem[];
 }
 
@@ -184,6 +229,8 @@ export interface EngineSnapshot {
   connectors: ConnectorView[];
   /** Global settings with the active profile's widgets. */
   overlay: OverlayConfig;
+  /** Where the active profile puts the toast area; null: the default place. */
+  toastPosition: WidgetPosition | null;
   detector: DetectorConfig;
   /** App-wide settings (Settings page). */
   settings: AppSettings;
@@ -287,27 +334,151 @@ export interface Playback {
   endpointOnly: boolean;
 }
 
-export type KeyboardMacro = { type: "keyboardMacro"; steps: KeyStep[]; playback: Playback };
-export type MouseMacro = {
-  type: "mouseMacro";
-  steps: MouseStep[];
+/** A keyboard or a mouse step; a wait ("delay") has the same shape in both. */
+export type MacroStep = KeyStep | MouseStep;
+
+/** Once, n times, or as long as the control state that started it stays active. */
+export type Repeat = { type: "once" } | { type: "times"; count: number } | { type: "whileActive" };
+/** What a "while active" macro does when its state ends. */
+export type OnEnd = "stopImmediately" | "finishRun";
+/** What a trigger does while the same macro still runs. */
+export type Retrigger = "ignore" | "restart";
+
+/** Keyboard and mouse steps in any order (keyboardMacro/mouseMacro of schema 3 load as this). */
+export interface InputMacro {
+  type: "inputMacro";
+  /** Assigned when the control is saved; "Stop macros" refers to it. */
+  id: string;
+  steps: MacroStep[];
   playback: Playback;
+  /** How the recorder captures mouse movement. */
   movement: Movement;
   /** Monitor absolute positions refer to; null = primary. */
   monitor: MonitorRef | null;
-};
+  repeat: Repeat;
+  onEnd: OnEnd;
+  /** Pause between runs, ms. */
+  pauseMs: number;
+  retrigger: Retrigger;
+}
+
+export type MacroTarget = { type: "all" } | { type: "macro"; id: string };
 
 export type Action =
-  | KeyboardMacro
-  | MouseMacro
+  | InputMacro
+  | { type: "stopMacros"; target: MacroTarget }
   | { type: "soundpad"; command: SoundpadCommand }
   | { type: "discord"; command: DiscordCommand }
   | { type: "switchProfile"; target: ProfileTarget }
-  | { type: "vjoy"; command: VjoyCommand };
+  | { type: "vjoy"; command: VjoyCommand }
+  | SpeakAction
+  | PlaySoundAction
+  | { type: "volume"; target: VolumeTarget; command: VolumeCommand }
+  | { type: "voicemeeter"; target: VmTarget; command: VmCommand }
+  | { type: "mediaKey"; key: MediaKey }
+  | LaunchAction
+  | HttpAction;
+
+// --- More actions (detent-core: audio.rs, voicemeeter.rs, launch.rs, webhook.rs) -------------
+
+/** An installed Windows voice; looked up by id. */
+export interface VoiceRef {
+  id: string;
+  name: string;
+}
+
+/** Text may contain {control}, {state}, {profile}, {value}. A new speech interrupts the last. */
+export interface SpeakAction {
+  type: "speak";
+  text: string;
+  /** Null: the Windows default voice. */
+  voice: VoiceRef | null;
+  /** -10..10, 0 is normal. */
+  rate: number;
+  /** 0..100. */
+  volume: number;
+  /** The queue waits until the text is spoken. */
+  wait: boolean;
+}
+
+export interface PlaySoundAction {
+  type: "playSound";
+  path: string;
+  /** 0..100. */
+  volume: number;
+  /** Output device name; null: the Windows default. */
+  device: string | null;
+  stopPrevious: boolean;
+  wait: boolean;
+}
+
+export type VolumeTarget = { type: "master" } | { type: "app"; process: string };
+
+export type VolumeCommand =
+  | { type: "set"; percent: number }
+  | { type: "change"; delta: number }
+  | { type: "mute" }
+  | { type: "unmute" }
+  | { type: "toggleMute" };
+
+export type VmKind = "strip" | "bus";
+
+/** Index from 0; the UI shows it from 1. */
+export interface VmTarget {
+  kind: VmKind;
+  index: number;
+}
+
+export type VmCommand =
+  | { type: "setGain"; db: number }
+  | { type: "changeGain"; deltaDb: number }
+  | { type: "mute" }
+  | { type: "unmute" }
+  | { type: "toggleMute" };
+
+export type MediaKey = "playPause" | "next" | "previous" | "stop" | "volumeUp" | "volumeDown" | "mute";
+
+export type LaunchTarget =
+  | { type: "program"; path: string; arguments: string; workingDir: string; onlyIfNotRunning: boolean }
+  | { type: "url"; url: string }
+  | { type: "open"; path: string };
+
+export interface LaunchAction {
+  type: "launch";
+  target: LaunchTarget;
+  /** Programs: the queue waits until the program has exited. */
+  wait: boolean;
+}
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface HttpHeader {
+  name: string;
+  /** Empty when the value is secret. */
+  value: string;
+  /** Where a secret value is stored; null for a plain value. */
+  secret: SecretRef | null;
+}
+
+export interface HttpAction {
+  type: "http";
+  method: HttpMethod;
+  /** Placeholders in the URL are URL-encoded. */
+  url: string;
+  headers: HttpHeader[];
+  /** Not sent for GET and DELETE. */
+  body: string;
+  timeoutMs: number;
+  wait: boolean;
+}
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
-export type RecordKind = "keyboard" | "mouse";
+/** What a recording takes. */
+export interface RecordKind {
+  keys: boolean;
+  mouse: boolean;
+}
 
 export interface RecorderConfig {
   stopHotkey: string;
@@ -318,7 +489,7 @@ export interface RecorderConfig {
 
 export interface RecordingResult {
   session: number;
-  action: KeyboardMacro | MouseMacro;
+  action: InputMacro;
   notes: string[];
 }
 
@@ -381,7 +552,7 @@ export interface VoiceState {
 
 // --- Connections (detent-core: connection.rs) -------------------------------------------------
 
-export type ConnectorId = "soundpad" | "discord" | "vjoy";
+export type ConnectorId = "soundpad" | "discord" | "voicemeeter" | "vjoy";
 
 export type ConnectorStatus =
   | { state: "notConfigured" }
@@ -415,6 +586,8 @@ export interface ConnectorView {
   guide: GuideStep | null;
   /** Driver version and devices (vJoy). */
   vjoy: VjoyInfo | null;
+  /** The program the connector needs is not installed (Voicemeeter); its actions are hidden. */
+  missing: string | null;
 }
 
 export interface SoundpadSettings {
@@ -433,11 +606,16 @@ export interface DiscordSettings {
   clientSecret: SecretRef | null;
 }
 
+export interface VoicemeeterSettings {
+  enabled: boolean;
+}
+
 /** Connector settings as stored in setup.json. Secrets never go here. */
 export interface Connections {
   soundpad: SoundpadSettings;
   discord: DiscordSettings;
   vjoy: { enabled: boolean };
+  voicemeeter: VoicemeeterSettings;
 }
 
 export interface RadioState {
@@ -535,6 +713,8 @@ export interface VirtualControlDef<K extends VirtualControlKind = VirtualControl
   id: string;
   name: string;
   kind: K;
+  /** Show an overlay toast when its state or value changes. */
+  showToast?: boolean;
 }
 
 export type VirtualControlView = VirtualControlDef & {
@@ -595,6 +775,8 @@ export interface AppSettings {
   runAsAdmin: boolean;
   /** Set by the app; ignored when saving. */
   trayNoticeShown: boolean;
+  /** Stops all macros and releases every input they hold. */
+  panicHotkey: string;
 }
 
 /** How Detent is started at logon: Run registry value or elevated Task Scheduler task. */
@@ -715,4 +897,50 @@ export interface VjoyInfo {
   /** null: driver not enabled. */
   version: string | null;
   devices: VjoyDeviceInfo[];
+}
+
+// --- Backup and transfer (detent-core: backup.rs, transfer.rs) --------------------------------
+
+export interface BackupInfo {
+  /** File name; the id for restoring. */
+  name: string;
+  /** When it was written (UTC seconds since the Unix epoch). */
+  unixSecs: number;
+  size: number;
+  /** Null if the file cannot be read. */
+  profiles: number | null;
+}
+
+export type ExportKind = "all" | "profiles" | "backup";
+
+export interface ImportProfileSummary {
+  id: string;
+  name: string;
+  controls: number;
+  executables: string[];
+}
+
+/** What an import file holds, as shown before importing. */
+export interface ImportSummary {
+  kind: ExportKind;
+  exportedAt: string | null;
+  detentVersion: string | null;
+  schemaVersion: number;
+  profiles: ImportProfileSummary[];
+  /** Fields left out when exporting (credentials); they have to be entered again. */
+  strippedFields: string[];
+}
+
+export type ImportMode = { type: "replaceAll" } | { type: "addProfiles"; profiles: string[] };
+
+export interface AddedProfile {
+  id: string;
+  name: string;
+  /** The name in the file, when it had to change. */
+  renamedFrom: string | null;
+}
+
+export interface ImportResult {
+  message: string;
+  report: { added: AddedProfile[]; droppedExecutables: string[]; addedEncoders: number; addedFunctions: number } | null;
 }

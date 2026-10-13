@@ -4,6 +4,7 @@
 //! Schema 1 had one set of virtual controls and overlay widgets; loading such a file turns
 //! them into the profile "Default" (see [`migrate_v1`]).
 
+use crate::action::Action;
 use crate::connection::Connections;
 use crate::device::DeviceId;
 use crate::encoder::{DetectorConfig, EncoderBinding};
@@ -21,7 +22,12 @@ use thiserror::Error;
 /// press kinds, modifiers, conditions and axis zones. Schema 2 files load unchanged (all new
 /// fields have defaults); the bump makes older versions refuse the file instead of failing on
 /// the new kinds.
-pub const SETUP_SCHEMA_VERSION: u32 = 3;
+///
+/// 4: keyboard and mouse macros became one input macro (`inputMacro`) with repetition. Schema
+/// 3 macros load as input macros with all their settings (serde aliases on
+/// [`crate::Action::InputMacro`]) and get an id; the bump makes older versions refuse the new
+/// type instead of failing on it.
+pub const SETUP_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,6 +147,7 @@ impl Setup {
     /// profile ids, an active profile that exists, control ids unique across profiles, and
     /// no overlay widgets outside the profiles.
     fn repair(&mut self) {
+        self.assign_macro_ids();
         if self.profiles.is_empty() {
             self.profiles
                 .push(Profile::new(DEFAULT_PROFILE_ID, DEFAULT_PROFILE_NAME));
@@ -184,12 +191,55 @@ impl Setup {
         self.profiles[active].overlay_widgets.extend(stray.0);
     }
 
+    /// Gives every input macro an id that is unique within its profile ("Stop macros" and the
+    /// concurrency guard refer to it). A copied profile keeps the ids of its copy, so its
+    /// "Stop macros" actions still find their macros.
+    pub fn assign_macro_ids(&mut self) {
+        for profile in &mut self.profiles {
+            let mut taken: HashSet<String> = HashSet::new();
+            let mut missing = Vec::new();
+            for (c, control) in profile.virtual_controls.iter().enumerate() {
+                for (a, action) in control.actions().into_iter().enumerate() {
+                    if let Some(m) = action.input_macro()
+                        && (m.id.is_empty() || !taken.insert(m.id.clone()))
+                    {
+                        missing.push((c, a));
+                    }
+                }
+            }
+            for (c, a) in missing {
+                let id = next_id("mac", taken.iter().map(String::as_str));
+                taken.insert(id.clone());
+                if let Some(Action::InputMacro(m)) =
+                    profile.virtual_controls[c].actions_mut().into_iter().nth(a)
+                {
+                    m.id = id;
+                }
+            }
+        }
+    }
+
     /// Index of the active profile in `profiles`.
     pub fn active_index(&self) -> usize {
         self.profiles
             .iter()
             .position(|p| p.id == self.active_profile)
             .unwrap_or(0)
+    }
+
+    /// Every secret the actions of all profiles refer to (HTTP header values).
+    pub fn secret_refs(&self) -> Vec<crate::connection::SecretRef> {
+        let mut refs = Vec::new();
+        for control in self.profiles.iter().flat_map(|p| &p.virtual_controls) {
+            for action in control.actions() {
+                for secret in action.secrets() {
+                    if !refs.contains(secret) {
+                        refs.push(secret.clone());
+                    }
+                }
+            }
+        }
+        refs
     }
 
     pub fn profile(&self) -> &Profile {
@@ -264,14 +314,11 @@ mod tests {
         let s = Setup::from_json(json).unwrap();
         assert_eq!(s.recorder, RecorderConfig::default());
         let state = &s.profile().virtual_controls[0].radio().unwrap().states[0];
-        let crate::action::Action::MouseMacro {
-            playback, movement, ..
-        } = &state.on_deactivate[0]
-        else {
-            panic!("mouse macro expected");
-        };
-        assert_eq!(playback.speed_percent, 100);
-        assert_eq!(*movement, crate::action::Movement::Absolute);
+        let m = state.on_deactivate[0]
+            .input_macro()
+            .expect("mouse macro loads as an input macro");
+        assert_eq!(m.playback.speed_percent, 100);
+        assert_eq!(m.movement, crate::action::Movement::Absolute);
         assert_eq!(Setup::from_json(&s.to_json()).unwrap(), s);
     }
 
@@ -442,6 +489,89 @@ mod tests {
     }
 
     #[test]
+    fn schema_3_macros_load_as_input_macros_with_all_settings() {
+        let json = r#"{
+            "schemaVersion": 3,
+            "recorder": {"stopHotkey": "Alt+F11", "tolerance": 4.5, "sampleIntervalMs": 16},
+            "profiles": [{"id": "default", "name": "Default", "executables": [],
+              "virtualControls": [{"id":"vc-1","name":"Comms","kind":{"type":"radio","states":[
+                {"id":"st-1","name":"A","select":[],
+                 "onActivate":[{"type":"keyboardMacro","steps":[{"type":"keyDown","key":"LeftCtrl"},
+                    {"type":"keyTap","key":"F1","holdMs":30},{"type":"delay","ms":5},{"type":"keyUp","key":"LeftCtrl"}],
+                    "playback":{"speedPercent":150,"minDelayMs":4,"endpointOnly":false}}],
+                 "onDeactivate":[{"type":"mouseMacro","movement":"relative",
+                    "playback":{"speedPercent":50,"minDelayMs":10,"endpointOnly":true},
+                    "monitor":{"name":"DISPLAY2","x":-1920,"y":0,"width":1920,"height":1080},
+                    "steps":[{"type":"click","button":"x1","holdMs":null},{"type":"delay","ms":7},
+                      {"type":"movePath","points":[{"x":0.1,"y":0.2,"t":0},{"x":0.3,"y":0.4,"t":90}]},
+                      {"type":"moveRelativePath","points":[{"dx":5,"dy":-2,"t":8}]}]}]}],
+                "increment":[],"decrement":[],"clear":[],"toggleOff":[],
+                "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}]}],
+            "activeProfile": "default"
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert_eq!(s.schema_version, 4);
+        assert_eq!(s.recorder.stop_hotkey, "Alt+F11");
+        assert_eq!(s.recorder.tolerance, 4.5);
+        let state = &s.profile().virtual_controls[0].radio().unwrap().states[0];
+        let keys = state.on_activate[0].input_macro().unwrap();
+        assert_eq!(keys.steps.len(), 4);
+        assert_eq!(keys.playback.speed_percent, 150);
+        assert_eq!(keys.playback.min_delay_ms, 4);
+        let mouse = state.on_deactivate[0].input_macro().unwrap();
+        assert_eq!(mouse.movement, crate::action::Movement::Relative);
+        assert!(mouse.playback.endpoint_only);
+        assert_eq!(mouse.playback.speed_percent, 50);
+        assert_eq!(mouse.monitor.as_ref().unwrap().x, -1920);
+        assert_eq!(mouse.steps.len(), 4);
+        assert_eq!(mouse.steps[1], crate::macros::MacroStep::delay(7));
+        assert_eq!(mouse.repeat, crate::macros::Repeat::Once);
+        // Ids are assigned, unique within the profile.
+        assert_eq!((keys.id.as_str(), mouse.id.as_str()), ("mac-1", "mac-2"));
+        let out = s.to_json();
+        assert!(out.contains("\"type\": \"inputMacro\""));
+        assert!(!out.contains("keyboardMacro") && !out.contains("mouseMacro"));
+        assert_eq!(Setup::from_json(&out).unwrap(), s);
+    }
+
+    #[test]
+    fn duplicate_macro_ids_in_a_profile_are_renamed() {
+        let mut s = Setup::default();
+        let m = |id: &str| {
+            Action::InputMacro(crate::macros::InputMacro {
+                id: id.into(),
+                ..crate::macros::InputMacro::new(vec![])
+            })
+        };
+        let control = crate::virtual_control::VirtualControl {
+            show_toast: false,
+            id: "vc-1".into(),
+            name: "T".into(),
+            kind: crate::virtual_control::VirtualControlKind::Toggle(
+                crate::virtual_control::Toggle {
+                    on_on: vec![m("mac-1"), m("mac-1")],
+                    on_off: vec![m("")],
+                    ..Default::default()
+                },
+            ),
+        };
+        s.profiles[0].virtual_controls.push(control.clone());
+        let mut copy = crate::profile::Profile::new("p2", "Copy");
+        copy.virtual_controls.push(control);
+        s.profiles.push(copy);
+        s.assign_macro_ids();
+        for p in &s.profiles {
+            let ids: Vec<&str> = p.virtual_controls[0]
+                .actions()
+                .into_iter()
+                .filter_map(|a| a.input_macro().map(|m| m.id.as_str()))
+                .collect();
+            // The first keeps its id; both profiles get the same ids.
+            assert_eq!(ids, ["mac-1", "mac-2", "mac-3"]);
+        }
+    }
+
+    #[test]
     fn round_trip() {
         let mut s = Setup::default();
         s.dismissed_suggestions.push(ButtonPair {
@@ -470,7 +600,7 @@ mod tests {
             "activeProfile": "profile-1"
         }"#;
         let s = Setup::from_json(json).unwrap();
-        assert_eq!(s.schema_version, 3);
+        assert_eq!(s.schema_version, SETUP_SCHEMA_VERSION);
         let control = &s.profile().virtual_controls[0];
         for t in control.triggers() {
             assert_eq!(t.press, crate::trigger::PressKind::Press);
@@ -479,6 +609,6 @@ mod tests {
         assert_eq!(control.triggers().count(), 3);
         // Written back as schema 3, read again unchanged.
         assert_eq!(Setup::from_json(&s.to_json()).unwrap(), s);
-        assert!(Setup::from_json(r#"{"schemaVersion": 4}"#).is_err());
+        assert!(Setup::from_json(r#"{"schemaVersion": 5}"#).is_err());
     }
 }

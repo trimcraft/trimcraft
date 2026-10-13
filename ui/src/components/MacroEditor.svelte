@@ -1,20 +1,23 @@
 <script lang="ts">
-  // Editor for one keyboard or mouse macro: playback options, recording (append or replace),
-  // test play, and the step list (select, drag to reorder, insert, delete, edit in place).
-  // Mouse macros also get a preview of their movement with draggable waypoints.
+  // Editor for one input macro: keyboard and mouse steps in any order. Playback options,
+  // repetition, recording (keys, mouse or both; append or replace), test play, and the step
+  // list (select, drag to reorder, insert, delete, edit in place). Macros with mouse movement
+  // also get a preview of it with draggable waypoints.
   import { onMount, untrack } from "svelte";
   import type {
     EngineSnapshot,
+    InputMacro,
     KeyInfo,
     KeyStep,
-    KeyboardMacro,
+    MacroStep,
     MonitorInfo,
     MonitorRef,
     MouseButton,
-    MouseMacro,
     MouseStep,
     RecordingResult,
+    Repeat,
   } from "../lib/types";
+  import { isKeyStep, isMouseStep } from "../lib/format";
   import { backend, errorText } from "../lib/backend";
   import { COUNTDOWN_MS, countdown, newEditorId, recordingOwner, reproject, type RecordMode } from "../lib/recording.svelte";
   import PathPreview from "./PathPreview.svelte";
@@ -23,7 +26,7 @@
     action = $bindable(),
     keys,
     snapshot,
-  }: { action: KeyboardMacro | MouseMacro; keys: KeyInfo[]; snapshot: EngineSnapshot } = $props();
+  }: { action: InputMacro; keys: KeyInfo[]; snapshot: EngineSnapshot } = $props();
 
   const id = newEditorId();
 
@@ -36,19 +39,26 @@
   let testing = $state(false);
   const testCountdown = countdown(() => testing);
 
-  let isMouse = $derived(action.type === "mouseMacro");
+  /** What the next recording takes. */
+  let recordKeys = $state(true);
+  let recordMouse = $state(true);
+  let hasMouse = $derived(action.steps.some(isMouseStep));
+  /** Mouse options matter when the macro has mouse steps or will record some. */
+  let mouseOptions = $derived(hasMouse || recordMouse);
+  let recordingWhat = $derived.by(() => {
+    const kind = snapshot.recorder.kind;
+    return kind ? [kind.keys && "keys", kind.mouse && "mouse"].filter(Boolean).join(" and ") : "";
+  });
   let recorder = $derived(snapshot.recorder);
   let mine = $derived(recordingOwner.id === id);
   let busy = $derived(recorder.phase !== "idle");
   const recCountdown = countdown(() => mine && recorder.phase === "countdown");
 
   onMount(() => {
-    if (action.type === "mouseMacro") {
-      backend()
-        .then((b) => b.listMonitors())
-        .then((m) => (monitors = m))
-        .catch(() => {});
-    }
+    backend()
+      .then((b) => b.listMonitors())
+      .then((m) => (monitors = m))
+      .catch(() => {});
   });
 
   // --- Recording ---------------------------------------------------------------------------
@@ -88,13 +98,10 @@
   }
 
   const sameMonitor = (a: MonitorRef, b: MonitorRef) => a.name === b.name && a.x === b.x && a.y === b.y;
-  const hasAbsolute = (steps: MouseStep[]) => steps.some((s) => s.type === "moveTo" || s.type === "movePath");
+  const hasAbsolute = (steps: MacroStep[]) => steps.some((s) => s.type === "moveTo" || s.type === "movePath");
 
-  /** The monitor a mouse macro plays on, with its size (the saved one, or the primary one). */
-  let macroMonitor = $derived.by((): MonitorRef | null => {
-    if (action.type !== "mouseMacro") return null;
-    return action.monitor ?? monitors.find((m) => m.primary) ?? null;
-  });
+  /** The monitor the macro's absolute moves refer to, with its size (saved, or the primary one). */
+  let macroMonitor = $derived.by((): MonitorRef | null => action.monitor ?? monitors.find((m) => m.primary) ?? null);
 
   function take(result: RecordingResult) {
     const rec = result.action;
@@ -102,20 +109,16 @@
     notes = result.notes;
     selected = [];
     focus = null;
-    if (action.type === "keyboardMacro" && rec.type === "keyboardMacro") {
-      action.steps = replace ? rec.steps : [...action.steps, ...rec.steps];
-    } else if (action.type === "mouseMacro" && rec.type === "mouseMacro") {
-      let steps = rec.steps;
-      if (hasAbsolute(steps) && rec.monitor) {
-        if (replace || !hasAbsolute(action.steps)) {
-          action.monitor = rec.monitor;
-        } else if (macroMonitor && !sameMonitor(macroMonitor, rec.monitor)) {
-          // Appending a recording made on another monitor: keep one reference monitor.
-          steps = reproject(steps, rec.monitor, macroMonitor);
-        }
+    let steps = rec.steps;
+    if (hasAbsolute(steps) && rec.monitor) {
+      if (replace || !hasAbsolute(action.steps)) {
+        action.monitor = rec.monitor;
+      } else if (macroMonitor && !sameMonitor(macroMonitor, rec.monitor)) {
+        // Appending a recording made on another monitor: keep one reference monitor.
+        steps = reproject(steps, rec.monitor, macroMonitor);
       }
-      action.steps = replace ? steps : [...action.steps, ...steps];
     }
+    action.steps = replace ? steps : [...action.steps, ...steps];
     if (result.notes.length === 0 && rec.steps.length === 0) notes = ["Nothing was recorded."];
   }
 
@@ -126,7 +129,7 @@
     recordingOwner.mode = mode;
     sawActive = false;
     try {
-      await (await backend()).startRecording(action.type === "keyboardMacro" ? "keyboard" : "mouse", action.type === "mouseMacro" ? action.movement : "absolute");
+      await (await backend()).startRecording({ keys: recordKeys, mouse: recordMouse }, action.movement);
     } catch (e) {
       recordingOwner.id = null;
       error = errorText(e);
@@ -151,19 +154,17 @@
 
   const mouseButtons: MouseButton[] = ["left", "right", "middle", "x1", "x2"];
   const keyStepTypes: [KeyStep["type"], string][] = [
-    ["keyTap", "Tap"],
-    ["keyDown", "Press"],
-    ["keyUp", "Release"],
-    ["delay", "Wait"],
+    ["keyTap", "Tap key"],
+    ["keyDown", "Press key"],
+    ["keyUp", "Release key"],
   ];
   const mouseStepTypes: [MouseStep["type"], string][] = [
     ["click", "Click"],
-    ["buttonDown", "Press"],
-    ["buttonUp", "Release"],
+    ["buttonDown", "Press button"],
+    ["buttonUp", "Release button"],
     ["wheel", "Wheel"],
     ["moveRelative", "Move by"],
     ["moveTo", "Move to"],
-    ["delay", "Wait"],
   ];
   const pathTypes: [MouseStep["type"], string][] = [
     ["movePath", "Path"],
@@ -176,23 +177,17 @@
     return keys.length === 0 || keys.some((k) => k.name.toLowerCase() === n);
   }
 
-  /** Changes a step's type, keeping the key or button where it makes sense. */
-  function keyStepAs(step: KeyStep, type: KeyStep["type"]): KeyStep {
+  /** Changes a step's type (also between keyboard and mouse), keeping the key or button where
+   * it makes sense. */
+  function stepAs(step: MacroStep, type: MacroStep["type"]): MacroStep {
     const key = "key" in step ? step.key : "F1";
+    const button = "button" in step ? step.button : "left";
     switch (type) {
       case "keyTap":
         return { type, key, holdMs: null };
       case "keyDown":
       case "keyUp":
         return { type, key };
-      case "delay":
-        return { type, ms: 100 };
-    }
-  }
-
-  function mouseStepAs(step: MouseStep, type: MouseStep["type"]): MouseStep {
-    const button = "button" in step ? step.button : "left";
-    switch (type) {
       case "click":
         return { type, button, holdMs: null };
       case "buttonDown":
@@ -213,12 +208,22 @@
     }
   }
 
-  const newStep = (): KeyStep | MouseStep => (action.type === "keyboardMacro" ? { type: "keyTap", key: "", holdMs: null } : { type: "click", button: "left", holdMs: null });
+  /** A new step: like the one above it (key or mouse), a key tap in an empty macro. */
+  function newStep(above: MacroStep | undefined): MacroStep {
+    return above && isMouseStep(above) ? { type: "click", button: "left", holdMs: null } : { type: "keyTap", key: "", holdMs: null };
+  }
 
   function insertAfter(i: number) {
-    (action.steps as (KeyStep | MouseStep)[]).splice(i + 1, 0, newStep());
+    action.steps.splice(i + 1, 0, newStep(action.steps[i]));
     selected = [];
   }
+
+  // --- Repetition ----------------------------------------------------------------------------
+
+  function setRepeat(type: Repeat["type"]) {
+    action.repeat = type === "times" ? { type, count: action.repeat.type === "times" ? action.repeat.count : 3 } : { type };
+  }
+  let background = $derived(action.repeat.type === "whileActive" || (action.repeat.type === "times" && action.repeat.count > 1));
 
   function removeAt(i: number) {
     action.steps.splice(i, 1);
@@ -232,15 +237,14 @@
 
   function deleteSelected() {
     const drop = new Set(selected);
-    if (action.type === "keyboardMacro") action.steps = action.steps.filter((_, i) => !drop.has(i));
-    else action.steps = action.steps.filter((_, i) => !drop.has(i));
+    action.steps = action.steps.filter((_, i) => !drop.has(i));
     selected = [];
     focus = null;
   }
 
   function moveStep(from: number, to: number) {
     if (from === to) return;
-    const steps = action.steps as (KeyStep | MouseStep)[];
+    const steps = action.steps;
     const [s] = steps.splice(from, 1);
     if (s) steps.splice(to, 0, s);
     selected = [];
@@ -293,7 +297,6 @@
 
   const monitorKey = (m: MonitorRef | null) => (m ? `${m.name}@${m.x},${m.y}` : "");
   function setMonitor(key: string) {
-    if (action.type !== "mouseMacro") return;
     const m = monitors.find((x) => monitorKey(x) === key);
     action.monitor = m ? { name: m.name, x: m.x, y: m.y, width: m.width, height: m.height } : null;
   }
@@ -311,7 +314,7 @@
     <label title="Recorded waits shorter than this are skipped when playing">Skip waits under
       <input type="number" min="0" max="60000" value={action.playback.minDelayMs} onchange={(e) => (action.playback.minDelayMs = Math.max(0, int(e.currentTarget.value)))} /> ms
     </label>
-    {#if action.type === "mouseMacro"}
+    {#if mouseOptions}
       <label title="How the recorder captures movement: cursor positions, or raw deltas for mouse-look">Movement
         <select bind:value={action.movement}>
           <option value="absolute">absolute (cursor position)</option>
@@ -333,16 +336,57 @@
     {/if}
   </div>
 
+  <div class="row repeat">
+    <label title="How often the macro runs when its trigger fires">Repeat
+      <select value={action.repeat.type} onchange={(e) => setRepeat(e.currentTarget.value as Repeat["type"])}>
+        <option value="once">once</option>
+        <option value="times">n times</option>
+        <option value="whileActive">while active</option>
+      </select>
+    </label>
+    {#if action.repeat.type === "times"}
+      <input type="number" min="1" max="10000" value={action.repeat.count} onchange={(e) => action.repeat.type === "times" && (action.repeat.count = Math.max(1, int(e.currentTarget.value)))} /> times
+    {/if}
+    {#if action.repeat.type === "whileActive"}
+      <label title="What happens when the control state that started the macro ends">When the state ends
+        <select bind:value={action.onEnd}>
+          <option value="stopImmediately">stop immediately</option>
+          <option value="finishRun">finish the current run</option>
+        </select>
+      </label>
+    {/if}
+    {#if action.repeat.type !== "once"}
+      <label title="Pause between two runs">Pause <input type="number" min="0" max="600000" value={action.pauseMs} onchange={(e) => (action.pauseMs = Math.max(0, int(e.currentTarget.value)))} /> ms</label>
+    {/if}
+    <label title="What the trigger does while this macro still runs">If triggered while running
+      <select bind:value={action.retrigger}>
+        <option value="ignore">ignore</option>
+        <option value="restart">restart</option>
+      </select>
+    </label>
+  </div>
+  {#if background}
+    <p class="muted small note">
+      Runs in the background: the next actions do not wait for it.
+      {action.repeat.type === "whileActive"
+        ? "It repeats as long as the state that started it stays active (a momentary held, a toggle on, a radio or mode state active)."
+        : ""}
+      Stopping it (state ended, Stop macros, panic hotkey {snapshot.settings.panicHotkey}) releases the keys and buttons it holds.
+    </p>
+  {/if}
+
   <div class="row record">
     {#if mine && recorder.phase === "countdown"}
       <span class="rec">● Recording starts in {recCountdown.left}… switch to the game</span>
       <button onclick={cancel}>Cancel</button>
     {:else if mine && recorder.phase === "recording"}
-      <span class="rec live">● Recording {isMouse ? "mouse" : "keys"} — stop with {snapshot.recorderConfig.stopHotkey} or Stop, Esc cancels</span>
+      <span class="rec live">● Recording {recordingWhat} — stop with {snapshot.recorderConfig.stopHotkey} or Stop, Esc cancels</span>
       <button class="primary" onclick={stop}>Stop</button>
       <button onclick={cancel}>Cancel</button>
     {:else}
-      <button class="recbtn" disabled={busy} onclick={record} title="Records after a {COUNTDOWN_MS / 1000} s countdown">● Record</button>
+      <button class="recbtn" disabled={busy || (!recordKeys && !recordMouse)} onclick={record} title="Records after a {COUNTDOWN_MS / 1000} s countdown">● Record</button>
+      <label class="check" title="Record keys"><input type="checkbox" bind:checked={recordKeys} disabled={busy} /> keys</label>
+      <label class="check" title="Record mouse buttons, wheel and movement"><input type="checkbox" bind:checked={recordMouse} disabled={busy} /> mouse</label>
       <select bind:value={mode} disabled={busy} title="What the recording does with the existing steps">
         <option value="append">append to steps</option>
         <option value="replace">replace steps</option>
@@ -379,14 +423,18 @@
         <input type="checkbox" checked={selected.includes(si)} onchange={() => toggle(si)} title="Select" />
         <span class="handle" title="Drag to reorder" role="presentation" onpointerdown={(e) => dragStart(e, si)} onpointermove={dragMove} onpointerup={dragEnd} onpointercancel={() => (drag = null)}>⋮⋮</span>
         <span class="n muted">{si + 1}</span>
-        {#if action.type === "keyboardMacro"}
+        <span class="kind muted" title={isKeyStep(step) ? "keyboard" : isMouseStep(step) ? "mouse" : "wait"}>{isKeyStep(step) ? "⌨" : isMouseStep(step) ? "🖱" : "⏱"}</span>
+        <select value={step.type} onchange={(e) => (action.steps[si] = stepAs(step, e.currentTarget.value as MacroStep["type"]))}>
+          <optgroup label="Keyboard">{#each keyStepTypes as [value, text] (value)}<option {value}>{text}</option>{/each}</optgroup>
+          <optgroup label="Mouse">
+            {#each mouseStepTypes as [value, text] (value)}<option {value}>{text}</option>{/each}
+            {#each pathTypes.filter(([v]) => v === step.type) as [value, text] (value)}<option {value}>{text}</option>{/each}
+          </optgroup>
+          <option value="delay">Wait</option>
+        </select>
+        {#if isKeyStep(step)}
           {@const ks = step as KeyStep}
-          <select value={ks.type} onchange={(e) => (action.steps[si] = keyStepAs(ks, e.currentTarget.value as KeyStep["type"]))}>
-            {#each keyStepTypes as [value, text] (value)}<option {value}>{text}</option>{/each}
-          </select>
-          {#if ks.type === "delay"}
-            <input type="number" min="0" max="60000" value={ks.ms} onchange={(e) => (ks.ms = Math.max(0, int(e.currentTarget.value)))} /> ms
-          {:else}
+          {#if ks.type !== "delay"}
             <input class="key mono" class:bad={!knownKey(ks.key)} list="detent-keys" bind:value={ks.key} placeholder="key" />
             {#if ks.type === "keyTap"}
               <label class="muted">hold <input type="number" min="0" max="60000" placeholder="50" value={holdValue(ks.holdMs)} onchange={(e) => (ks.holdMs = parseHold(e.currentTarget.value))} /> ms</label>
@@ -394,10 +442,6 @@
           {/if}
         {:else}
           {@const ms = step as MouseStep}
-          <select value={ms.type} onchange={(e) => (action.steps[si] = mouseStepAs(ms, e.currentTarget.value as MouseStep["type"]))}>
-            {#each mouseStepTypes as [value, text] (value)}<option {value}>{text}</option>{/each}
-            {#each pathTypes.filter(([v]) => v === ms.type) as [value, text] (value)}<option {value}>{text}</option>{/each}
-          </select>
           {#if ms.type === "delay"}
             <input type="number" min="0" max="60000" value={ms.ms} onchange={(e) => (ms.ms = Math.max(0, int(e.currentTarget.value)))} /> ms
           {:else if ms.type === "wheel"}
@@ -430,8 +474,8 @@
     <button class="small add" onclick={() => insertAfter(action.steps.length - 1)}>Add step</button>
   </div>
 
-  {#if action.type === "mouseMacro" && action.steps.some((s) => ["moveTo", "movePath", "moveRelativePath", "moveRelative"].includes(s.type))}
-    <PathPreview bind:steps={action.steps} monitor={macroMonitor} {focus} />
+  {#if action.steps.some((s) => ["moveTo", "movePath", "moveRelativePath", "moveRelative"].includes(s.type))}
+    <PathPreview bind:steps={() => action.steps as MouseStep[], (v) => (action.steps = v)} monitor={macroMonitor} {focus} />
   {/if}
 </div>
 
@@ -454,6 +498,8 @@
   .handle { cursor: grab; color: var(--muted); user-select: none; padding: 0 2px; touch-action: none; }
   .n { width: 2.2em; text-align: right; }
   .key { width: 10em; }
+  .kind { width: 1.4em; text-align: center; }
+  .repeat label { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
   .bad { border-color: var(--bad); }
   .spacer { flex: 1; }
   .small { font-size: 12px; }

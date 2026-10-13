@@ -1,4 +1,5 @@
-//! Connections: external programs and drivers Detent talks to (Soundpad, Discord, vJoy).
+//! Connections: external programs and drivers Detent talks to (Soundpad, Discord, Voicemeeter,
+//! vJoy).
 //!
 //! Each connector has persisted settings (in `setup.json`, under `connections`) and a live
 //! status the app reports. A connector's actions are only offered once it is enabled; actions
@@ -20,13 +21,15 @@ use thiserror::Error;
 pub enum ConnectorId {
     Soundpad,
     Discord,
+    Voicemeeter,
     Vjoy,
 }
 
 impl ConnectorId {
-    pub const ALL: [ConnectorId; 3] = [
+    pub const ALL: [ConnectorId; 4] = [
         ConnectorId::Soundpad,
         ConnectorId::Discord,
+        ConnectorId::Voicemeeter,
         ConnectorId::Vjoy,
     ];
 
@@ -34,19 +37,27 @@ impl ConnectorId {
         match self {
             ConnectorId::Soundpad => "Soundpad",
             ConnectorId::Discord => "Discord",
+            ConnectorId::Voicemeeter => "Voicemeeter",
             ConnectorId::Vjoy => "vJoy",
         }
     }
 
-    /// The connector an action needs, if any. Keyboard and mouse macros are built in.
+    /// The connector an action needs, if any. Everything else is built in.
     pub fn for_action(action: &Action) -> Option<ConnectorId> {
         match action {
             Action::Soundpad { .. } => Some(ConnectorId::Soundpad),
             Action::Discord { .. } => Some(ConnectorId::Discord),
+            Action::Voicemeeter { .. } => Some(ConnectorId::Voicemeeter),
             Action::Vjoy { .. } => Some(ConnectorId::Vjoy),
-            Action::KeyboardMacro { .. }
-            | Action::MouseMacro { .. }
-            | Action::SwitchProfile { .. } => None,
+            Action::InputMacro(_)
+            | Action::StopMacros { .. }
+            | Action::SwitchProfile { .. }
+            | Action::Speak(_)
+            | Action::PlaySound(_)
+            | Action::Volume { .. }
+            | Action::MediaKey { .. }
+            | Action::Launch(_)
+            | Action::Http(_) => None,
         }
     }
 }
@@ -103,6 +114,14 @@ impl DiscordSettings {
     }
 }
 
+/// Voicemeeter: the VoicemeeterRemote API of a local installation. Nothing to configure but
+/// whether it is used.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VoicemeeterSettings {
+    pub enabled: bool,
+}
+
 /// Settings of all connectors, as stored in the setup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -110,6 +129,8 @@ pub struct Connections {
     pub soundpad: SoundpadSettings,
     /// Missing in files from before the Discord connector.
     pub discord: DiscordSettings,
+    /// Missing in files from before the Voicemeeter connector.
+    pub voicemeeter: VoicemeeterSettings,
     /// Missing in files from before vJoy output.
     pub vjoy: VjoySettings,
 }
@@ -141,6 +162,7 @@ impl Connections {
         match id {
             ConnectorId::Soundpad => self.soundpad.enabled,
             ConnectorId::Discord => self.discord.enabled,
+            ConnectorId::Voicemeeter => self.voicemeeter.enabled,
             ConnectorId::Vjoy => self.vjoy.enabled,
         }
     }
@@ -205,6 +227,8 @@ pub struct ConnectorState {
     pub credentials: Option<CredentialState>,
     /// The setup guide step that fixes the last problem.
     pub guide: Option<GuideStep>,
+    /// The program the connector needs is not installed (Voicemeeter), with what to do.
+    pub missing: Option<String>,
     /// Driver version and devices (vJoy).
     pub vjoy: Option<VjoyInfo>,
 }
@@ -223,6 +247,9 @@ pub struct ConnectorView {
     pub credentials: Option<CredentialState>,
     /// The setup guide step that fixes the last problem (Discord), also while disabled.
     pub guide: Option<GuideStep>,
+    /// The program the connector needs is not installed; its actions are not offered. Also
+    /// while disabled.
+    pub missing: Option<String>,
     /// Driver version and devices (vJoy), also while disabled, so they can be checked first.
     pub vjoy: Option<VjoyInfo>,
 }
@@ -233,6 +260,7 @@ impl ConnectorView {
     pub fn new(id: ConnectorId, enabled: bool, state: Option<&ConnectorState>) -> Self {
         let credentials = state.and_then(|s| s.credentials);
         let guide = state.and_then(|s| s.guide);
+        let missing = state.and_then(|s| s.missing.clone());
         let vjoy = state.and_then(|s| s.vjoy.clone());
         let (status, detail, warning, voice) = match (enabled, state) {
             (false, _) => (ConnectorStatus::NotConfigured, None, None, None),
@@ -254,6 +282,7 @@ impl ConnectorView {
             voice,
             credentials,
             guide,
+            missing,
             vjoy,
         }
     }
@@ -297,7 +326,7 @@ mod tests {
         assert_eq!(c.soundpad.timeout_ms, 500);
         assert_eq!(
             serde_json::to_string(&c).unwrap(),
-            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000},"discord":{"enabled":false,"clientId":"","clientSecret":null},"vjoy":{"enabled":false}}"#
+            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000},"discord":{"enabled":false,"clientId":"","clientSecret":null},"voicemeeter":{"enabled":false},"vjoy":{"enabled":false}}"#
         );
         let c: Connections = serde_json::from_str(
             r#"{"discord":{"enabled":true,"clientId":"1234567890123456789",
@@ -346,6 +375,35 @@ mod tests {
         assert!(!c.action_enabled(&mute));
         c.discord.enabled = true;
         assert!(c.action_enabled(&mute));
+    }
+
+    #[test]
+    fn voicemeeter_actions_are_gated_and_new_built_ins_are_not() {
+        use crate::audio::{MediaKey, Speech};
+        use crate::voicemeeter::{VmCommand, VmKind, VmTarget};
+        let mut c = Connections::default();
+        let mute = Action::Voicemeeter {
+            target: VmTarget {
+                kind: VmKind::Strip,
+                index: 0,
+            },
+            command: VmCommand::ToggleMute,
+        };
+        assert_eq!(
+            ConnectorId::for_action(&mute),
+            Some(ConnectorId::Voicemeeter)
+        );
+        assert!(!c.action_enabled(&mute));
+        c.voicemeeter.enabled = true;
+        assert!(c.action_enabled(&mute));
+        let speak = Action::Speak(Speech::default());
+        let media = Action::MediaKey {
+            key: MediaKey::PlayPause,
+        };
+        assert!(ConnectorId::for_action(&speak).is_none());
+        assert!(Connections::default().action_enabled(&media));
+        let old: Connections = serde_json::from_str(r#"{"soundpad":{"enabled":true}}"#).unwrap();
+        assert!(!old.voicemeeter.enabled);
     }
 
     #[test]

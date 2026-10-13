@@ -1,19 +1,30 @@
 //! Detent desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod autostart;
+mod backups;
 mod commands;
 mod discord;
 mod elevation;
 mod executor;
 mod foreground;
+mod input;
+mod launch;
 mod overlay;
+mod player;
 mod profile_watch;
 mod recorder;
 mod secrets;
+mod sound;
 mod soundpad;
+mod speech;
 mod storage;
+mod toasts;
+mod transfer;
 mod tray;
 mod vjoy;
+mod voicemeeter;
+mod volume;
+mod webhook;
 
 use detent_core::diagnostics::action_record;
 use detent_core::settings::{self, AUTOSTART_ARG};
@@ -63,7 +74,12 @@ pub struct Shared {
     soundpad: Arc<Soundpad>,
     discord: Arc<Discord>,
     vjoy: vjoy::Vjoy,
+    voicemeeter: Arc<voicemeeter::Voicemeeter>,
+    speech: Arc<speech::Speech>,
+    sound: Arc<sound::Sound>,
     recorder: recorder::Recorder,
+    /// Plays input macros; stops them on signals from the engine and on panic.
+    player: player::Player,
     meta: Meta,
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
@@ -71,6 +87,10 @@ pub struct Shared {
     vjoy_sent: Mutex<detent_core::vjoy::VjoyState>,
     /// The input backend's clock (event timestamps), for timed outputs started by commands.
     clock: fn() -> u64,
+    backups: Arc<backups::Backups>,
+    toasts: Arc<toasts::Toasts>,
+    /// An import file the user picked and has not applied yet.
+    pending_import: Mutex<Option<detent_core::transfer::ImportFile>>,
 }
 
 impl Shared {
@@ -91,6 +111,10 @@ impl Shared {
     /// connection is disabled stay stored but are skipped with a warning.
     fn dispatch(&self, engine: &mut Engine) {
         self.log_profile(engine);
+        let signals = engine.take_macro_signals();
+        if !signals.is_empty() {
+            self.player.signal(signals);
+        }
         let actions: Vec<_> = engine
             .take_actions()
             .into_iter()
@@ -117,6 +141,14 @@ impl Shared {
             .collect();
         if !actions.is_empty() {
             self.executor.submit(actions);
+        }
+        let requests = engine.take_toasts();
+        if !requests.is_empty() {
+            let overlay = &engine.setup().overlay;
+            // With the overlay hidden and "while hidden" off, a toast would have nowhere to show.
+            if overlay.visible || overlay.toasts.while_hidden || engine.overlay_editing() {
+                self.toasts.push(requests, overlay.toasts.duration_ms);
+            }
         }
         self.send_vjoy(engine);
     }
@@ -160,8 +192,10 @@ impl Shared {
             self.storage.save_json(DEVICES_FILE, engine.registry());
         }
         if dirty.setup {
-            self.storage
-                .save_text(SETUP_FILE, &engine.setup().to_json());
+            let text = engine.setup().to_json();
+            if self.storage.save_text(SETUP_FILE, &text) {
+                self.backups.note_saved(&text);
+            }
         }
         if dirty.values {
             self.storage.save_json(VALUES_FILE, &engine.values());
@@ -211,12 +245,37 @@ pub fn run() {
         )
         // Used from Rust only (open_discord_portal); the windows get no opener permission.
         .plugin(tauri_plugin_opener::init())
+        // Used from Rust only (export and import dialogs); the windows get no dialog permission.
+        .plugin(tauri_plugin_dialog::init())
         // Used from Rust only (tray notice); the windows get no notification permission.
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        return;
+                    }
+                    let shared = app.state::<Arc<Shared>>();
+                    let panic = shared.engine().setup().settings.panic_hotkey.clone();
+                    if panic
+                        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+                        .ok()
+                        .as_ref()
+                        == Some(shortcut)
+                    {
+                        log::warn!("panic hotkey: stopping all macros, releasing vJoy");
+                        let shared = Arc::clone(&shared);
+                        // Stopping waits for the macro threads; not on the event loop.
+                        let _ = std::thread::Builder::new()
+                            .name("detent-panic".into())
+                            .spawn(move || {
+                                shared.player.panic();
+                                // Then vJoy: buttons released, POVs centred (axes stay).
+                                let mut engine = shared.engine();
+                                engine.vjoy_release_all();
+                                shared.commit(&mut engine);
+                            });
+                    } else {
                         overlay::toggle(app);
                     }
                 })
@@ -253,6 +312,10 @@ pub fn run() {
             sync_autostart(&shared);
             tray::create(&handle, shared.engine().setup().overlay.visible)?;
             overlay::create(&handle, &shared)?;
+            let panic = shared.engine().setup().settings.panic_hotkey.clone();
+            if let Err(e) = overlay::register_hotkey(&handle, &panic) {
+                log::error!("panic hotkey {panic:?} could not be registered: {e}");
+            }
             start_diagnostics(handle.clone(), shared.diagnostics.clone());
             watch_foreground(&shared);
             if let Some(main) = handle.get_webview_window("main") {
@@ -276,10 +339,12 @@ pub fn run() {
         .build(context)
         .expect("error while building Detent")
         .run(|app, event| {
-            // Never leave a vJoy button pressed: give the devices back on the way out.
             if let tauri::RunEvent::Exit = event
                 && let Some(shared) = app.try_state::<Arc<Shared>>()
             {
+                // Nothing stays pressed after Detent is gone: macros stop and release their
+                // keys first, then vJoy releases its buttons and gives the devices back.
+                shared.player.shutdown();
                 shared.vjoy.shutdown();
             }
         });
@@ -395,25 +460,42 @@ fn load(
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
     let vjoy_enabled = engine.connections().vjoy.enabled;
     let diagnostics_for_vjoy = diagnostics.clone();
+    let backups = backups::Backups::spawn(&storage.dir, diagnostics.clone());
+    let voicemeeter = Arc::new(voicemeeter::Voicemeeter::spawn(
+        engine.connections().voicemeeter.clone(),
+    ));
+    let speech = Arc::new(speech::Speech::spawn());
+    let sound = Arc::new(sound::Sound::spawn());
+    let player = player::Player::new(app.clone(), diagnostics.clone());
+    let services = executor::Services {
+        soundpad: soundpad.clone(),
+        discord: discord.clone(),
+        voicemeeter: voicemeeter.clone(),
+        speech: speech.clone(),
+        sound: sound.clone(),
+        player: player.clone(),
+    };
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(
-            app.clone(),
-            soundpad.clone(),
-            discord.clone(),
-            diagnostics.clone(),
-        ),
+        executor: Executor::spawn(app.clone(), services, diagnostics.clone()),
         diagnostics,
         soundpad,
         discord,
         vjoy: vjoy::Vjoy::spawn(vjoy_enabled, diagnostics_for_vjoy),
+        voicemeeter,
+        speech,
+        sound,
         recorder: recorder::Recorder::default(),
+        player,
         meta,
         logged_profile: Mutex::new(String::new()),
         vjoy_sent: Mutex::new(detent_core::vjoy::VjoyState::default()),
         clock,
+        backups,
+        toasts: toasts::Toasts::spawn(app.clone()),
+        pending_import: Mutex::new(None),
     })
 }
 
@@ -516,6 +598,9 @@ fn report_connectors(shared: &Arc<Shared>) {
     shared.vjoy.on_status(reporter(ConnectorId::Vjoy));
     // Restored states (and the active profile) are on vJoy from the start.
     shared.send_vjoy(&shared.engine());
+    shared
+        .voicemeeter
+        .on_status(reporter(ConnectorId::Voicemeeter));
 }
 
 /// Warnings and errors from the `log` crate, as event log entries.

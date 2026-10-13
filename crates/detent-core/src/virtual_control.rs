@@ -14,6 +14,8 @@
 
 use crate::action::{Action, ActionError};
 use crate::function::{CounterSpec, EndBehavior, SpecError};
+use crate::macro_run::Scope;
+use crate::placeholder::Placeholders;
 use crate::vjoy::{ButtonOutput, VjoyAxisRef, VjoyError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -151,6 +153,9 @@ pub struct VirtualControl {
     /// Shown in the overlay, e.g. "Comms".
     pub name: String,
     pub kind: VirtualControlKind,
+    /// Show an overlay toast when its state or value changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_toast: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,7 +221,7 @@ pub enum Phase {
     Activate,
 }
 
-/// An action to run, with where it came from (for the log).
+/// An action to run, with where it came from (for the log and the placeholders).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionRequest {
     pub control: String,
@@ -225,6 +230,12 @@ pub struct ActionRequest {
     pub action: Action,
     /// The value an action may insert as `{value}` (counters: the new value, formatted).
     pub value: Option<String>,
+    /// Name of the profile the emitting control belongs to, for `{profile}`; the engine
+    /// fills it in.
+    pub profile: String,
+    /// The control state the action was emitted in, for "while active" macros; the engine
+    /// fills it in.
+    pub scope: Option<Scope>,
 }
 
 impl ActionRequest {
@@ -235,12 +246,24 @@ impl ActionRequest {
             phase,
             action: action.clone(),
             value: None,
+            profile: String::new(),
+            scope: None,
         }
     }
 
-    /// `text` with `{value}` replaced by the request's value (empty without one).
+    /// The values of `{control}`, `{state}`, `{profile}` and `{value}`.
+    pub fn placeholders(&self) -> Placeholders {
+        Placeholders {
+            control: self.control.clone(),
+            state: self.state.clone(),
+            profile: self.profile.clone(),
+            value: self.value.clone(),
+        }
+    }
+
+    /// `text` with all placeholders filled in (`{value}` empty without a value).
     pub fn fill_placeholders(&self, text: &str) -> String {
-        text.replace("{value}", self.value.as_deref().unwrap_or(""))
+        self.placeholders().fill(text)
     }
 }
 
@@ -838,7 +861,8 @@ impl VirtualControl {
         out
     }
 
-    fn actions_mut(&mut self) -> Vec<&mut Action> {
+    /// Every action list, to change.
+    pub fn actions_mut(&mut self) -> Vec<&mut Action> {
         let lists: Vec<&mut Vec<Action>> = match &mut self.kind {
             VirtualControlKind::Radio(r) => r
                 .states
@@ -1045,6 +1069,7 @@ mod tests {
 
     fn control(kind: VirtualControlKind) -> VirtualControl {
         VirtualControl {
+            show_toast: false,
             id: "vc-1".into(),
             name: "C".into(),
             kind,
@@ -1176,6 +1201,7 @@ mod tests {
     #[test]
     fn json_shape_is_stable() {
         let vc = VirtualControl {
+            show_toast: false,
             id: "vc-1".into(),
             name: "Comms".into(),
             kind: VirtualControlKind::Radio(Radio {

@@ -5,6 +5,8 @@
 //! [`BackendEvent`]s; the [`Engine`] turns them into the state the UI and the overlay show.
 
 pub mod action;
+pub mod audio;
+pub mod backup;
 pub mod connection;
 pub mod device;
 pub mod diagnostics;
@@ -13,8 +15,12 @@ pub mod encoder;
 pub mod engine;
 pub mod event;
 pub mod function;
+pub mod launch;
+pub mod macro_run;
+pub mod macros;
 pub mod overlay;
 pub mod path;
+pub mod placeholder;
 pub mod profile;
 pub mod recording;
 pub mod registry;
@@ -22,9 +28,13 @@ pub mod settings;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
+pub mod toast;
+pub mod transfer;
 pub mod trigger;
 pub mod virtual_control;
 pub mod vjoy;
+pub mod voicemeeter;
+pub mod webhook;
 
 pub use action::{
     Action, InputOp, KeyInfo, KeyStep, MouseButton, MouseStep, Movement, PathPoint, Playback,
@@ -35,12 +45,12 @@ pub use device::{DeviceId, DeviceKind, Fingerprint, IdentityConfidence, VirtualD
 pub use diagnostics::{ActionEvent, Category, Diagnostics, Entry, Level, Record};
 pub use discord::{DiscordCommand, VoiceState};
 pub use encoder::{DetectorConfig, EncoderBinding};
-pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, ManualCommand};
+pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, MacroSignal, ManualCommand};
 pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
 pub use overlay::{
-    Anchor, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget, RadioLayout,
-    WidgetList, WidgetPosition,
+    Anchor, Appearance, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget,
+    RadioLayout, WidgetList, WidgetPosition,
 };
 pub use path::Screens;
 pub use profile::{NoMatch, Profile, ProfileSwitching, ProfileTarget};
@@ -49,6 +59,7 @@ pub use settings::{AppSettings, AutostartKind, ShellStatus};
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};
+pub use toast::{Toast, ToastQueue, ToastRequest};
 pub use trigger::{ButtonRef, Condition, PressKind, TriggerInput};
 pub use virtual_control::{
     ActionRequest, CounterControl, HatDirection, Mode, ModeState, Momentary, Phase, Radio,

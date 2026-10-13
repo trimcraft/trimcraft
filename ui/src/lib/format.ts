@@ -1,5 +1,13 @@
 import type {
   DiagEntry,
+  MacroStep,
+  Repeat,
+  LaunchTarget,
+  MediaKey,
+  VmCommand,
+  VmTarget,
+  VolumeCommand,
+  VolumeTarget,
   Action,
   ControlRef,
   DiscordCommand,
@@ -277,14 +285,144 @@ export function vjoyCommandText(c: VjoyCommand): string {
   }
 }
 
+/** Placeholders in action texts (speech, HTTP). */
+export const PLACEHOLDERS = ["{control}", "{state}", "{profile}", "{value}"];
+
+export const MEDIA_KEYS: [MediaKey, string][] = [
+  ["playPause", "Play / pause"],
+  ["next", "Next track"],
+  ["previous", "Previous track"],
+  ["stop", "Stop"],
+  ["volumeUp", "Volume up"],
+  ["volumeDown", "Volume down"],
+  ["mute", "Mute"],
+];
+
+/** The file name of a Windows path. */
+export function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function shorten(text: string, max = 40): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+export function volumeText(target: VolumeTarget, c: VolumeCommand): string {
+  const who = target.type === "master" ? "master" : target.process || "(no program)";
+  switch (c.type) {
+    case "set":
+      return `${who} to ${c.percent}%`;
+    case "change":
+      return `${who} ${c.delta >= 0 ? "+" : ""}${c.delta}%`;
+    case "mute":
+      return `mute ${who}`;
+    case "unmute":
+      return `unmute ${who}`;
+    case "toggleMute":
+      return `toggle mute ${who}`;
+  }
+}
+
+export function vmText(t: VmTarget, c: VmCommand): string {
+  const who = `${t.kind === "strip" ? "Strip" : "Bus"} ${t.index + 1}`;
+  switch (c.type) {
+    case "setGain":
+      return `${who} gain ${c.db} dB`;
+    case "changeGain":
+      return `${who} gain ${c.deltaDb >= 0 ? "+" : ""}${c.deltaDb} dB`;
+    case "mute":
+      return `mute ${who}`;
+    case "unmute":
+      return `unmute ${who}`;
+    case "toggleMute":
+      return `toggle mute ${who}`;
+  }
+}
+
+/** A URL without its query, for lists (tokens often sit there). */
+export function shortUrl(url: string): string {
+  const [base, query] = url.split("?", 2);
+  return query === undefined ? (base ?? url) : `${base}?…`;
+}
+
+export function launchText(t: LaunchTarget): string {
+  switch (t.type) {
+    case "program":
+      return `start ${fileName(t.path) || "(no program)"}${t.arguments ? ` ${shorten(t.arguments)}` : ""}`;
+    case "url":
+      return `open ${shortUrl(t.url) || "(no address)"}`;
+    case "open":
+      return `open ${t.path || "(no path)"}`;
+  }
+}
+
 export function actionText(a: Action, profiles: ProfileView[] = []): string {
-  if (a.type === "vjoy") return `vJoy: ${vjoyCommandText(a.command)}`;
-  if (a.type === "switchProfile") return `Switch profile: ${profileTargetText(a.target, profiles)}`;
-  if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
-  if (a.type === "discord") return `Discord: ${discordText(a.command)}`;
-  const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
-  const speed = a.playback.speedPercent === 100 ? "" : ` (${a.playback.speedPercent}%)`;
-  return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}${speed}: ${steps.join(", ") || "no steps"}`;
+  const wait = (w: boolean) => (w ? " (wait)" : "");
+  switch (a.type) {
+    case "switchProfile":
+      return `Switch profile: ${profileTargetText(a.target, profiles)}`;
+    case "soundpad":
+      return `Soundpad: ${soundpadText(a.command)}`;
+    case "discord":
+      return `Discord: ${discordText(a.command)}`;
+    case "speak":
+      return `Speak: "${shorten(a.text.trim()) || "…"}"${wait(a.wait)}`;
+    case "playSound":
+      return `Sound: ${fileName(a.path) || "(no file)"}${wait(a.wait)}`;
+    case "volume":
+      return `Volume: ${volumeText(a.target, a.command)}`;
+    case "voicemeeter":
+      return `Voicemeeter: ${vmText(a.target, a.command)}`;
+    case "mediaKey":
+      return `Media key: ${MEDIA_KEYS.find(([k]) => k === a.key)?.[1] ?? a.key}`;
+    case "launch":
+      return `Launch: ${launchText(a.target)}${wait(a.wait)}`;
+    case "http":
+      return `HTTP: ${a.method} ${shortUrl(a.url) || "(no address)"}${wait(a.wait)}`;
+    case "vjoy":
+      return `vJoy: ${vjoyCommandText(a.command)}`;
+  }
+  if (a.type === "stopMacros") return `Stop macros: ${a.target.type === "all" ? "all" : a.target.id}`;
+  const keys = a.steps.some(isKeyStep);
+  const mouse = a.steps.some(isMouseStep);
+  const kind = keys && mouse ? "Keys + mouse" : mouse ? "Mouse" : "Keys";
+  const steps = a.steps.map((st) => (isMouseStep(st) ? mouseStepText(st as MouseStep) : keyStepText(st as KeyStep)));
+  const speed = a.playback.speedPercent === 100 ? "" : ` ${a.playback.speedPercent}%`;
+  const repeat = repeatText(a.repeat);
+  const extra = [speed.trim(), repeat].filter(Boolean).join(", ");
+  return `${kind}${extra ? ` (${extra})` : ""}: ${steps.join(", ") || "no steps"}`;
+}
+
+export function repeatText(r: Repeat): string {
+  switch (r.type) {
+    case "once":
+      return "";
+    case "times":
+      return `${r.count}×`;
+    case "whileActive":
+      return "while active";
+  }
+}
+
+/** A keyboard step (a wait counts as neither kind). */
+export function isKeyStep(s: MacroStep): boolean {
+  return s.type === "keyDown" || s.type === "keyUp" || s.type === "keyTap";
+}
+
+/** A mouse step (a wait counts as neither kind). */
+export function isMouseStep(s: MacroStep): boolean {
+  return s.type !== "delay" && !isKeyStep(s);
+}
+
+/** Macros of the active profile, for "Stop macros": id and where it is. */
+export function macroChoices(snapshot: EngineSnapshot): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  for (const view of snapshot.virtualControls) {
+    for (const a of controlActions(view.kind)) {
+      if (a.type === "inputMacro" && a.id) out.push({ id: a.id, label: `${view.name} › ${actionText(a)}` });
+    }
+  }
+  return out;
 }
 
 // --- Event log ---------------------------------------------------------------------------------

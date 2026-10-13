@@ -1,7 +1,9 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
 use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
-use detent_core::connection::{DiscordSettings, valid_client_id};
+use crate::{volume, webhook};
+use detent_core::audio::VoiceRef;
+use detent_core::connection::{DiscordSettings, SecretRef, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::vjoy::VjoyMapping;
@@ -64,9 +66,26 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         clear_recording,
         set_recorder_config,
         test_action,
+        list_voices,
+        list_sound_devices,
+        list_audio_programs,
+        store_http_secret,
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
+        crate::transfer::export_setup,
+        crate::transfer::pick_import_file,
+        crate::transfer::cancel_import,
+        crate::transfer::apply_import,
+        crate::transfer::list_backups,
+        crate::transfer::backup_now,
+        crate::transfer::restore_backup,
+        crate::transfer::open_backup_folder,
+        set_overlay_appearance,
+        set_toast_settings,
+        set_toast_position,
+        get_toasts,
+        test_toast,
         set_settings,
         restart_elevated,
         select_profile,
@@ -217,6 +236,10 @@ fn set_hotkey(app: AppHandle, shared: State<'_, Arc<Shared>>, hotkey: String) ->
     if old == hotkey {
         return Ok(());
     }
+    let panic = shared.engine().setup().settings.panic_hotkey.clone();
+    if overlay::same_hotkey(&hotkey, &panic) {
+        return Err("the overlay hotkey must differ from the panic hotkey".into());
+    }
     overlay::unregister_hotkey(&app, &old);
     if let Err(e) = overlay::register_hotkey(&app, &hotkey) {
         // Keep the previous hotkey working.
@@ -249,12 +272,29 @@ fn get_keys() -> &'static [KeyInfo] {
 
 #[tauri::command]
 fn save_virtual_control(shared: State<'_, Arc<Shared>>, control: VirtualControl) -> Res<String> {
-    with(&shared, |e| e.save_virtual_control(control))
+    with_secrets(&shared, |e| e.save_virtual_control(control))
 }
 
 #[tauri::command]
 fn remove_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.remove_virtual_control(&id))
+    with_secrets(&shared, |e| e.remove_virtual_control(&id))
+}
+
+/// Like [`with`], for changes that can drop actions: secret HTTP header values no action
+/// uses any more are deleted from the credential store.
+fn with_secrets<T>(
+    shared: &Shared,
+    f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
+) -> Res<T> {
+    let before = shared.engine().setup().secret_refs();
+    let result = with(shared, f)?;
+    let after = shared.engine().setup().secret_refs();
+    for secret in before.iter().filter(|s| !after.contains(s)) {
+        if let Err(e) = webhook::delete_secret(secret) {
+            log::warn!("{e}");
+        }
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -314,7 +354,7 @@ fn rename_profile(shared: State<'_, Arc<Shared>>, id: String, name: String) -> R
 
 #[tauri::command]
 fn delete_profile(shared: State<'_, Arc<Shared>>, id: String) -> Res<()> {
-    with(&shared, |e| e.delete_profile(&id))
+    with_secrets(&shared, |e| e.delete_profile(&id))
 }
 
 /// Moves a profile to the front: the default profile.
@@ -425,10 +465,12 @@ fn set_connections(shared: State<'_, Arc<Shared>>, mut connections: Connections)
     connections.discord.client_secret = current.client_secret;
     let soundpad = connections.soundpad.clone();
     let discord = connections.discord.clone();
+    let voicemeeter = connections.voicemeeter.clone();
     let vjoy = connections.vjoy.enabled;
     with(&shared, |e| e.set_connections(connections))?;
     shared.soundpad.apply(soundpad);
     shared.discord.apply(discord);
+    shared.voicemeeter.apply(voicemeeter);
     shared.vjoy.apply(vjoy);
     Ok(())
 }
@@ -442,6 +484,7 @@ async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res
         ConnectorId::Soundpad => shared.soundpad.test(),
         ConnectorId::Discord => shared.discord.test(),
         ConnectorId::Vjoy => shared.vjoy.test(),
+        ConnectorId::Voicemeeter => shared.voicemeeter.test(),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -584,37 +627,79 @@ fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -
     with(&shared, |e| e.set_recorder_config(config))
 }
 
-/// Plays an action (e.g. the macro being edited) after the recording countdown, so the user
-/// can switch to the game first.
+/// Plays an action being edited. Input macros wait for the recording countdown, so the user
+/// can switch to the game first; everything else runs at once. Placeholders get "Test play",
+/// "editor" and the active profile. A "while active" macro has no state to end here, so it
+/// plays once; "n times" plays n times (stop it with the panic hotkey).
 #[tauri::command]
 fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     action.normalize().map_err(|e| e.to_string())?;
     if !shared.engine().action_enabled(&action) {
         return Err("this action's connection is disabled; enable it under Connections".into());
     }
+    let countdown = matches!(action, Action::InputMacro(_));
+    if let Action::InputMacro(m) = &mut action {
+        // Not guarded against the saved macro: a test may run while it does.
+        m.id.clear();
+        if m.repeat == detent_core::macros::Repeat::WhileActive {
+            m.repeat = detent_core::macros::Repeat::Once;
+        }
+    }
+    let mut request = ActionRequest::new("Test play", "editor", Phase::Activate, &action);
+    request.profile = shared.engine().setup().profile().name.clone();
     let shared = Arc::clone(&shared);
     std::thread::Builder::new()
         .name("detent-test-play".into())
         .spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(
-                detent_core::recording::COUNTDOWN_MS,
-            ));
-            if let Action::Vjoy { command } = &action {
+            if countdown {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    detent_core::recording::COUNTDOWN_MS,
+                ));
+            }
+            if let Action::Vjoy { command } = &request.action {
                 // vJoy output is the engine's state.
                 let mut engine = shared.engine();
                 engine.advance(shared.now_ns());
                 engine.run_vjoy_command(command);
                 shared.commit(&mut engine);
             }
-            shared.executor.submit(vec![ActionRequest::new(
-                "Test play",
-                "editor",
-                Phase::Activate,
-                &action,
-            )]);
+            shared.executor.submit(vec![request]);
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Installed Windows voices, for the speech editor.
+#[tauri::command]
+async fn list_voices(shared: State<'_, Arc<Shared>>) -> Res<Vec<VoiceRef>> {
+    let speech = shared.speech.clone();
+    tauri::async_runtime::spawn_blocking(move || speech.voices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Sound output devices, for the sound file editor.
+#[tauri::command]
+async fn list_sound_devices(shared: State<'_, Arc<Shared>>) -> Res<Vec<String>> {
+    let sound = shared.sound.clone();
+    tauri::async_runtime::spawn_blocking(move || sound.devices())
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Programs that have an audio session now, for the volume editor.
+#[tauri::command]
+async fn list_audio_programs() -> Res<Vec<String>> {
+    tauri::async_runtime::spawn_blocking(volume::session_programs)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Stores a secret HTTP header value in the credential store; the editor keeps only the
+/// returned reference. Unused ones are deleted when the action is saved without them.
+#[tauri::command]
+fn store_http_secret(value: String) -> Res<SecretRef> {
+    webhook::store_secret(&value)
 }
 
 /// The event log held by the app, oldest first. New entries arrive as `detent://diagnostics`
@@ -646,7 +731,25 @@ fn open_log_folder(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
 
 /// Saves the Settings page ("General") and registers or removes autostart to match.
 #[tauri::command]
-fn set_settings(shared: State<'_, Arc<Shared>>, settings: AppSettings) -> Res<()> {
+fn set_settings(
+    app: AppHandle,
+    shared: State<'_, Arc<Shared>>,
+    mut settings: AppSettings,
+) -> Res<()> {
+    settings.panic_hotkey = settings.panic_hotkey.trim().to_owned();
+    let old = shared.engine().setup().settings.panic_hotkey.clone();
+    if settings.panic_hotkey != old {
+        let overlay_hotkey = shared.engine().setup().overlay.hotkey.clone();
+        if overlay::same_hotkey(&settings.panic_hotkey, &overlay_hotkey) {
+            return Err("the panic hotkey must differ from the overlay hotkey".into());
+        }
+        overlay::unregister_hotkey(&app, &old);
+        if let Err(e) = overlay::register_hotkey(&app, &settings.panic_hotkey) {
+            // Keep the previous one working.
+            let _ = overlay::register_hotkey(&app, &old);
+            return Err(e);
+        }
+    }
     with(&shared, |e| {
         e.set_settings(settings);
         Ok(())
@@ -664,6 +767,66 @@ async fn restart_elevated(app: AppHandle) -> Res<()> {
         .map_err(|e| e.to_string())??;
     app.exit(0);
     Ok(())
+}
+
+/// Colors, text size and corners of the overlay (Settings > Overlay appearance). Values are
+/// kept within their bounds.
+#[tauri::command]
+fn set_overlay_appearance(
+    shared: State<'_, Arc<Shared>>,
+    appearance: detent_core::Appearance,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_overlay_appearance(appearance);
+        Ok(())
+    })
+}
+
+/// How long toasts stay, whether they show while the overlay is hidden, and the profile toast.
+#[tauri::command]
+fn set_toast_settings(
+    shared: State<'_, Arc<Shared>>,
+    settings: detent_core::overlay::ToastSettings,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_settings(settings);
+        Ok(())
+    })
+}
+
+/// Places the toast area of the active profile; `None` puts it back to the default place.
+#[tauri::command]
+fn set_toast_position(shared: State<'_, Arc<Shared>>, position: Option<WidgetPosition>) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_position(position);
+        Ok(())
+    })
+}
+
+/// The toasts on screen now; later changes arrive as `detent://toasts` events.
+#[tauri::command]
+fn get_toasts(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Toast> {
+    shared.toasts.list()
+}
+
+/// Shows a sample toast, as a real one would appear.
+#[tauri::command]
+fn test_toast(shared: State<'_, Arc<Shared>>) {
+    let (settings, visible, editing) = {
+        let engine = shared.engine();
+        let overlay = &engine.setup().overlay;
+        (overlay.toasts, overlay.visible, engine.overlay_editing())
+    };
+    if visible || settings.while_hidden || editing {
+        shared.toasts.push(
+            vec![detent_core::ToastRequest {
+                key: "test".into(),
+                title: "Test toast".into(),
+                text: "It works".into(),
+            }],
+            settings.duration_ms,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -793,9 +956,103 @@ mod tests {
         )
         .unwrap();
         assert!(settings.start_with_windows && settings.run_as_admin && !settings.close_to_tray);
+        // More action types, as ActionList.svelte creates them (newAction) and the editors
+        // change them.
+        let more: Vec<Action> = serde_json::from_str(
+            r#"[
+              {"type":"speak","text":"{state}","voice":{"id":"HKEY_LOCAL_MACHINE/x","name":"Zira"},"rate":0,"volume":100,"wait":false},
+              {"type":"playSound","path":"C:/s.wav","volume":100,"device":null,"stopPrevious":false,"wait":true},
+              {"type":"volume","target":{"type":"master"},"command":{"type":"toggleMute"}},
+              {"type":"volume","target":{"type":"app","process":"Discord.exe"},"command":{"type":"set","percent":50}},
+              {"type":"voicemeeter","target":{"kind":"strip","index":0},"command":{"type":"changeGain","deltaDb":3}},
+              {"type":"mediaKey","key":"playPause"},
+              {"type":"launch","target":{"type":"program","path":"C:/a.exe","arguments":"","workingDir":"","onlyIfNotRunning":true},"wait":false},
+              {"type":"launch","target":{"type":"url","url":"https://example.com"},"wait":false},
+              {"type":"http","method":"POST","url":"https://x.test","headers":[
+                {"name":"Authorization","value":"","secret":{"store":"windowsCredentialManager","target":"detent/http/1"}}],
+               "body":"","timeoutMs":5000,"wait":false}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(more.len(), 9);
+        for mut action in more {
+            action.normalize().unwrap();
+        }
+        let connections: Connections = serde_json::from_str(
+            r#"{"soundpad":{"enabled":false,"timeoutMs":500,"listMaxAgeMs":10000},
+                "discord":{"enabled":false,"clientId":"","clientSecret":null},
+                "voicemeeter":{"enabled":true}}"#,
+        )
+        .unwrap();
+        assert!(connections.voicemeeter.enabled);
+        let id: ConnectorId = serde_json::from_str(r#""voicemeeter""#).unwrap();
+        assert_eq!(id, ConnectorId::Voicemeeter);
+        // What the pickers and store_http_secret return (types.ts: VoiceRef, SecretRef).
+        let voice = serde_json::to_value(VoiceRef {
+            id: "a".into(),
+            name: "b".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            (voice["id"].as_str(), voice["name"].as_str()),
+            (Some("a"), Some("b"))
+        );
+        let secret = serde_json::to_value(SecretRef::WindowsCredentialManager {
+            target: "detent/http/1".into(),
+        })
+        .unwrap();
+        assert_eq!(secret["store"], "windowsCredentialManager");
+        let view = serde_json::to_value(detent_core::connection::ConnectorView::new(
+            ConnectorId::Voicemeeter,
+            false,
+            Some(&detent_core::ConnectorState {
+                missing: Some("Voicemeeter is not installed".into()),
+                ..Default::default()
+            }),
+        ))
+        .unwrap();
+        assert_eq!(view["missing"], "Voicemeeter is not installed");
+
         // Recorder and test play.
-        let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
-        let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();
+        let both: RecordKind = serde_json::from_str(r#"{"keys":true,"mouse":true}"#).unwrap();
+        assert_eq!(both, RecordKind::BOTH);
+        // Input macros as MacroEditor.svelte builds them, and Stop macros.
+        let mut mixed: Action = serde_json::from_str(
+            r#"{"type":"inputMacro","id":"mac-1","movement":"absolute","monitor":null,
+                "playback":{"speedPercent":100,"minDelayMs":0,"endpointOnly":false},
+                "repeat":{"type":"times","count":3},"onEnd":"finishRun","pauseMs":250,"retrigger":"restart",
+                "steps":[{"type":"keyDown","key":"LeftCtrl"},{"type":"click","button":"left","holdMs":null},
+                  {"type":"delay","ms":20},{"type":"keyUp","key":"LeftCtrl"}]}"#,
+        )
+        .unwrap();
+        mixed.normalize().unwrap();
+        assert_eq!(mixed.input_macro().unwrap().pause_ms, 250);
+        let _: Action = serde_json::from_str(
+            r#"{"type":"inputMacro","steps":[],"repeat":{"type":"whileActive"}}"#,
+        )
+        .unwrap();
+        for stop in [
+            r#"{"type":"stopMacros","target":{"type":"all"}}"#,
+            r#"{"type":"stopMacros","target":{"type":"macro","id":"mac-1"}}"#,
+        ] {
+            let mut a: Action = serde_json::from_str(stop).unwrap();
+            a.normalize().unwrap();
+        }
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"panicHotkey":"Ctrl+Alt+P"}"#).unwrap();
+        assert_eq!(settings.panic_hotkey, "Ctrl+Alt+P");
+        assert!(
+            detent_core::settings::DEFAULT_PANIC_HOTKEY
+                .parse::<tauri_plugin_global_shortcut::Shortcut>()
+                .is_ok()
+        );
+        // The default panic hotkey differs from the default overlay hotkey, also when spelled
+        // differently.
+        assert!(!overlay::same_hotkey(
+            detent_core::settings::DEFAULT_PANIC_HOTKEY,
+            &detent_core::OverlayConfig::default().hotkey
+        ));
+        assert!(overlay::same_hotkey("Ctrl+Shift+F12", "shift+ctrl+F12"));
         let _: Movement = serde_json::from_str(r#""absolute""#).unwrap();
         let _: Movement = serde_json::from_str(r#""relative""#).unwrap();
         let config: RecorderConfig = serde_json::from_str(
@@ -954,5 +1211,27 @@ mod tests {
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn appearance_and_toast_payloads_deserialise() {
+        let appearance: detent_core::Appearance = serde_json::from_str(
+            r##"{"theme":"hudGreen","accent":"#39ff6a","backgroundOpacity":60,"textScale":1.25,"cornerRadius":4}"##,
+        )
+        .unwrap();
+        assert_eq!(appearance.theme, detent_core::overlay::Theme::HudGreen);
+        let settings: detent_core::overlay::ToastSettings =
+            serde_json::from_str(r#"{"durationMs":3000,"whileHidden":false,"profileToast":true}"#)
+                .unwrap();
+        assert_eq!(settings.duration_ms, 3000);
+        // A widget as the Overlay panel sends it back, with the new settings.
+        let item: OverlayItem = serde_json::from_str(
+            r#"{"type":"profileName","position":null,"visibility":{"mode":"afterChange","seconds":3},"scale":1.5,"opacity":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(item.scale, Some(1.5));
+        let position: Option<WidgetPosition> =
+            serde_json::from_str(r#"{"x":0.5,"y":0.1}"#).unwrap();
+        assert!(position.is_some());
     }
 }

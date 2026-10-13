@@ -7,7 +7,7 @@ Please **do not open a public issue** for security problems.
 Report them privately through GitHub's private vulnerability reporting:
 [Security → Report a vulnerability](https://github.com/trimcraft/trimcraft/security/advisories/new).
 
-Include what you found, how to reproduce it, the Trimcraft version and your Windows version.
+Include what you found, how to reproduce it, the Trimcraft version and your operating system version.
 Leave out personal data, credentials and tokens. If a log excerpt helps, check it for those
 first.
 

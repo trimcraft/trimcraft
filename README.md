@@ -11,10 +11,8 @@
 > and [feature requests](https://github.com/trimcraft/trimcraft/issues/new?template=feature_request.yml).
 > Ideas and wishes from real cockpits are explicitly welcome.
 
-Turn your HOTAS into a smart cockpit on Windows: virtual radios, modes and switches, macros,
+Turn your HOTAS into a smart cockpit: virtual radios, modes and switches, macros,
 vJoy output, Discord/Soundpad control and a click-through in-game overlay.
-
-Trimcraft was formerly called Detent; see [Upgrading from Detent](#upgrading-from-detent).
 
 ## Features
 
@@ -50,7 +48,7 @@ The screenshots show the browser demo with made-up devices. More: [Hardware Test
 
 ## Requirements
 
-- Windows 10 or 11 (64-bit). Other systems are not supported.
+- Currently runs on Windows 10 or 11 (64-bit); Linux and macOS support are planned.
 - The overlay works over games in **windowed or borderless fullscreen** mode, not in exclusive
   fullscreen.
 - Optional, for the matching features: [vJoy](https://github.com/BrunnerInnovation/vJoy),
@@ -75,30 +73,6 @@ installs it for your user and restarts Trimcraft; it asks first when macros are 
 is in use. Update packages are signed with the project's update key, and Trimcraft installs only
 packages with a valid signature (this is separate from Windows code signing, which the installer
 does not have).
-
-## Upgrading from Detent
-
-Trimcraft was called Detent before. Quit Detent, install Trimcraft and start it; on its first
-start it takes over the Detent installation and logs each step (app log and event log, lines
-starting with `migration:`):
-
-- **Settings, devices, values, backups:** `%APPDATA%\cloud.breu.detent` is copied to
-  `%APPDATA%\cloud.breu.trimcraft`, unless Trimcraft has a `setup.json` of its own already.
-  Old logs are copied from `%LOCALAPPDATA%\cloud.breu.detent\logs`; the WebView data is not.
-  The old folders stay, with a `MIGRATED_TO_TRIMCRAFT.txt` note; delete them once everything works.
-- **Credentials:** Credential Manager entries `detent/...` (Discord client secret and login,
-  HTTP header secrets) are moved to `trimcraft/...`; an old entry is deleted only after the new
-  one was written and read back. The references in the setup, in backups and in imported files
-  are renamed when they load.
-- **Autostart:** Detent's `Run` value is removed and Trimcraft registers its own from the
-  settings. Detent's elevated task can only be removed as administrator; with "Always run as
-  administrator" on, Trimcraft restarts elevated and removes it then.
-- **Exports:** `.detent.json` files import like `.trimcraft.json` files.
-
-Detent and Trimcraft do not see each other as the same app: a Detent that still runs neither
-blocks Trimcraft nor gets its second launches, and both would react to the same inputs, so
-Trimcraft warns when it finds one running. Uninstall Detent afterwards (its uninstaller leaves
-Trimcraft's files and autostart alone).
 
 ## Running as administrator
 

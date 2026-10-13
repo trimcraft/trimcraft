@@ -16,10 +16,10 @@ body:
     validations:
       required: true
   - type: input
-    id: windows-version
+    id: os-version
     attributes:
-      label: Windows version
-      description: "Win+R, `winver`."
+      label: Operating system
+      description: "With its version; on Windows: Win+R, `winver`."
       placeholder: "Windows 11 24H2 (26100.1234)"
     validations:
       required: true

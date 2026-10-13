@@ -9,7 +9,7 @@ expect rough edges, and back up your configuration before updating.
 
 ## [0.1.0] - 2026-10-13
 
-The first public release (early access). Windows 10/11 only.
+The first public release (early access), for Windows 10/11.
 
 ### Added
 
@@ -19,7 +19,7 @@ The first public release (early access). Windows 10/11 only.
 - **Rotary encoders**: detected by their pulses or marked by hand, with measured pulse lengths;
   counters with range, step and wrap-around driven by an encoder.
 - **Virtual controls**: radio, toggle, momentary, counter and mode (layer, with shift states).
-  Triggers on buttons, hat directions, encoder detents and axis zones, with press, release, long
+  Triggers on buttons, hat directions, encoder notches and axis zones, with press, release, long
   press and double press, modifiers and "only when" conditions. Learn by pressing the control.
 - **Actions**: input macros with keyboard and mouse steps in any order (recorded or edited;
   absolute or relative mouse paths, speed, repetition once, n times or while the control is
@@ -44,12 +44,6 @@ The first public release (early access). Windows 10/11 only.
   credentials), automatic backups with retention, and restore.
 - **Updates**: Trimcraft checks for new releases on startup (can be turned off) and installs
   them from Settings, Updates; releases are signed.
-
-### Changed
-
-- **Renamed from Detent to Trimcraft.** On its first start Trimcraft takes over a Detent
-  installation: settings, backups and logs are copied, credentials and autostart are moved,
-  and `.detent.json` exports import like `.trimcraft.json` files. Uninstall Detent afterwards.
 
 [Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.0

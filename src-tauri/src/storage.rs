@@ -59,11 +59,14 @@ impl Storage {
         self.save_text(name, &text);
     }
 
-    pub fn save_text(&self, name: &str, text: &str) {
+    /// Returns whether the file was written.
+    pub fn save_text(&self, name: &str, text: &str) -> bool {
         let path = self.path(name);
         if let Err(e) = write_atomic(&path, text) {
             log::error!("could not save {}: {e}", path.display());
+            return false;
         }
+        true
     }
 }
 

@@ -142,6 +142,9 @@ pub struct VirtualControl {
     /// Shown in the overlay, e.g. "Comms".
     pub name: String,
     pub kind: VirtualControlKind,
+    /// Show an overlay toast when its state or value changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_toast: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1007,6 +1010,7 @@ mod tests {
 
     fn control(kind: VirtualControlKind) -> VirtualControl {
         VirtualControl {
+            show_toast: false,
             id: "vc-1".into(),
             name: "C".into(),
             kind,
@@ -1138,6 +1142,7 @@ mod tests {
     #[test]
     fn json_shape_is_stable() {
         let vc = VirtualControl {
+            show_toast: false,
             id: "vc-1".into(),
             name: "Comms".into(),
             kind: VirtualControlKind::Radio(Radio {

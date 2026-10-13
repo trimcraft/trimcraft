@@ -3,9 +3,12 @@
   // position sit where the user put them; the others are stacked in the anchored corner.
   // In layout edit mode the window takes the mouse and widgets can be dragged.
   import { onMount, tick } from "svelte";
-  import type { EngineSnapshot, WidgetPosition } from "./lib/types";
+  import type { EngineSnapshot, OverlayItem, Toast, WidgetPosition } from "./lib/types";
   import { backend, errorText } from "./lib/backend";
   import OverlayWidget from "./components/OverlayWidget.svelte";
+  import ToastView from "./components/ToastView.svelte";
+  import { overlayStyle } from "./lib/overlay-style";
+  import { AfterChange, widgetKey } from "./lib/widget-visibility.svelte";
   import { countdown } from "./lib/recording.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
@@ -16,21 +19,37 @@
   let elements: HTMLElement[] = $state([]);
   /** Profile whose stacked widgets were fixed in this edit session (widgets are per profile). */
   let fixedFor: string | null = null;
+  let toasts = $state<Toast[]>([]);
+  /** The toast area being dragged (layout edit mode). */
+  let toastDrag = $state<{ pos: WidgetPosition; dx: number; dy: number } | null>(null);
+  const afterChange = new AfterChange();
 
   onMount(() => {
     let stop: (() => void) | undefined;
-    backend().then(async (b) => (stop = await b.subscribe((s) => (snapshot = s))));
+    let stopToasts: (() => void) | undefined;
+    backend().then(async (b) => {
+      stop = await b.subscribe((s) => (snapshot = s));
+      stopToasts = await b.subscribeToasts((t) => (toasts = t));
+    });
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && snapshot?.overlayEditing) done();
     };
     window.addEventListener("keydown", onKey);
     return () => {
       stop?.();
+      stopToasts?.();
+      afterChange.reset();
       window.removeEventListener("keydown", onKey);
     };
   });
 
   let editing = $derived(snapshot?.overlayEditing ?? false);
+  // Widgets set to "only after a change" notice changes as snapshots arrive.
+  $effect(() => {
+    if (snapshot) afterChange.update(snapshot);
+  });
+  const faded = (item: OverlayItem) => !editing && item.visibility?.mode === "afterChange" && !afterChange.shown[widgetKey(item)];
+  let style = $derived(snapshot ? overlayStyle(snapshot.overlay.appearance) : "");
   let recording = $derived(snapshot?.recorder.phase ?? "idle");
   const recCountdown = countdown(() => recording === "countdown");
   let items = $derived(snapshot?.overlay.widgets.map((item, index) => ({ item, index })) ?? []);
@@ -117,10 +136,45 @@
       dragging = null;
     });
   }
+
+  // The toast area: placed by dragging in layout edit mode, stored per profile.
+  let toastPlace = $derived.by(() => {
+    if (!snapshot) return "";
+    const s = snapshot.overlay.scale;
+    const pos = toastDrag?.pos ?? snapshot.toastPosition;
+    // Default: centred near the top.
+    if (!pos) return `left:50%;top:6%;transform:translateX(-50%) scale(${s});transform-origin:top center`;
+    return `left:${pos.x * 100}%;top:${pos.y * 100}%;transform:scale(${s});transform-origin:top left`;
+  });
+
+  function startToastDrag(e: PointerEvent) {
+    if (!editing || e.button !== 0) return;
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const r = el.getBoundingClientRect();
+    toastDrag = { pos: { x: r.left / window.innerWidth, y: r.top / window.innerHeight }, dx: e.clientX - r.left, dy: e.clientY - r.top };
+  }
+
+  function moveToastDrag(e: PointerEvent) {
+    if (!toastDrag) return;
+    const clamp = (v: number) => Math.min(Math.max(v, 0), 1);
+    toastDrag.pos = { x: clamp((e.clientX - toastDrag.dx) / window.innerWidth), y: clamp((e.clientY - toastDrag.dy) / window.innerHeight) };
+  }
+
+  function endToastDrag() {
+    const d = toastDrag;
+    if (!d) return;
+    run(async () => {
+      await (await backend()).setToastPosition({ x: d.pos.x, y: d.pos.y });
+      toastDrag = null;
+    });
+  }
+
+  const SAMPLE_TOAST: Toast[] = [{ id: 0, key: "sample", title: "Toast area", text: "drag me", version: 0 }];
 </script>
 
 {#if snapshot}
-  <div class="surface" class:editing>
+  <div class="surface" class:editing {style}>
     {#if recording !== "idle"}
       <div class="rec" class:live={recording === "recording"}>
         ● {recording === "countdown" ? `REC in ${recCountdown.left}` : "REC"}
@@ -128,7 +182,7 @@
     {/if}
     {#if editing}
       <div class="toolbar">
-        <span>Layout edit mode: drag the widgets.</span>
+        <span>Layout edit mode: drag the widgets and the toast area.</span>
         {#if error}<span class="error">{error}</span>{/if}
         <button class="primary" onclick={done}>Done</button>
       </div>
@@ -140,7 +194,8 @@
         class:frame={editing}
         class:moving={dragging?.index === index}
         style={position(index, item.position!)}
-        style:transform="scale({snapshot.overlay.scale})"
+        style:transform="scale({snapshot.overlay.scale * (item.scale ?? 1)})"
+        style:opacity={faded(item) ? 0 : (item.opacity ?? 1)}
         bind:this={elements[index]}
         onpointerdown={(e) => startDrag(e, index, item.position!)}
         onpointermove={moveDrag}
@@ -155,24 +210,54 @@
     {#if stacked.length}
       <div class="stack" class:right={snapshot.overlay.anchor.endsWith("Right")} style={stackPosition} style:transform="scale({snapshot.overlay.scale})" style:transform-origin={stackOrigin}>
         {#each stacked as { item, index } (index)}
-          <div class="panel" class:frame={editing} bind:this={elements[index]}><OverlayWidget {snapshot} widget={item} /></div>
+          <div
+            class="panel"
+            class:frame={editing}
+            style:transform={item.scale ? `scale(${item.scale})` : undefined}
+            style:transform-origin={stackOrigin}
+            style:opacity={faded(item) ? 0 : (item.opacity ?? 1)}
+            bind:this={elements[index]}
+          ><OverlayWidget {snapshot} widget={item} /></div>
         {/each}
       </div>
+    {/if}
+
+    {#if editing}
+      <div
+        class="toast-area frame"
+        class:moving={toastDrag !== null}
+        style={toastPlace}
+        onpointerdown={startToastDrag}
+        onpointermove={moveToastDrag}
+        onpointerup={endToastDrag}
+        onpointercancel={endToastDrag}
+        role="presentation"
+      >
+        <ToastView toasts={SAMPLE_TOAST} />
+      </div>
+    {:else}
+      <div class="toast-area" style={toastPlace}><ToastView {toasts} /></div>
     {/if}
   </div>
 {/if}
 
 <style>
   :global(body) { background: transparent !important; margin: 0; overflow: hidden; }
-  .surface { position: fixed; inset: 0; }
+  .surface { position: fixed; inset: 0; color: var(--text); }
   /* A faint tint in edit mode shows that the overlay has the mouse now. */
   .surface.editing { background: rgba(12, 15, 19, 0.35); outline: 2px dashed rgba(240, 160, 48, 0.6); outline-offset: -2px; }
   .panel {
-    background: rgba(12, 15, 19, 0.72);
-    border: 1px solid rgba(240, 160, 48, 0.35);
-    border-radius: 8px;
+    background: var(--ov-bg);
+    border: 1px solid var(--ov-border);
+    border-radius: var(--ov-radius);
     padding: 10px 14px;
+    color: var(--text);
+    /* The fade of "only after a change" widgets is a transition, not an animation loop. */
+    transition: opacity 0.35s ease;
   }
+  .toast-area { position: absolute; z-index: 15; pointer-events: none; }
+  .toast-area.frame { pointer-events: auto; cursor: grab; user-select: none; }
+  .toast-area.moving { cursor: grabbing; opacity: 0.85; }
   .placed { position: absolute; transform-origin: top left; }
   .stack { position: absolute; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
   .stack.right { align-items: flex-end; }

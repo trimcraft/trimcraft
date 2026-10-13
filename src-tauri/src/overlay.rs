@@ -155,7 +155,16 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
         return;
     };
     let (editing, recording) = modes(app);
-    let result = if visible || editing || recording {
+    let toast_only = toasts_up() && !(visible || editing || recording);
+    let result = if toast_only {
+        // Only toasts: never activate the window, so a game keeps the focus.
+        if !window.is_visible().unwrap_or(false) {
+            platform::show_without_activating(&window);
+        }
+        window
+            .set_always_on_top(true)
+            .and_then(|()| window.set_ignore_cursor_events(true))
+    } else if visible || editing || recording {
         window
             .show()
             .and_then(|()| window.set_always_on_top(true))
@@ -202,6 +211,15 @@ pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Whether two hotkeys are the same shortcut (spelling and order of modifiers aside).
+pub fn same_hotkey(a: &str, b: &str) -> bool {
+    use tauri_plugin_global_shortcut::Shortcut;
+    match (a.parse::<Shortcut>(), b.parse::<Shortcut>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a.trim().eq_ignore_ascii_case(b.trim()),
+    }
+}
+
 pub fn unregister_hotkey(app: &AppHandle, hotkey: &str) {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
     if let Ok(shortcut) = hotkey.parse::<Shortcut>() {
@@ -220,5 +238,57 @@ pub fn keep_on_top(app: &AppHandle) {
         && window.is_visible().unwrap_or(false)
     {
         let _ = window.set_always_on_top(true);
+    }
+}
+
+// --- Toasts while the overlay is hidden -------------------------------------------------------
+
+/// Toasts are on screen, so the window has to be shown even if the overlay is hidden.
+static TOASTS_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn toasts_up() -> bool {
+    TOASTS_UP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Toasts appeared. If the overlay is hidden, the window is shown without taking focus or the
+/// mouse; it only stays up as long as toasts do.
+pub fn toasts_begin(app: &AppHandle) {
+    TOASTS_UP.store(true, std::sync::atomic::Ordering::Relaxed);
+    let Some(window) = app.get_webview_window(LABEL) else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let _ = window.set_ignore_cursor_events(true);
+    platform::show_without_activating(&window);
+    let _ = window.set_always_on_top(true);
+}
+
+/// The last toast is gone: back to the saved visibility.
+pub fn toasts_end(app: &AppHandle) {
+    TOASTS_UP.store(false, std::sync::atomic::Ordering::Relaxed);
+    let visible = saved_visible(app);
+    set_visible(app, visible);
+}
+
+mod platform {
+    use tauri::WebviewWindow;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+
+    /// Shows the window with `SW_SHOWNOACTIVATE`: it appears on top without becoming the
+    /// foreground window, so a game keeps the keyboard and the mouse.
+    pub fn show_without_activating(window: &WebviewWindow) {
+        match window.hwnd() {
+            Ok(hwnd) => {
+                // SAFETY: `hwnd` is the handle of this live window; ShowWindow only reads it.
+                unsafe { ShowWindow(hwnd.0 as HWND, SW_SHOWNOACTIVATE) };
+            }
+            Err(e) => {
+                log::warn!("no window handle for the overlay ({e}); showing it normally");
+                let _ = window.show();
+            }
+        }
     }
 }

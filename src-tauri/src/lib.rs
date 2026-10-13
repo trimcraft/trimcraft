@@ -1,6 +1,7 @@
 //! Detent desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod autostart;
+mod backups;
 mod commands;
 mod discord;
 mod elevation;
@@ -17,6 +18,8 @@ mod sound;
 mod soundpad;
 mod speech;
 mod storage;
+mod toasts;
+mod transfer;
 mod tray;
 mod voicemeeter;
 mod volume;
@@ -78,6 +81,10 @@ pub struct Shared {
     meta: Meta,
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
+    backups: Arc<backups::Backups>,
+    toasts: Arc<toasts::Toasts>,
+    /// An import file the user picked and has not applied yet.
+    pending_import: Mutex<Option<detent_core::transfer::ImportFile>>,
 }
 
 impl Shared {
@@ -129,6 +136,14 @@ impl Shared {
         if !actions.is_empty() {
             self.executor.submit(actions);
         }
+        let requests = engine.take_toasts();
+        if !requests.is_empty() {
+            let overlay = &engine.setup().overlay;
+            // With the overlay hidden and "while hidden" off, a toast would have nowhere to show.
+            if overlay.visible || overlay.toasts.while_hidden || engine.overlay_editing() {
+                self.toasts.push(requests, overlay.toasts.duration_ms);
+            }
+        }
     }
 
     /// Logs a change of the active profile, however it happened.
@@ -155,8 +170,10 @@ impl Shared {
             self.storage.save_json(DEVICES_FILE, engine.registry());
         }
         if dirty.setup {
-            self.storage
-                .save_text(SETUP_FILE, &engine.setup().to_json());
+            let text = engine.setup().to_json();
+            if self.storage.save_text(SETUP_FILE, &text) {
+                self.backups.note_saved(&text);
+            }
         }
         if dirty.values {
             self.storage.save_json(VALUES_FILE, &engine.values());
@@ -206,6 +223,8 @@ pub fn run() {
         )
         // Used from Rust only (open_discord_portal); the windows get no opener permission.
         .plugin(tauri_plugin_opener::init())
+        // Used from Rust only (export and import dialogs); the windows get no dialog permission.
+        .plugin(tauri_plugin_dialog::init())
         // Used from Rust only (tray notice); the windows get no notification permission.
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -407,6 +426,7 @@ fn load(
     });
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
+    let backups = backups::Backups::spawn(&storage.dir, diagnostics.clone());
     let voicemeeter = Arc::new(voicemeeter::Voicemeeter::spawn(
         engine.connections().voicemeeter.clone(),
     ));
@@ -436,6 +456,9 @@ fn load(
         player,
         meta,
         logged_profile: Mutex::new(String::new()),
+        backups,
+        toasts: toasts::Toasts::spawn(app.clone()),
+        pending_import: Mutex::new(None),
     })
 }
 

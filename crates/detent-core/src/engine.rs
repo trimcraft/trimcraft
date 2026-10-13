@@ -15,7 +15,9 @@ use crate::encoder::{
 use crate::event::BackendEvent;
 use crate::function::{CounterInput, Function, FunctionKind, SpecError};
 use crate::macro_run::Scope;
-use crate::overlay::{ControlRef, MonitorRef, OverlayConfig, OverlayItem, WidgetPosition};
+use crate::overlay::{
+    Appearance, ControlRef, MonitorRef, OverlayConfig, OverlayItem, ToastSettings, WidgetPosition,
+};
 use crate::profile::{AutoSwitch, Profile, ProfileSwitching, ProfileTarget, normalize_executable};
 use crate::recording::{
     RecordKind, RecorderConfig, RecorderError, RecorderPhase, RecorderView, RecordingResult,
@@ -25,6 +27,7 @@ use crate::settings::{AppSettings, ShellStatus};
 use crate::setup::{ButtonPair, Setup, next_id};
 use crate::state::ButtonEdge;
 use crate::state::{LiveState, Snapshot};
+use crate::toast::ToastRequest;
 use crate::trigger::{
     ButtonRef, Condition, DigitalKey, Fired, HatDirection, HoldKey, PressConfig, PressEvent,
     PressKind, PressTracker, StepDirection, Trigger, TriggerInput, ZoneKey, axis_percent,
@@ -223,6 +226,8 @@ pub struct EngineSnapshot {
     pub connectors: Vec<ConnectorView>,
     /// Global overlay settings with the active profile's widgets.
     pub overlay: OverlayConfig,
+    /// Where the active profile puts the toast area; `None`: the default place.
+    pub toast_position: Option<WidgetPosition>,
     pub detector: DetectorConfig,
     /// App-wide settings (Settings page).
     pub settings: AppSettings,
@@ -269,6 +274,10 @@ pub struct Engine {
     /// Event log sink; without one nothing is recorded (tests, tools).
     diagnostics: Option<Diagnostics>,
     axis_throttle: AxisThrottle,
+    /// What each toast-enabled control showed when last looked at (see [`Engine::take_toasts`]).
+    toast_seen: HashMap<String, String>,
+    /// The profile `toast_seen` belongs to.
+    toast_profile: Option<String>,
 }
 
 impl Engine {
@@ -308,6 +317,8 @@ impl Engine {
             dirty: Dirty::default(),
             diagnostics: None,
             axis_throttle: AxisThrottle::default(),
+            toast_seen: HashMap::new(),
+            toast_profile: None,
         }
     }
 
@@ -501,6 +512,8 @@ impl Engine {
                 changed = true;
             }
             // Learning swallows input; held buttons start fresh afterwards.
+            self.toast_seen.clear();
+            self.toast_profile = None;
             self.presses.clear();
         } else if !fired.is_empty() {
             self.dispatch(fired);
@@ -1033,6 +1046,7 @@ impl Engine {
                 })
                 .collect(),
             overlay: self.overlay(),
+            toast_position: self.setup.profile().toast_position,
             detector: self.setup.detector,
             settings: self.setup.settings.clone(),
             shell: self.shell.clone(),
@@ -1249,7 +1263,7 @@ impl Engine {
         if !slot.widget.same_target(&item.widget) {
             return Err(EngineError::WidgetKind);
         }
-        item.position = item.position.map(WidgetPosition::clamped);
+        item = item.sanitized();
         *slot = item;
         self.dirty.setup = true;
         Ok(())
@@ -1706,6 +1720,177 @@ impl Engine {
         self.setup.recorder = config;
         self.dirty.setup = true;
         Ok(())
+    }
+
+    // --- Toasts and appearance -------------------------------------------------------------
+
+    /// What a toast-enabled control shows now, e.g. the active state or a counter's value.
+    fn toast_value(&self, control: &VirtualControl) -> String {
+        let default = RadioMemory::default();
+        let memory = self.memory.get(&control.id).unwrap_or(&default);
+        let on_off = |on: bool| if on { "On" } else { "Off" }.to_owned();
+        match &control.kind {
+            VirtualControlKind::Radio(r) => memory
+                .active
+                .as_deref()
+                .and_then(|id| r.index_of(id))
+                .map_or("–".to_owned(), |i| r.states[i].name.clone()),
+            VirtualControlKind::Mode(m) => m
+                .active(memory)
+                .map_or("–".to_owned(), |i| m.states[i].name.clone()),
+            VirtualControlKind::Toggle(_) => on_off(Toggle::is_on(memory)),
+            VirtualControlKind::Momentary(m) => {
+                let held = self
+                    .runtime
+                    .held
+                    .get(&control.id)
+                    .is_some_and(|k| !k.is_empty());
+                on_off(m.active(held))
+            }
+            VirtualControlKind::Counter(c) => c.spec.format(c.value(memory)),
+        }
+    }
+
+    /// The toasts to show for what changed since the last call: a control that has "Show
+    /// toast on change" set and now shows something else, and the new profile after a
+    /// switch (if set). The first sight of a control, and the controls of a profile just
+    /// switched to, only set the baseline. The app calls this after every engine operation.
+    pub fn take_toasts(&mut self) -> Vec<ToastRequest> {
+        let mut out = Vec::new();
+        let profile = self.setup.profile();
+        let switched = self.toast_profile.as_deref() != Some(profile.id.as_str());
+        let current: Vec<(&VirtualControl, String)> = profile
+            .virtual_controls
+            .iter()
+            .filter(|c| c.show_toast)
+            .map(|c| (c, self.toast_value(c)))
+            .collect();
+        if switched {
+            if self.toast_profile.is_some() && self.setup.overlay.toasts.profile_toast {
+                out.push(ToastRequest {
+                    key: "profile".into(),
+                    title: "Profile:".into(),
+                    text: profile.name.clone(),
+                });
+            }
+            self.toast_seen = current
+                .into_iter()
+                .map(|(c, v)| (c.id.clone(), v))
+                .collect();
+            self.toast_profile = Some(profile.id.clone());
+            return out;
+        }
+        let mut seen = std::mem::take(&mut self.toast_seen);
+        seen.retain(|id, _| current.iter().any(|(c, _)| &c.id == id));
+        for (control, value) in current {
+            match seen.get(&control.id) {
+                Some(old) if *old == value => continue,
+                Some(_) => out.push(ToastRequest {
+                    key: control.id.clone(),
+                    title: control.name.clone(),
+                    text: value.clone(),
+                }),
+                None => {}
+            }
+            seen.insert(control.id.clone(), value);
+        }
+        self.toast_seen = seen;
+        out
+    }
+
+    pub fn set_overlay_appearance(&mut self, appearance: Appearance) {
+        self.setup.overlay.appearance = appearance.sanitized();
+        self.dirty.setup = true;
+    }
+
+    pub fn set_toast_settings(&mut self, toasts: ToastSettings) {
+        self.setup.overlay.toasts = toasts.sanitized();
+        self.dirty.setup = true;
+    }
+
+    /// Places the toast area of the active profile (`None`: back to the default place).
+    pub fn set_toast_position(&mut self, position: Option<WidgetPosition>) {
+        self.setup.profile_mut().toast_position = position.map(WidgetPosition::clamped);
+        self.dirty.setup = true;
+    }
+
+    // --- Import and restore ----------------------------------------------------------------
+
+    /// Replaces the whole setup (import "Replace all", restoring a backup). Function values
+    /// and radio states of functions and controls that still exist are kept; the rest start
+    /// fresh. The caller has validated `setup` (see `transfer::parse_import`) and built it with
+    /// `transfer::prepare_replace`.
+    pub fn replace_setup(&mut self, setup: Setup) {
+        let values = self.values();
+        self.setup = setup;
+        self.positions = self
+            .setup
+            .functions
+            .iter()
+            .map(|f| {
+                let pos = match (&f.kind, values.get(&f.id)) {
+                    (FunctionKind::Counter { spec, .. }, Some(v)) => spec.position_of(*v),
+                    _ => f.initial_position(),
+                };
+                (f.id.clone(), pos)
+            })
+            .collect();
+        let mut memory = std::mem::take(&mut self.memory);
+        memory.retain(|id, m| {
+            let Some(control) = self
+                .setup
+                .profiles
+                .iter()
+                .flat_map(|p| &p.virtual_controls)
+                .find(|c| &c.id == id)
+            else {
+                return false;
+            };
+            m.retain_existing(control);
+            !m.is_empty()
+        });
+        self.memory = memory;
+        self.detector = EncoderDetector::new(self.setup.detector);
+        self.steps.clear();
+        self.presses.clear();
+        self.zones.clear();
+        self.runtime = Runtime::default();
+        self.learn = Learn::Off;
+        self.overlay_editing = false;
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        self.dirty.controls = true;
+        if let Some(log) = &self.diagnostics {
+            log.record(Record::new(
+                Category::Log,
+                "Configuration replaced (import or restore)",
+            ));
+        }
+    }
+
+    /// Adds profiles of an imported setup (see `transfer::merge_profiles`). Nothing changes on
+    /// error.
+    pub fn import_profiles(
+        &mut self,
+        source: &Setup,
+        selected: &[String],
+    ) -> Result<crate::transfer::MergeReport, crate::transfer::TransferError> {
+        let report = crate::transfer::merge_profiles(&mut self.setup, source, selected)?;
+        for f in &self.setup.functions {
+            self.positions
+                .entry(f.id.clone())
+                .or_insert_with(|| f.initial_position());
+        }
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        if let Some(log) = &self.diagnostics {
+            let names: Vec<&str> = report.added.iter().map(|p| p.name.as_str()).collect();
+            log.record(Record::new(
+                Category::Log,
+                format!("Imported {} profile(s): {}", names.len(), names.join(", ")),
+            ));
+        }
+        Ok(report)
     }
 
     // --- Profiles -------------------------------------------------------------------------
@@ -2619,6 +2804,7 @@ mod tests {
         radio(&mut r);
         let id = engine
             .save_virtual_control(VirtualControl {
+                show_toast: false,
                 id: String::new(),
                 name: "Comms".into(),
                 kind: VirtualControlKind::Radio(r),
@@ -2897,6 +3083,7 @@ mod tests {
     fn validation() {
         let (mut engine, _) = engine_with_channel(EndBehavior::Wrap);
         let control = |radio: Radio| VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: "  ".into(),
             kind: VirtualControlKind::Radio(radio),
@@ -3384,6 +3571,155 @@ mod tests {
 
     fn engine_shell(engine: &Engine) -> ShellStatus {
         engine.shell_status().clone()
+    }
+
+    #[test]
+    fn replacing_the_setup_keeps_state_of_what_still_exists() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0); // B
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        let kept = engine.setup().clone();
+        let mut other = kept.clone();
+        other.profiles[0].virtual_controls.clear();
+        engine.replace_setup(other);
+        assert!(engine.active_states().is_empty());
+        assert!(engine.take_dirty().setup);
+        // Back to the original: the radio starts fresh (its memory went with the control).
+        engine.replace_setup(kept.clone());
+        assert_eq!(active(&engine, &id), None);
+        // A setup that keeps the control keeps its state.
+        press(&mut engine, 0, 100);
+        engine.replace_setup(kept);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn importing_profiles_adds_them_without_switching() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let source = engine.setup().clone();
+        let before = engine.setup().active_profile.clone();
+        let report = engine
+            .import_profiles(&source, &[DEFAULT_PROFILE_ID.into()])
+            .unwrap();
+        assert_eq!(report.added[0].name, "Default (2)");
+        assert_eq!(engine.setup().profiles.len(), 2);
+        assert_eq!(engine.setup().active_profile, before);
+        assert!(engine.take_dirty().setup);
+        assert!(engine.import_profiles(&source, &["ghost".into()]).is_err());
+        assert_eq!(engine.setup().profiles.len(), 2);
+    }
+
+    // --- Toasts ----------------------------------------------------------------------------
+
+    fn enable_toast(engine: &mut Engine, id: &str) {
+        let mut control = engine
+            .setup()
+            .profiles
+            .iter()
+            .flat_map(|p| p.virtual_controls.iter())
+            .find(|c| c.id == id)
+            .unwrap()
+            .clone();
+        control.show_toast = true;
+        engine.save_virtual_control(control).unwrap();
+    }
+
+    fn toast_texts(toasts: &[ToastRequest]) -> Vec<String> {
+        toasts
+            .iter()
+            .map(|t| format!("{} {}", t.title, t.text))
+            .collect()
+    }
+
+    #[test]
+    fn controls_toast_only_when_enabled_and_when_the_value_changes() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        // Off by default: nothing, however often it changes.
+        engine.take_toasts();
+        press(&mut engine, 0, 0);
+        assert!(engine.take_toasts().is_empty());
+
+        enable_toast(&mut engine, &id);
+        // Enabling sets the baseline (B is active); no toast for what already was.
+        assert!(engine.take_toasts().is_empty());
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Comms C"]);
+        // Nothing changed since: nothing again.
+        assert!(engine.take_toasts().is_empty());
+        // Re-selecting the active state is no change.
+        engine.set_radio_active(&id, Some("st-3".into())).unwrap();
+        assert!(engine.take_toasts().is_empty());
+        engine.set_radio_active(&id, None).unwrap();
+        let toasts = engine.take_toasts();
+        assert_eq!(toast_texts(&toasts), ["Comms –"]);
+        assert_eq!(toasts[0].key, id);
+    }
+
+    #[test]
+    fn toggle_and_counter_controls_toast_too() {
+        use crate::virtual_control::Toggle;
+        let (mut engine, _) = engine_with_radio(|_| {});
+        engine
+            .save_virtual_control(VirtualControl {
+                show_toast: true,
+                id: String::new(),
+                name: "Gear".into(),
+                kind: VirtualControlKind::Toggle(Toggle {
+                    toggle: vec![button(5)],
+                    ..Toggle::default()
+                }),
+            })
+            .unwrap();
+        engine.take_toasts();
+        press(&mut engine, 5, 0);
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Gear On"]);
+        press(&mut engine, 5, 100);
+        assert_eq!(toast_texts(&engine.take_toasts()), ["Gear Off"]);
+    }
+
+    #[test]
+    fn switching_profiles_toasts_the_profile_not_the_controls() {
+        let (mut engine, default_radio, dcs_radio) = engine_with_two_profiles();
+        enable_toast(&mut engine, &default_radio);
+        enable_toast(&mut engine, &dcs_radio);
+        engine.take_toasts();
+        engine.foreground_changed(Some("DCS.exe"));
+        // The profile toast only; the DCS controls start from their baseline.
+        let toasts = engine.take_toasts();
+        assert_eq!(toast_texts(&toasts), ["Profile: DCS"]);
+        assert_eq!(toasts[0].key, "profile");
+        assert!(engine.take_toasts().is_empty());
+        // And it can be switched off.
+        let mut settings = engine.setup().overlay.toasts;
+        settings.profile_toast = false;
+        engine.set_toast_settings(settings);
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        assert!(engine.take_toasts().is_empty());
+    }
+
+    #[test]
+    fn toast_settings_and_position_are_per_the_right_scope() {
+        let (mut engine, _, _) = engine_with_two_profiles();
+        engine.set_toast_settings(ToastSettings {
+            duration_ms: 10,
+            ..ToastSettings::default()
+        });
+        assert_eq!(
+            engine.setup().overlay.toasts.duration_ms,
+            crate::toast::MIN_DURATION_MS
+        );
+        // The position belongs to the profile, like the widgets.
+        engine.set_toast_position(Some(WidgetPosition { x: 0.3, y: 5.0 }));
+        assert_eq!(
+            engine.snapshot().toast_position,
+            Some(WidgetPosition { x: 0.3, y: 1.0 })
+        );
+        engine.foreground_changed(Some("DCS.exe"));
+        assert_eq!(engine.snapshot().toast_position, None);
+        engine.select_profile(DEFAULT_PROFILE_ID).unwrap();
+        assert!(engine.snapshot().toast_position.is_some());
+        engine.set_toast_position(None);
+        assert_eq!(engine.snapshot().toast_position, None);
     }
 
     #[test]
@@ -3941,6 +4277,7 @@ mod control_tests {
     fn add(engine: &mut Engine, name: &str, kind: VirtualControlKind) -> String {
         engine
             .save_virtual_control(VirtualControl {
+                show_toast: false,
                 id: String::new(),
                 name: name.into(),
                 kind,
@@ -4313,6 +4650,7 @@ mod control_tests {
         assert!(on(&e, &toggle));
         // Conditions are checked when saving.
         let bad = VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: "X".into(),
             kind: VirtualControlKind::Toggle(Toggle {
@@ -4489,6 +4827,7 @@ mod control_tests {
     fn held_controls_refuse_encoders_and_releases() {
         let mut e = engine();
         let err = e.save_virtual_control(VirtualControl {
+            show_toast: false,
             id: String::new(),
             name: String::new(),
             kind: VirtualControlKind::Momentary(Momentary {

@@ -5,7 +5,10 @@ import type { Backend } from "./backend";
 import type {
   Action,
   DeviceSnapshot,
+  BackupInfo,
   DiagEntry,
+  ExportKind,
+  Toast,
   DiscordCommand,
   GuideStep,
   EngineSnapshot,
@@ -176,7 +179,12 @@ export function createDemo(): Backend {
       { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null, missing: null },
       { id: "voicemeeter", name: "Voicemeeter", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
     ],
-    overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
+    overlay: {
+      visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [],
+      appearance: { theme: "dark", accent: null, backgroundOpacity: 72, textScale: 1, cornerRadius: 8 },
+      toasts: { durationMs: 2000, whileHidden: true, profileToast: true },
+    },
+    toastPosition: null,
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
     settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false, panicHotkey: "Ctrl+Shift+F12" },
     // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
@@ -187,7 +195,51 @@ export function createDemo(): Backend {
   const positions = new Map<string, number>();
   let tick = 0;
 
-  const emit = () => listeners.forEach((l) => l(structuredClone(s)));
+  // --- Toasts: the same rules as the app (a control with showToast, a profile switch) --------
+  let demoToasts: Toast[] = [];
+  const toastListeners = new Set<(t: Toast[]) => void>();
+  const toastTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let toastId = 0;
+  const toastSeen = new Map<string, string>();
+  let toastProfile: string | null = null;
+  const sendToasts = () => toastListeners.forEach((l) => l(structuredClone(demoToasts)));
+  function pushToast(key: string, title: string, text: string) {
+    const old = demoToasts.find((t) => t.key === key);
+    const toast: Toast = old ? { ...old, title, text, version: old.version + 1 } : { id: ++toastId, key, title, text, version: 0 };
+    demoToasts = [toast, ...demoToasts.filter((t) => t.key !== key)].slice(0, 3);
+    for (const k of toastTimers.keys()) if (!demoToasts.some((t) => t.key === k)) clearTimeout(toastTimers.get(k)), toastTimers.delete(k);
+    clearTimeout(toastTimers.get(key));
+    toastTimers.set(key, setTimeout(() => {
+      demoToasts = demoToasts.filter((t) => t.key !== key);
+      toastTimers.delete(key);
+      sendToasts();
+    }, Math.min(Math.max(s.overlay.toasts.durationMs, 500), 30000)));
+    sendToasts();
+  }
+  function checkToasts() {
+    const current = s.virtualControls.filter((c) => c.showToast);
+    const value = (c: (typeof current)[number]) =>
+      c.kind.type === "radio" || c.kind.type === "mode" ? (c.activeName ?? "–") : c.kind.type === "counter" ? (c.display ?? "") : c.on ? "On" : "Off";
+    if (toastProfile !== s.activeProfile) {
+      if (toastProfile !== null && s.overlay.toasts.profileToast) pushToast("profile", "Profile:", s.profiles.find((p) => p.id === s.activeProfile)?.name ?? "");
+      toastProfile = s.activeProfile;
+      toastSeen.clear();
+      current.forEach((c) => toastSeen.set(c.id, value(c)));
+      return;
+    }
+    for (const id of [...toastSeen.keys()]) if (!current.some((c) => c.id === id)) toastSeen.delete(id);
+    for (const c of current) {
+      const v = value(c);
+      const old = toastSeen.get(c.id);
+      if (old !== undefined && old !== v) pushToast(c.id, c.name, v);
+      toastSeen.set(c.id, v);
+    }
+  }
+
+  const emit = () => {
+    checkToasts();
+    listeners.forEach((l) => l(structuredClone(s)));
+  };
 
   // Discord: a simulated voice state, changed by Discord actions (idempotent, like the app).
   // To see the guide hints: a client ID ending in 0000 is "refused" (App Testers step), a
@@ -623,10 +675,50 @@ export function createDemo(): Backend {
     if (batch.length) diagListeners.forEach((cb) => cb(structuredClone(batch)));
   }, 100);
 
+  // --- Backups: a few made-up ones; "Back up now" adds to the list ---------------------------
+  let pendingImport: { id: string; name: string; executables?: string[]; virtualControls?: unknown[] }[] | null = null;
+  const demoBackups: BackupInfo[] = [3600, 26 * 3600, 5 * 86400].map((age, i) => {
+    const unixSecs = Math.floor(Date.now() / 1000) - age;
+    const d = new Date(unixSecs * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return { name: `setup-${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.json`, unixSecs, size: 4200 + i * 310, profiles: 2 + i };
+  });
+  function addBackup(_reason: string): BackupInfo {
+    let unixSecs = Math.floor(Date.now() / 1000);
+    while (demoBackups.some((b) => b.unixSecs === unixSecs)) unixSecs++;
+    const d = new Date(unixSecs * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const info = { name: `setup-${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.json`, unixSecs, size: 4400, profiles: s.profiles.length };
+    demoBackups.unshift(info);
+    return info;
+  }
+
   let nextEnc = 2;
   let nextFn = 1;
   let nextVc = 6;
   const ok = async () => emit();
+
+  // The demo overlay page (overlay.html): switch to the DCS profile and let something happen
+  // every few seconds, so toasts, "only after a change" widgets and themes can be looked at.
+  if (typeof location !== "undefined" && location.pathname.endsWith("overlay.html")) {
+    activate("profile-2");
+    for (const c of s.virtualControls) c.showToast = ["vc-1", "vc-2", "vc-3"].includes(c.id);
+    s.overlay.widgets = [
+      { type: "radio", control: "vc-1", layout: "vertical", position: { x: 0.04, y: 0.25 } },
+      { type: "radio", control: "vc-3", layout: "vertical", position: { x: 0.04, y: 0.5 }, visibility: { mode: "afterChange", seconds: 3 } },
+      { type: "radio", control: "vc-2", layout: "vertical", position: { x: 0.04, y: 0.6 } },
+      { type: "profileName", position: { x: 0.04, y: 0.1 } },
+    ];
+    let step = 0;
+    setInterval(() => {
+      step++;
+      const find = (id: string) => s.virtualControls.find((c) => c.id === id)!;
+      runCommand(find("vc-1"), { type: "increment" });
+      if (step % 2 === 0) stepCounter(find("vc-3"), 5);
+      if (step % 4 === 0) setToggle(find("vc-2"), !find("vc-2").on);
+      emit();
+    }, 2500);
+  }
 
   return {
     meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser", elevated: s.shell.elevated }),
@@ -1041,6 +1133,116 @@ export function createDemo(): Backend {
       if (!value) throw new Error("enter the secret value");
       // The demo keeps no secrets; only the reference comes back.
       return { store: "windowsCredentialManager", target: `detent/http/demo-${Date.now().toString(16)}` };
+    },
+    // --- Backup and transfer: files go through the browser (download / file picker) ----------
+    async exportSetup(ids) {
+      const chosen = ids ? s.profiles.filter((p) => ids.includes(p.id)) : s.profiles;
+      if (!chosen.length) throw new Error("no profile selected");
+      const profiles = chosen.map((p) => {
+        const data = p.id === s.activeProfile ? { controls: s.virtualControls, widgets: s.overlay.widgets } : (stash.get(p.id) ?? { controls: [], widgets: [] });
+        return { id: p.id, name: p.name, executables: p.executables, virtualControls: data.controls, overlayWidgets: data.widgets };
+      });
+      const file = {
+        format: "detent-export", formatVersion: 1, schemaVersion: 2, exportedAt: new Date().toISOString(), detentVersion: "0.1.0-demo",
+        kind: ids ? "profiles" : "all", credentialsRemoved: true, strippedFields: ["connections.discord.clientSecret"],
+        note: "Credentials are never exported.", setup: { schemaVersion: 2, profiles, activeProfile: chosen[0]!.id },
+      };
+      const name = ids?.length === 1 ? `${chosen[0]!.name}.detent.json` : "detent-demo.detent.json";
+      const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
+      const a = Object.assign(document.createElement("a"), { href: url, download: name });
+      a.click();
+      URL.revokeObjectURL(url);
+      return name;
+    },
+    async pickImportFile() {
+      const text = await new Promise<string | null>((resolve) => {
+        const input = Object.assign(document.createElement("input"), { type: "file", accept: ".json" });
+        input.onchange = () => (input.files?.[0] ? input.files[0].text().then(resolve) : resolve(null));
+        input.addEventListener("cancel", () => resolve(null));
+        input.click();
+      });
+      if (text === null) return null;
+      let file: { format?: string; formatVersion?: number; exportedAt?: string; kind?: ExportKind; setup?: { schemaVersion?: number; profiles?: { id: string; name: string; executables?: string[]; virtualControls?: unknown[] }[] } };
+      try {
+        file = JSON.parse(text);
+      } catch {
+        throw new Error("this is not a Detent export file: not valid JSON");
+      }
+      if (file.format !== "detent-export" || !file.setup?.profiles) throw new Error("this is not a Detent export file");
+      if ((file.formatVersion ?? 1) > 1) throw new Error("this file was exported by a newer Detent; update Detent to import it");
+      if ((file.setup.schemaVersion ?? 1) > 2) throw new Error("this file was written by a newer Detent (configuration schema); update Detent to import it");
+      pendingImport = file.setup.profiles;
+      return {
+        kind: file.kind ?? "all", exportedAt: file.exportedAt ?? null, detentVersion: null, schemaVersion: file.setup.schemaVersion ?? 1,
+        profiles: pendingImport.map((p) => ({ id: p.id, name: p.name, controls: p.virtualControls?.length ?? 0, executables: p.executables ?? [] })),
+        strippedFields: ["connections.discord.clientSecret"],
+      };
+    },
+    async cancelImport() {
+      pendingImport = null;
+    },
+    async applyImport(mode) {
+      if (!pendingImport) throw new Error("no import file is open; choose a file first");
+      addBackup("before import");
+      const incoming = mode.type === "replaceAll" ? pendingImport : pendingImport.filter((p) => mode.profiles.includes(p.id));
+      if (mode.type === "replaceAll") {
+        s.profiles = [];
+        stash.clear();
+      }
+      const added = incoming.map((p) => {
+        let name = p.name;
+        for (let i = 2; s.profiles.some((x) => x.name.toLowerCase() === name.toLowerCase()); i++) name = `${p.name} (${i})`;
+        const id = newProfileId();
+        s.profiles.push({ id, name, executables: [] });
+        stash.set(id, { controls: [], widgets: [] });
+        return { id, name, renamedFrom: name === p.name ? null : p.name };
+      });
+      if (mode.type === "replaceAll") {
+        s.activeProfile = s.profiles[0]!.id;
+        s.virtualControls = [];
+        s.overlay.widgets = [];
+        stash.delete(s.activeProfile);
+      }
+      pendingImport = null;
+      emit();
+      const renamed = added.filter((a) => a.renamedFrom).length;
+      return {
+        message: mode.type === "replaceAll" ? `Imported the whole configuration (${added.length} profiles).` : `Added ${added.length} profile(s).${renamed ? ` ${renamed} renamed because the name was taken.` : ""}`,
+        report: mode.type === "replaceAll" ? null : { added, droppedExecutables: [], addedEncoders: 0, addedFunctions: 0 },
+      };
+    },
+    async listBackups() {
+      return structuredClone(demoBackups);
+    },
+    async backupNow() {
+      return addBackup("manual");
+    },
+    async restoreBackup(name) {
+      addBackup("before restore");
+      return `Restored ${name} (demo: nothing changes).`;
+    },
+    async openBackupFolder() {
+      throw new Error("not available in the browser demo");
+    },
+    async setOverlayAppearance(appearance) {
+      s.overlay.appearance = { ...appearance, backgroundOpacity: Math.min(100, Math.max(0, appearance.backgroundOpacity)), textScale: Math.min(2.5, Math.max(0.5, appearance.textScale)), cornerRadius: Math.min(32, Math.max(0, appearance.cornerRadius)), accent: appearance.accent && /^#[0-9a-f]{6}$/i.test(appearance.accent) ? appearance.accent : null };
+      emit();
+    },
+    async setToastSettings(settings) {
+      s.overlay.toasts = { ...settings, durationMs: Math.min(30000, Math.max(500, settings.durationMs)) };
+      emit();
+    },
+    async setToastPosition(position) {
+      s.toastPosition = position && { x: Math.min(1, Math.max(0, position.x)), y: Math.min(1, Math.max(0, position.y)) };
+      emit();
+    },
+    async subscribeToasts(cb) {
+      toastListeners.add(cb);
+      cb(structuredClone(demoToasts));
+      return () => toastListeners.delete(cb);
+    },
+    async testToast() {
+      pushToast("test", "Test toast", "It works");
     },
     async subscribeDiagnostics(cb) {
       diagListeners.add(cb);

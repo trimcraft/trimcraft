@@ -115,7 +115,50 @@ export interface WidgetPosition {
 }
 
 /** A widget plus where it is; `position: null` stacks it in the anchored corner. */
-export type OverlayItem = OverlayWidget & { position: WidgetPosition | null };
+/** When a widget is shown. */
+export type WidgetVisibility = { mode: "always" } | { mode: "afterChange"; seconds: number };
+
+export type OverlayItem = OverlayWidget & {
+  position: WidgetPosition | null;
+  /** Missing: always. */
+  visibility?: WidgetVisibility;
+  /** Scale of this widget on top of the overlay's; missing: as the overlay. */
+  scale?: number;
+  /** 0..1; missing: 1. */
+  opacity?: number;
+};
+
+export type Theme = "dark" | "light" | "highContrast" | "hudGreen";
+
+export interface Appearance {
+  theme: Theme;
+  /** "#rrggbb"; null: the theme's own. */
+  accent: string | null;
+  /** Percent. */
+  backgroundOpacity: number;
+  /** Scale of the text only. */
+  textScale: number;
+  /** Pixels. */
+  cornerRadius: number;
+}
+
+export interface ToastSettings {
+  durationMs: number;
+  /** Toasts appear even when the overlay is hidden with the hotkey. */
+  whileHidden: boolean;
+  /** Switching profiles shows a toast. */
+  profileToast: boolean;
+}
+
+/** A toast on the overlay (detent-core toast::Toast). A title ending in ":" is followed by a space, any other by " · ". */
+export interface Toast {
+  id: number;
+  key: string;
+  title: string;
+  text: string;
+  /** Counts the updates of this toast. */
+  version: number;
+}
 
 export interface MonitorRef {
   name: string | null;
@@ -138,6 +181,8 @@ export interface OverlayConfig {
   anchor: Anchor;
   margin: number;
   scale: number;
+  appearance: Appearance;
+  toasts: ToastSettings;
   widgets: OverlayItem[];
 }
 
@@ -180,6 +225,8 @@ export interface EngineSnapshot {
   connectors: ConnectorView[];
   /** Global settings with the active profile's widgets. */
   overlay: OverlayConfig;
+  /** Where the active profile puts the toast area; null: the default place. */
+  toastPosition: WidgetPosition | null;
   detector: DetectorConfig;
   /** App-wide settings (Settings page). */
   settings: AppSettings;
@@ -648,6 +695,8 @@ export interface VirtualControlDef<K extends VirtualControlKind = VirtualControl
   id: string;
   name: string;
   kind: K;
+  /** Show an overlay toast when its state or value changes. */
+  showToast?: boolean;
 }
 
 export type VirtualControlView = VirtualControlDef & {
@@ -750,4 +799,50 @@ export type ProfileTarget = { type: "profile"; profile: string } | { type: "next
 export interface ProcessWindow {
   exe: string;
   title: string;
+}
+
+// --- Backup and transfer (detent-core: backup.rs, transfer.rs) --------------------------------
+
+export interface BackupInfo {
+  /** File name; the id for restoring. */
+  name: string;
+  /** When it was written (UTC seconds since the Unix epoch). */
+  unixSecs: number;
+  size: number;
+  /** Null if the file cannot be read. */
+  profiles: number | null;
+}
+
+export type ExportKind = "all" | "profiles" | "backup";
+
+export interface ImportProfileSummary {
+  id: string;
+  name: string;
+  controls: number;
+  executables: string[];
+}
+
+/** What an import file holds, as shown before importing. */
+export interface ImportSummary {
+  kind: ExportKind;
+  exportedAt: string | null;
+  detentVersion: string | null;
+  schemaVersion: number;
+  profiles: ImportProfileSummary[];
+  /** Fields left out when exporting (credentials); they have to be entered again. */
+  strippedFields: string[];
+}
+
+export type ImportMode = { type: "replaceAll" } | { type: "addProfiles"; profiles: string[] };
+
+export interface AddedProfile {
+  id: string;
+  name: string;
+  /** The name in the file, when it had to change. */
+  renamedFrom: string | null;
+}
+
+export interface ImportResult {
+  message: string;
+  report: { added: AddedProfile[]; droppedExecutables: string[]; addedEncoders: number; addedFunctions: number } | null;
 }

@@ -6,6 +6,7 @@
 
 pub mod action;
 pub mod audio;
+pub mod backup;
 pub mod connection;
 pub mod device;
 pub mod diagnostics;
@@ -27,6 +28,8 @@ pub mod settings;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
+pub mod toast;
+pub mod transfer;
 pub mod trigger;
 pub mod virtual_control;
 pub mod voicemeeter;
@@ -45,8 +48,8 @@ pub use engine::{Dirty, Engine, EngineError, EngineSnapshot, MacroSignal, Manual
 pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
 pub use overlay::{
-    Anchor, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget, RadioLayout,
-    WidgetList, WidgetPosition,
+    Anchor, Appearance, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget,
+    RadioLayout, WidgetList, WidgetPosition,
 };
 pub use path::Screens;
 pub use profile::{NoMatch, Profile, ProfileSwitching, ProfileTarget};
@@ -55,6 +58,7 @@ pub use settings::{AppSettings, AutostartKind, ShellStatus};
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};
+pub use toast::{Toast, ToastQueue, ToastRequest};
 pub use trigger::{ButtonRef, Condition, PressKind, TriggerInput};
 pub use virtual_control::{
     ActionRequest, CounterControl, HatDirection, Mode, ModeState, Momentary, Phase, Radio,

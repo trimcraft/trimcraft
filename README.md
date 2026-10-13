@@ -292,6 +292,43 @@ Detent's keys and mouse will not reach it (also in the log).
 
 Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
 
+## Backup and transfer
+
+Settings has a section **Backup & transfer**.
+
+- **Export** writes the configuration, or selected profiles, to a `.detent.json` file (also per profile in the profile
+  list). The file holds the schema version and the export time. Credentials are never exported: the Discord client secret
+  reference and any field named like a secret, token, password or authorization header are emptied, and the file lists
+  what was left out. After importing, enter those under Connections.
+- **Import** reads such a file (or a plain `setup.json`). Older schemas are converted; files from a newer Detent are
+  refused with a message. **Replace all** swaps the whole configuration (this computer's tray and startup settings stay,
+  and so do the Discord credentials when the file names the same Client ID) after a confirmation. **Add profiles** adds the
+  chosen profiles: names that are taken get a number ("DCS (2)"), ids are renumbered where they clash, the encoders and
+  counters the profiles use come along, and programs that another profile already lists are not taken over. Before
+  either, a backup of the current configuration is written; if that fails, nothing is imported.
+- **Automatic backups**: whenever `setup.json` is saved, at most every 5 minutes, and before every import and restore,
+  Detent copies it to `backups\setup-YYYYMMDD-HHMMSS.json` (UTC) in the config folder. It keeps the latest 20 and the
+  newest of each of the last 14 days. The list shows date, profile count and size; **Restore** (after a confirmation,
+  with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
+  in the event log.
+
+## Overlay toasts and appearance
+
+- **Toasts**: every virtual control has "Show toast on change" (off by default) in its editor. When its state or value
+  changes, a toast shows the name and the new state, e.g. "COM1 · 121.500" or "Radio · Kanal 2": it fades in and out, at
+  most 3 are stacked with the newest on top, and a repeated change of the same control updates its toast instead of
+  adding one. Switching the profile shows "Profile: <name>" (can be turned off). Duration (default 2 s), the profile
+  toast and "Show toasts while the overlay is hidden" are under Settings > Overlay appearance. With the overlay hidden by
+  the hotkey, only the toasts appear; the window stays click-through and is shown without activation, so a game keeps
+  the keyboard and mouse. The toast area is placed in Edit layout like a widget (default: top centre) and belongs to the
+  profile. "Show a test toast" in Settings tries it.
+- **Widget visibility**: in the Overlay panel each widget can be "Always" or "Only after a change" (shown for N seconds,
+  default 3, then it fades out), and can have its own size and opacity on top of the overlay's. In layout edit mode all
+  widgets are visible.
+- **Appearance** (Settings > Overlay appearance, all profiles): theme (Dark, Light, High contrast, HUD green), accent
+  color for active states, background opacity, text size and corner radius, with a live preview; the overlay window
+  follows while you adjust. The highlight of the active state never changes a widget's size in any theme.
+
 ## Layout
 
 | Path | What |

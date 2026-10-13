@@ -3,7 +3,7 @@
   import type { Anchor, EngineSnapshot, MonitorInfo, MonitorRef, OverlayItem, RadioLayout } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
   import { CONTROL_TYPES, controlName, findDevice } from "../lib/format";
-  import OverlayWidgets from "./OverlayWidgets.svelte";
+  import OverlayPreview from "./OverlayPreview.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
@@ -99,6 +99,19 @@
     update(index, { position: { ...pos, [axis]: v } });
   }
 
+  function setVisibility(index: number, afterChange: boolean) {
+    update(index, { visibility: afterChange ? { mode: "afterChange", seconds: 3 } : { mode: "always" } });
+  }
+
+  /** An empty field removes the setting. `max` is the largest percent. */
+  function setOptional(index: number, key: "scale" | "opacity", text: string, max: number) {
+    const item = { ...snapshot.overlay.widgets[index]! } as OverlayItem;
+    const percent = Number(text);
+    if (text.trim() === "" || !Number.isFinite(percent)) delete item[key];
+    else item[key] = Math.min(Math.max(percent, key === "scale" ? 50 : 0), max) / 100;
+    run(async () => (await backend()).setOverlayWidget(index, item));
+  }
+
   /** Radios and modes show their states, vertically or horizontally. */
   const hasStates = (id: string) => ["radio", "mode"].includes(snapshot.virtualControls.find((c) => c.id === id)?.kind.type ?? "");
   const pct = (v: number) => Math.round(v * 1000) / 10;
@@ -154,7 +167,7 @@
   {#if snapshot.overlay.widgets.length}
     <h2>Widgets</h2>
     <table class="widgets">
-      <thead><tr><th>Widget</th><th>X %</th><th>Y %</th><th></th></tr></thead>
+      <thead><tr><th>Widget</th><th>X %</th><th>Y %</th><th></th><th>Visible</th><th title="On top of the overlay size">Size %</th><th title="Of the whole widget, on top of the background opacity in Settings">Opacity %</th></tr></thead>
       <tbody>
         {#each snapshot.overlay.widgets as w, i (i)}
           <tr>
@@ -173,6 +186,17 @@
                 </select>
               {/if}
             </td>
+            <td class="vis">
+              <select value={w.visibility?.mode ?? "always"} onchange={(e) => setVisibility(i, e.currentTarget.value === "afterChange")}>
+                <option value="always">Always</option>
+                <option value="afterChange">Only after a change</option>
+              </select>
+              {#if w.visibility?.mode === "afterChange"}
+                <input type="number" min="1" max="60" step="1" value={w.visibility.seconds} title="Seconds shown after a change" onchange={(e) => update(i, { visibility: { mode: "afterChange", seconds: Math.min(60, Math.max(1, Math.round(Number(e.currentTarget.value) || 3))) } })} /> s
+              {/if}
+            </td>
+            <td><input type="number" min="50" max="300" step="5" placeholder="100" value={w.scale ? Math.round(w.scale * 100) : ""} onchange={(e) => setOptional(i, "scale", e.currentTarget.value, 300)} /></td>
+            <td><input type="number" min="0" max="100" step="5" placeholder="100" value={w.opacity !== undefined ? Math.round(w.opacity * 100) : ""} onchange={(e) => setOptional(i, "opacity", e.currentTarget.value, 100)} /></td>
           </tr>
         {/each}
       </tbody>
@@ -192,17 +216,18 @@
     {/if}
   {/if}
   <h2>Preview</h2>
-  <div class="preview"><OverlayWidgets {snapshot} /></div>
+  <OverlayPreview {snapshot} />
 </section>
 
 <style>
   .layout { margin-top: 8px; }
   .layout label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
-  .preview { background: repeating-linear-gradient(45deg, #1c2128, #1c2128 10px, #20262e 10px, #20262e 20px); padding: 12px; border-radius: 6px; }
   h2 { margin-top: 12px; }
   .small { font-size: 12px; }
   .widgets { border-collapse: collapse; font-size: 12px; }
   .widgets th { text-align: left; color: var(--muted); font-weight: normal; padding: 2px 8px 2px 0; }
   .widgets td { padding: 2px 8px 2px 0; border-top: 1px solid var(--line); }
   .widgets input[type="number"] { width: 5em; }
+  .vis { white-space: nowrap; }
+  .vis input[type="number"] { width: 3.5em; }
 </style>

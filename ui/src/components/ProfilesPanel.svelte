@@ -4,10 +4,13 @@
   // rename / delete / make default.
   import type { EngineSnapshot, NoMatch, ProcessWindow, ProfileView } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
+  import ImportFlow from "./ImportFlow.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
   let error = $state("");
+  /** Where the last export went. */
+  let exported = $state("");
   let newName = $state("");
   /** Profile being renamed, with the draft name. */
   let renaming = $state<{ id: string; name: string } | null>(null);
@@ -32,6 +35,14 @@
   }
 
   const b = backend;
+
+  const exportProfile = (p: ProfileView) => () => {
+    exported = "";
+    return run(async () => {
+      const path = await (await b()).exportSetup([p.id]);
+      if (path) exported = `Saved ${p.name} to ${path}`;
+    });
+  };
 
   async function create() {
     if (await run(async () => (await b()).createProfile(newName))) newName = "";
@@ -78,6 +89,8 @@
     becomes active when one of its programs comes to the front. Switching never runs actions: every radio keeps its state.
   </p>
   {#if error}<p class="error">{error}</p>{/if}
+  {#if exported}<p class="ok">{exported}</p>{/if}
+  <ImportFlow onlyProfiles />
 
   <div class="row settings">
     <label><input type="checkbox" checked={snapshot.profileSwitching.autoSwitch} onchange={(e) => setSwitching({ autoSwitch: e.currentTarget.checked })} /> Auto-switch by the program in the foreground</label>
@@ -108,6 +121,7 @@
         <span class="spacer"></span>
         {#if !active}<button class="small" onclick={() => run(async () => (await b()).selectProfile(p.id))}>Activate</button>{/if}
         {#if renaming?.id !== p.id}<button class="small" onclick={() => (renaming = { id: p.id, name: p.name })}>Rename</button>{/if}
+        <button class="small" title="Save this profile to a .detent.json file (without credentials)" onclick={exportProfile(p)}>Export</button>
         <button class="small" title="Copy with all radios, widgets and states (without its programs)" onclick={() => run(async () => (await b()).duplicateProfile(p.id, ""))}>Duplicate</button>
         {#if i > 0}<button class="small" onclick={() => run(async () => (await b()).makeDefaultProfile(p.id))}>Make default</button>{/if}
         {#if confirmDelete === p.id}
@@ -161,6 +175,7 @@
 
 <style>
   .small { font-size: 12px; }
+  .ok { color: var(--ok); margin: 0 0 6px; font-size: 12px; overflow-wrap: anywhere; }
   .settings { margin-bottom: 8px; }
   .settings label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
   .settings label.off { opacity: 0.55; }

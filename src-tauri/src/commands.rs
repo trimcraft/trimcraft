@@ -71,6 +71,19 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
+        crate::transfer::export_setup,
+        crate::transfer::pick_import_file,
+        crate::transfer::cancel_import,
+        crate::transfer::apply_import,
+        crate::transfer::list_backups,
+        crate::transfer::backup_now,
+        crate::transfer::restore_backup,
+        crate::transfer::open_backup_folder,
+        set_overlay_appearance,
+        set_toast_settings,
+        set_toast_position,
+        get_toasts,
+        test_toast,
         set_settings,
         restart_elevated,
         select_profile,
@@ -220,11 +233,7 @@ fn set_hotkey(app: AppHandle, shared: State<'_, Arc<Shared>>, hotkey: String) ->
         return Ok(());
     }
     let panic = shared.engine().setup().settings.panic_hotkey.clone();
-    if hotkey
-        .parse::<tauri_plugin_global_shortcut::Shortcut>()
-        .ok()
-        == panic.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
-    {
+    if overlay::same_hotkey(&hotkey, &panic) {
         return Err("the overlay hotkey must differ from the panic hotkey".into());
     }
     overlay::unregister_hotkey(&app, &old);
@@ -711,11 +720,7 @@ fn set_settings(
     let old = shared.engine().setup().settings.panic_hotkey.clone();
     if settings.panic_hotkey != old {
         let overlay_hotkey = shared.engine().setup().overlay.hotkey.clone();
-        let same = |a: &str, b: &str| {
-            a.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
-                == b.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
-        };
-        if same(&settings.panic_hotkey, &overlay_hotkey) {
+        if overlay::same_hotkey(&settings.panic_hotkey, &overlay_hotkey) {
             return Err("the panic hotkey must differ from the overlay hotkey".into());
         }
         overlay::unregister_hotkey(&app, &old);
@@ -742,6 +747,66 @@ async fn restart_elevated(app: AppHandle) -> Res<()> {
         .map_err(|e| e.to_string())??;
     app.exit(0);
     Ok(())
+}
+
+/// Colors, text size and corners of the overlay (Settings > Overlay appearance). Values are
+/// kept within their bounds.
+#[tauri::command]
+fn set_overlay_appearance(
+    shared: State<'_, Arc<Shared>>,
+    appearance: detent_core::Appearance,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_overlay_appearance(appearance);
+        Ok(())
+    })
+}
+
+/// How long toasts stay, whether they show while the overlay is hidden, and the profile toast.
+#[tauri::command]
+fn set_toast_settings(
+    shared: State<'_, Arc<Shared>>,
+    settings: detent_core::overlay::ToastSettings,
+) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_settings(settings);
+        Ok(())
+    })
+}
+
+/// Places the toast area of the active profile; `None` puts it back to the default place.
+#[tauri::command]
+fn set_toast_position(shared: State<'_, Arc<Shared>>, position: Option<WidgetPosition>) -> Res<()> {
+    with(&shared, |e| {
+        e.set_toast_position(position);
+        Ok(())
+    })
+}
+
+/// The toasts on screen now; later changes arrive as `detent://toasts` events.
+#[tauri::command]
+fn get_toasts(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Toast> {
+    shared.toasts.list()
+}
+
+/// Shows a sample toast, as a real one would appear.
+#[tauri::command]
+fn test_toast(shared: State<'_, Arc<Shared>>) {
+    let (settings, visible, editing) = {
+        let engine = shared.engine();
+        let overlay = &engine.setup().overlay;
+        (overlay.toasts, overlay.visible, engine.overlay_editing())
+    };
+    if visible || settings.while_hidden || editing {
+        shared.toasts.push(
+            vec![detent_core::ToastRequest {
+                key: "test".into(),
+                title: "Test toast".into(),
+                text: "It works".into(),
+            }],
+            settings.duration_ms,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -961,6 +1026,13 @@ mod tests {
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .is_ok()
         );
+        // The default panic hotkey differs from the default overlay hotkey, also when spelled
+        // differently.
+        assert!(!overlay::same_hotkey(
+            detent_core::settings::DEFAULT_PANIC_HOTKEY,
+            &detent_core::OverlayConfig::default().hotkey
+        ));
+        assert!(overlay::same_hotkey("Ctrl+Shift+F12", "shift+ctrl+F12"));
         let _: Movement = serde_json::from_str(r#""absolute""#).unwrap();
         let _: Movement = serde_json::from_str(r#""relative""#).unwrap();
         let config: RecorderConfig = serde_json::from_str(
@@ -1082,5 +1154,27 @@ mod tests {
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn appearance_and_toast_payloads_deserialise() {
+        let appearance: detent_core::Appearance = serde_json::from_str(
+            r##"{"theme":"hudGreen","accent":"#39ff6a","backgroundOpacity":60,"textScale":1.25,"cornerRadius":4}"##,
+        )
+        .unwrap();
+        assert_eq!(appearance.theme, detent_core::overlay::Theme::HudGreen);
+        let settings: detent_core::overlay::ToastSettings =
+            serde_json::from_str(r#"{"durationMs":3000,"whileHidden":false,"profileToast":true}"#)
+                .unwrap();
+        assert_eq!(settings.duration_ms, 3000);
+        // A widget as the Overlay panel sends it back, with the new settings.
+        let item: OverlayItem = serde_json::from_str(
+            r#"{"type":"profileName","position":null,"visibility":{"mode":"afterChange","seconds":3},"scale":1.5,"opacity":0.5}"#,
+        )
+        .unwrap();
+        assert_eq!(item.scale, Some(1.5));
+        let position: Option<WidgetPosition> =
+            serde_json::from_str(r#"{"x":0.5,"y":0.1}"#).unwrap();
+        assert!(position.is_some());
     }
 }

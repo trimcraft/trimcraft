@@ -111,6 +111,37 @@ impl WidgetPosition {
     }
 }
 
+/// When a widget is shown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum WidgetVisibility {
+    #[default]
+    Always,
+    /// Appears when what it shows changes, stays for `seconds`, then fades out.
+    AfterChange { seconds: u32 },
+}
+
+impl WidgetVisibility {
+    pub const DEFAULT_SECONDS: u32 = 3;
+    pub const MAX_SECONDS: u32 = 60;
+
+    fn is_always(&self) -> bool {
+        *self == Self::Always
+    }
+
+    fn sanitized(self) -> Self {
+        match self {
+            Self::Always => Self::Always,
+            Self::AfterChange { seconds } => Self::AfterChange {
+                seconds: seconds.clamp(1, Self::MAX_SECONDS),
+            },
+        }
+    }
+}
+
+/// Bounds of the per-widget scale.
+pub const WIDGET_SCALE_RANGE: (f32, f32) = (0.5, 3.0);
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayItem {
@@ -119,6 +150,29 @@ pub struct OverlayItem {
     /// `None`: stacked in the anchored corner.
     #[serde(default)]
     pub position: Option<WidgetPosition>,
+    #[serde(default, skip_serializing_if = "WidgetVisibility::is_always")]
+    pub visibility: WidgetVisibility,
+    /// Scale of this widget on top of the overlay's; `None`: as the overlay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    /// Opacity of this widget (0..=1) on top of the overlay's background opacity; `None`: 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+}
+
+impl OverlayItem {
+    /// Keeps the settings a window may send within their bounds.
+    pub fn sanitized(mut self) -> Self {
+        self.position = self.position.map(WidgetPosition::clamped);
+        self.visibility = self.visibility.sanitized();
+        let finite = |v: f32| v.is_finite().then_some(v);
+        self.scale = self
+            .scale
+            .and_then(finite)
+            .map(|s| s.clamp(WIDGET_SCALE_RANGE.0, WIDGET_SCALE_RANGE.1));
+        self.opacity = self.opacity.and_then(finite).map(|o| o.clamp(0.0, 1.0));
+        self
+    }
 }
 
 impl From<OverlayWidget> for OverlayItem {
@@ -126,6 +180,9 @@ impl From<OverlayWidget> for OverlayItem {
         Self {
             widget,
             position: None,
+            visibility: WidgetVisibility::Always,
+            scale: None,
+            opacity: None,
         }
     }
 }
@@ -164,6 +221,100 @@ pub fn find_monitor(saved: &MonitorRef, available: &[MonitorRef]) -> Option<usiz
     available.iter().position(same_pos)
 }
 
+/// Colors and shapes of the overlay. A theme sets the colors; the other fields adjust it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Theme {
+    /// The look before themes existed.
+    #[default]
+    Dark,
+    Light,
+    HighContrast,
+    HudGreen,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Appearance {
+    pub theme: Theme,
+    /// `#rrggbb`, for active states; `None`: the theme's own.
+    pub accent: Option<String>,
+    /// Opacity of the widget backgrounds, in percent.
+    pub background_opacity: u8,
+    /// Scale of the text only (the overlay's `scale` scales everything).
+    pub text_scale: f32,
+    /// Corner radius of the widget backgrounds, in pixels.
+    pub corner_radius: u8,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            theme: Theme::default(),
+            accent: None,
+            background_opacity: 72,
+            text_scale: 1.0,
+            corner_radius: 8,
+        }
+    }
+}
+
+impl Appearance {
+    pub const TEXT_SCALE_RANGE: (f32, f32) = (0.5, 2.5);
+    pub const MAX_RADIUS: u8 = 32;
+
+    /// `#rrggbb` only (any case); anything else is no color.
+    pub fn valid_color(color: &str) -> bool {
+        color.len() == 7
+            && color.starts_with('#')
+            && color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// Keeps values from a window within their bounds.
+    pub fn sanitized(mut self) -> Self {
+        self.accent = self.accent.filter(|c| Self::valid_color(c));
+        self.background_opacity = self.background_opacity.min(100);
+        self.text_scale = if self.text_scale.is_finite() {
+            self.text_scale
+                .clamp(Self::TEXT_SCALE_RANGE.0, Self::TEXT_SCALE_RANGE.1)
+        } else {
+            1.0
+        };
+        self.corner_radius = self.corner_radius.min(Self::MAX_RADIUS);
+        self
+    }
+}
+
+/// When and for how long toasts show. Which controls toast is set per control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ToastSettings {
+    pub duration_ms: u32,
+    /// Toasts appear even when the overlay was hidden with the hotkey (only they show).
+    pub while_hidden: bool,
+    /// Switching profiles shows a toast with the new profile's name.
+    pub profile_toast: bool,
+}
+
+impl Default for ToastSettings {
+    fn default() -> Self {
+        Self {
+            duration_ms: crate::toast::DEFAULT_DURATION_MS,
+            while_hidden: true,
+            profile_toast: true,
+        }
+    }
+}
+
+impl ToastSettings {
+    pub fn sanitized(mut self) -> Self {
+        self.duration_ms = self
+            .duration_ms
+            .clamp(crate::toast::MIN_DURATION_MS, crate::toast::MAX_DURATION_MS);
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OverlayConfig {
@@ -177,6 +328,8 @@ pub struct OverlayConfig {
     /// Distance of that stack from the corner, in logical pixels.
     pub margin: u32,
     pub scale: f32,
+    pub appearance: Appearance,
+    pub toasts: ToastSettings,
     /// The active profile's widgets. The setup file stores them per profile, so there the
     /// list is empty and left out.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -192,6 +345,8 @@ impl Default for OverlayConfig {
             anchor: Anchor::default(),
             margin: 32,
             scale: 1.0,
+            appearance: Appearance::default(),
+            toasts: ToastSettings::default(),
             widgets: WidgetList::default(),
         }
     }
@@ -325,6 +480,83 @@ mod tests {
     }
 
     #[test]
+    fn new_widget_settings_stay_out_of_old_json_and_are_sanitized() {
+        let plain: OverlayItem = OverlayWidget::ProfileName.into();
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            r#"{"type":"profileName","position":null}"#
+        );
+        let old: OverlayItem =
+            serde_json::from_str(r#"{"type":"profileName","position":null}"#).unwrap();
+        assert_eq!(old.visibility, WidgetVisibility::Always);
+        assert_eq!(old.scale, None);
+
+        let item = OverlayItem {
+            visibility: WidgetVisibility::AfterChange { seconds: 0 },
+            scale: Some(9.0),
+            opacity: Some(f32::NAN),
+            position: Some(WidgetPosition { x: 2.0, y: -1.0 }),
+            ..plain
+        }
+        .sanitized();
+        assert_eq!(
+            item.visibility,
+            WidgetVisibility::AfterChange { seconds: 1 }
+        );
+        assert_eq!(item.scale, Some(WIDGET_SCALE_RANGE.1));
+        assert_eq!(item.opacity, None);
+        assert_eq!(item.position, Some(WidgetPosition { x: 1.0, y: 0.0 }));
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains(r#""visibility":{"mode":"afterChange","seconds":1}"#),
+            "{json}"
+        );
+        assert_eq!(serde_json::from_str::<OverlayItem>(&json).unwrap(), item);
+    }
+
+    #[test]
+    fn appearance_and_toast_settings_have_defaults_and_bounds() {
+        let cfg: OverlayConfig = serde_json::from_str(r#"{"visible":true}"#).unwrap();
+        assert_eq!(cfg.appearance, Appearance::default());
+        assert_eq!(cfg.toasts, ToastSettings::default());
+        assert_eq!(cfg.toasts.duration_ms, 2000);
+        assert!(cfg.toasts.while_hidden && cfg.toasts.profile_toast);
+
+        let a = Appearance {
+            theme: Theme::HudGreen,
+            accent: Some("red".into()),
+            background_opacity: 250,
+            text_scale: f32::INFINITY,
+            corner_radius: 200,
+        }
+        .sanitized();
+        assert_eq!(a.accent, None);
+        assert_eq!(a.background_opacity, 100);
+        assert_eq!(a.text_scale, 1.0);
+        assert_eq!(a.corner_radius, Appearance::MAX_RADIUS);
+        let ok = Appearance {
+            accent: Some("#A0c0Ff".into()),
+            text_scale: 9.0,
+            ..Appearance::default()
+        }
+        .sanitized();
+        assert_eq!(ok.accent.as_deref(), Some("#A0c0Ff"));
+        assert_eq!(ok.text_scale, Appearance::TEXT_SCALE_RANGE.1);
+        assert_eq!(
+            serde_json::to_value(Theme::HighContrast).unwrap(),
+            "highContrast"
+        );
+        assert!(!Appearance::valid_color("#12345"));
+        assert!(!Appearance::valid_color("#12345g"));
+
+        let t = ToastSettings {
+            duration_ms: 1,
+            ..ToastSettings::default()
+        }
+        .sanitized();
+        assert_eq!(t.duration_ms, crate::toast::MIN_DURATION_MS);
+    }
+    #[test]
     fn widget_json_shape_is_stable() {
         let w: OverlayItem = OverlayWidget::Control {
             device: DeviceId("231d:0200#1".into()),
@@ -342,6 +574,7 @@ mod tests {
                 layout: RadioLayout::Horizontal,
             },
             position: Some(WidgetPosition { x: 0.5, y: 0.25 }),
+            ..OverlayItem::from(OverlayWidget::ProfileName)
         };
         assert_eq!(
             serde_json::to_string(&radio).unwrap(),

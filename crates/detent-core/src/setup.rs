@@ -544,6 +544,7 @@ mod tests {
             })
         };
         let control = crate::virtual_control::VirtualControl {
+            show_toast: false,
             id: "vc-1".into(),
             name: "T".into(),
             kind: crate::virtual_control::VirtualControlKind::Toggle(

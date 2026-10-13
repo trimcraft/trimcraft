@@ -29,7 +29,7 @@ tauri-plugin-opener = "2"
 # Save and open dialogs for export and import (used from Rust only).
 tauri-plugin-dialog = "2"
 # Discord token endpoint (HTTPS, rustls).
-ureq = "2"
+ureq = "3"
 # A second launch shows the running instance instead of starting another one.
 tauri-plugin-single-instance = "2"
 # One-time "keeps running in the tray" notification; used from Rust only.

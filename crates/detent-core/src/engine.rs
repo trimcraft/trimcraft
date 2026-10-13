@@ -32,6 +32,10 @@ use crate::virtual_control::{
     ActionRequest, Command, ControlError, CounterCommand, ModeCommand, RadioCommand, RadioMemory,
     Startup, TOGGLE_ON, Toggle, ToggleCommand, VirtualControl, VirtualControlKind,
 };
+use crate::vjoy::{
+    ButtonOp, ButtonOutput, VjoyButton, VjoyCommand, VjoyMapping, VjoyState, VjoyStateView,
+    counter_axis,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use thiserror::Error;
@@ -88,6 +92,8 @@ pub enum EngineError {
     UnknownMode(String),
     #[error("this command does not apply to this kind of control")]
     NotForControl,
+    #[error(transparent)]
+    Vjoy(#[from] crate::vjoy::VjoyError),
 }
 
 /// Commands the UI runs on a control, as if a trigger had fired.
@@ -201,6 +207,10 @@ pub struct EngineSnapshot {
     pub foreground: Option<String>,
     /// The active profile's virtual controls.
     pub virtual_controls: Vec<VirtualControlView>,
+    /// The active profile's physical-to-vJoy mappings.
+    pub vjoy_mappings: Vec<VjoyMapping>,
+    /// What Detent wants on the vJoy devices right now (empty while vJoy is disabled).
+    pub vjoy_output: VjoyStateView,
     /// `None` unless learn mode is on or just captured something.
     pub learn: Option<LearnView>,
     /// The overlay is interactive so widgets can be dragged.
@@ -239,6 +249,12 @@ pub struct Engine {
     /// ids are unique across profiles).
     memory: HashMap<String, RadioMemory>,
     auto_switch: AutoSwitch,
+    /// What vJoy actions pressed or set (until changed, the profile changes or vJoy is off).
+    vjoy_latch: VjoyState,
+    /// vJoy buttons pressed briefly: (release time, button).
+    vjoy_pulses: Vec<(u64, VjoyButton)>,
+    /// The latest time seen (backend clock), for pulses.
+    now_ns: u64,
     /// Press, long and double press tracking per button and hat direction.
     presses: HashMap<DigitalKey, PressTracker>,
     /// Whether each axis zone in use is entered.
@@ -283,6 +299,9 @@ impl Engine {
             steps: HashMap::new(),
             memory: HashMap::new(),
             auto_switch: AutoSwitch::default(),
+            vjoy_latch: VjoyState::default(),
+            vjoy_pulses: Vec::new(),
+            now_ns: 0,
             presses: HashMap::new(),
             zones: HashMap::new(),
             runtime: Runtime::default(),
@@ -501,19 +520,24 @@ impl Engine {
         self.presses
             .values()
             .filter_map(PressTracker::deadline)
+            .chain(self.vjoy_pulses.iter().map(|(at, _)| *at))
             .min()
     }
 
     /// Handles the long presses and delayed short presses due at `now_ns` (backend clock).
     /// Returns whether anything visible changed.
     pub fn advance(&mut self, now_ns: u64) -> bool {
+        self.now_ns = self.now_ns.max(now_ns);
+        let pulses = self.vjoy_pulses.len();
+        self.vjoy_pulses.retain(|(at, _)| *at > now_ns);
+        let pulse_ended = self.vjoy_pulses.len() != pulses;
         let mut due: Vec<(DigitalKey, PressEvent)> = Vec::new();
         for (key, tracker) in &mut self.presses {
             due.extend(tracker.due(now_ns).into_iter().map(|e| (key.clone(), e)));
         }
         self.presses.retain(|_, t| !t.is_idle());
         if due.is_empty() || matches!(self.learn, Learn::Waiting(_)) {
-            return false;
+            return pulse_ended;
         }
         // Earlier deadlines first; ties keep a stable order.
         due.sort_by_key(|(key, _)| format!("{key:?}"));
@@ -526,7 +550,7 @@ impl Engine {
         );
         let changed = self.dirty.controls;
         self.dirty.controls |= controls_before;
-        changed
+        changed || pulse_ended
     }
 
     /// Press and release of a button or hat direction, through its press tracker.
@@ -702,7 +726,7 @@ impl Engine {
         for f in &fired {
             self.fire(f);
         }
-        self.run_profile_switches(queued);
+        self.run_engine_actions(queued);
     }
 
     /// Runs `fired` through the triggers of the active profile's controls, in setup order.
@@ -734,7 +758,8 @@ impl Engine {
             .then(|| fired_text(&self.live, &self.setup, fired));
         for (ci, cmd, _) in chosen {
             let control = &self.setup.profiles[active].virtual_controls[ci];
-            self.dirty.controls |= run_command(
+            let id = control.id.clone();
+            if run_command(
                 control,
                 cmd,
                 hold.as_ref(),
@@ -742,7 +767,10 @@ impl Engine {
                 &mut self.runtime,
                 &mut self.actions,
                 self.diagnostics.as_ref().zip(text.as_deref()),
-            );
+            ) {
+                self.dirty.controls = true;
+                self.pulse_entered(&id);
+            }
         }
         let released = matches!(fired, Fired::Digital(_, PressEvent::Up))
             || matches!(fired, Fired::Zone { entered: false, .. });
@@ -776,33 +804,230 @@ impl Engine {
                 continue;
             };
             let control = &self.setup.profiles[p].virtual_controls[c];
-            self.dirty.controls |= release_hold(
+            if release_hold(
                 control,
                 key,
                 &mut self.memory,
                 &mut self.runtime,
                 &mut self.actions,
                 self.diagnostics.as_ref(),
-            );
+            ) {
+                self.dirty.controls = true;
+                self.pulse_entered(&id);
+            }
         }
     }
 
-    /// Carries out the "Switch profile" actions queued since index `from`, in order. They
-    /// stay in the queue, so the app logs them like every action.
-    fn run_profile_switches(&mut self, from: usize) {
-        let targets: Vec<ProfileTarget> = self.actions[from..]
+    /// Carries out the actions the engine itself handles, queued since index `from`, in
+    /// order: "Switch profile" and vJoy. They stay in the queue, so the app logs them like
+    /// every action.
+    fn run_engine_actions(&mut self, from: usize) {
+        let mine: Vec<Action> = self.actions[from..]
             .iter()
-            .filter_map(|r| match &r.action {
-                Action::SwitchProfile { target } => Some(target.clone()),
-                _ => None,
-            })
+            .filter(|r| matches!(r.action, Action::SwitchProfile { .. } | Action::Vjoy { .. }))
+            .map(|r| r.action.clone())
             .collect();
-        for target in targets {
-            if let Some(index) = target.resolve(&self.setup.profiles, self.setup.active_index()) {
-                self.auto_switch.manual_switch();
-                self.activate_profile(index, "Switch profile action");
+        for action in mine {
+            match action {
+                Action::SwitchProfile { target } => {
+                    if let Some(index) =
+                        target.resolve(&self.setup.profiles, self.setup.active_index())
+                    {
+                        self.auto_switch.manual_switch();
+                        self.activate_profile(index, "Switch profile action");
+                    }
+                }
+                Action::Vjoy { command } => self.run_vjoy_command(&command),
+                _ => {}
             }
         }
+    }
+
+    // --- vJoy output ------------------------------------------------------------------------
+
+    /// Applies a vJoy action (only while the vJoy connection is enabled): what it presses or
+    /// sets stays until another action changes it, the profile changes or vJoy is disabled.
+    pub fn run_vjoy_command(&mut self, command: &VjoyCommand) {
+        if !self.setup.connections.vjoy.enabled {
+            return;
+        }
+        let latch = &mut self.vjoy_latch;
+        match *command {
+            VjoyCommand::Button { button, op } => match op {
+                ButtonOp::Press => {
+                    latch.buttons.insert(button);
+                }
+                ButtonOp::Release => {
+                    latch.buttons.remove(&button);
+                    self.vjoy_pulses.retain(|(_, b)| *b != button);
+                }
+                ButtonOp::Toggle => {
+                    if !latch.buttons.remove(&button) {
+                        latch.buttons.insert(button);
+                    }
+                }
+                ButtonOp::Pulse { ms } => {
+                    self.vjoy_pulses
+                        .push((self.now_ns + u64::from(ms) * 1_000_000, button));
+                }
+            },
+            VjoyCommand::Axis { axis, percent } => {
+                latch
+                    .axes
+                    .insert(axis, (percent.clamp(0.0, 100.0) / 50.0) - 1.0);
+            }
+            VjoyCommand::Pov { pov, direction } => {
+                match direction {
+                    Some(d) => latch.povs.insert(pov, d),
+                    None => latch.povs.remove(&pov),
+                };
+            }
+        }
+    }
+
+    /// A control just changed state: a pulsed output of the state it entered starts now.
+    fn pulse_entered(&mut self, control_id: &str) {
+        if !self.setup.connections.vjoy.enabled {
+            return;
+        }
+        let Ok((p, c)) = self.control_position(control_id) else {
+            return;
+        };
+        let control = &self.setup.profiles[p].virtual_controls[c];
+        if let Some(ButtonOutput {
+            button,
+            pulse_ms: Some(ms),
+        }) = self.active_output(control)
+        {
+            self.vjoy_pulses
+                .push((self.now_ns + u64::from(ms) * 1_000_000, button));
+        }
+    }
+
+    /// The button output of the control's current state, if any: a radio's or mode's active
+    /// state, a toggle that is on, a momentary control that is active.
+    fn active_output(&self, control: &VirtualControl) -> Option<ButtonOutput> {
+        let memory = self.memory.get(&control.id).cloned().unwrap_or_default();
+        match &control.kind {
+            VirtualControlKind::Radio(r) => memory
+                .active
+                .as_deref()
+                .and_then(|id| r.index_of(id))
+                .and_then(|i| r.states[i].output),
+            VirtualControlKind::Mode(m) => m.active(&memory).and_then(|i| m.states[i].output),
+            VirtualControlKind::Toggle(t) => Toggle::is_on(&memory).then_some(t.output).flatten(),
+            VirtualControlKind::Momentary(m) => {
+                let held = self
+                    .runtime
+                    .held
+                    .get(&control.id)
+                    .is_some_and(|k| !k.is_empty());
+                m.active(held).then_some(m.output).flatten()
+            }
+            VirtualControlKind::Counter(_) => None,
+        }
+    }
+
+    /// Everything Detent wants on the vJoy devices now, for the active profile: mappings
+    /// (live physical input), then state outputs, then what vJoy actions set, then pulses;
+    /// later ones win where they write the same output. Empty while vJoy is disabled.
+    pub fn vjoy_state(&self) -> VjoyState {
+        if !self.setup.connections.vjoy.enabled {
+            return VjoyState::default();
+        }
+        let profile = self.setup.profile();
+        let mut s = VjoyState {
+            devices: profile.vjoy_devices(),
+            ..Default::default()
+        };
+        for m in &profile.vjoy_mappings {
+            let source = |device: &DeviceId| {
+                self.live
+                    .device(device)
+                    .filter(|d| d.kind == DeviceKind::Physical)
+                    .map(|d| &d.state)
+            };
+            match m {
+                VjoyMapping::Axis {
+                    device,
+                    index,
+                    target,
+                    curve,
+                } => {
+                    if let Some(v) = source(device).and_then(|st| st.axes.get(usize::from(*index)))
+                    {
+                        s.axes.insert(*target, curve.apply(*v));
+                    }
+                }
+                VjoyMapping::Button {
+                    device,
+                    index,
+                    target,
+                } => {
+                    if source(device)
+                        .and_then(|st| st.buttons.get(usize::from(*index)))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        s.buttons.insert(*target);
+                    }
+                }
+                VjoyMapping::Hat {
+                    device,
+                    index,
+                    target,
+                } => {
+                    if let Some(d) = source(device)
+                        .and_then(|st| st.hats.get(usize::from(*index)))
+                        .and_then(|h| HatDirection::from_state(*h))
+                    {
+                        s.povs.insert(*target, d);
+                    }
+                }
+            }
+        }
+        for control in &profile.virtual_controls {
+            if let Some(o) = self.active_output(control)
+                && o.pulse_ms.is_none()
+            {
+                s.buttons.insert(o.button);
+            }
+            if let VirtualControlKind::Counter(c) = &control.kind
+                && let Some(axis) = c.output
+            {
+                let memory = self.memory.get(&control.id).cloned().unwrap_or_default();
+                s.axes.insert(axis, counter_axis(&c.spec, c.value(&memory)));
+            }
+        }
+        s.buttons.extend(self.vjoy_latch.buttons.iter().copied());
+        s.axes
+            .extend(self.vjoy_latch.axes.iter().map(|(a, v)| (*a, *v)));
+        s.povs
+            .extend(self.vjoy_latch.povs.iter().map(|(p, d)| (*p, *d)));
+        s.buttons.extend(self.vjoy_pulses.iter().map(|(_, b)| *b));
+        // Devices of vJoy actions count as used (e.g. testing an action not saved yet).
+        let actions: Vec<u8> = self
+            .vjoy_latch
+            .buttons
+            .iter()
+            .map(|b| b.device)
+            .chain(self.vjoy_latch.axes.keys().map(|a| a.device))
+            .chain(self.vjoy_latch.povs.keys().map(|p| p.device))
+            .chain(self.vjoy_pulses.iter().map(|(_, b)| b.device))
+            .collect();
+        s.devices.extend(actions);
+        s.restrict_to_devices();
+        s
+    }
+
+    /// Replaces the active profile's vJoy mappings.
+    pub fn set_vjoy_mappings(&mut self, mappings: Vec<VjoyMapping>) -> Result<(), EngineError> {
+        for m in &mappings {
+            m.validate()?;
+        }
+        self.setup.profile_mut().vjoy_mappings = mappings;
+        self.dirty.setup = true;
+        Ok(())
     }
 
     /// Actions emitted since the last call, in the order they must run.
@@ -994,6 +1219,8 @@ impl Engine {
                 .iter()
                 .map(|c| self.control_view(c))
                 .collect(),
+            vjoy_mappings: self.setup.profile().vjoy_mappings.clone(),
+            vjoy_output: self.vjoy_state().view(),
             learn: match &self.learn {
                 Learn::Off => None,
                 Learn::Waiting(_) => Some(LearnView { captured: None }),
@@ -1464,7 +1691,7 @@ impl Engine {
     fn run_manual(&mut self, id: &str, command: Command) -> Result<(), EngineError> {
         let (p, c) = self.control_position(id)?;
         let queued = self.actions.len();
-        self.dirty.controls |= run_command(
+        if run_command(
             &self.setup.profiles[p].virtual_controls[c],
             command,
             None,
@@ -1472,8 +1699,11 @@ impl Engine {
             &mut self.runtime,
             &mut self.actions,
             self.diagnostics.as_ref().zip(Some("manual command")),
-        );
-        self.run_profile_switches(queued);
+        ) {
+            self.dirty.controls = true;
+            self.pulse_entered(id);
+        }
+        self.run_engine_actions(queued);
         Ok(())
     }
 
@@ -1511,6 +1741,10 @@ impl Engine {
 
     pub fn set_connections(&mut self, connections: Connections) -> Result<(), EngineError> {
         connections.validate()?;
+        if !connections.vjoy.enabled {
+            self.vjoy_latch = VjoyState::default();
+            self.vjoy_pulses.clear();
+        }
         self.setup.connections = connections;
         self.dirty.setup = true;
         Ok(())
@@ -1692,6 +1926,9 @@ impl Engine {
         }
         self.setup.active_profile.clone_from(id);
         self.dirty.setup = true;
+        // What the old profile's vJoy actions held goes; its state outputs follow the profile.
+        self.vjoy_latch = VjoyState::default();
+        self.vjoy_pulses.clear();
         true
     }
 
@@ -2524,6 +2761,7 @@ mod tests {
             select: vec![],
             on_activate: vec![tap(on)],
             on_deactivate: vec![tap(off)],
+            output: None,
         };
         let mut r = Radio {
             states: vec![
@@ -4011,6 +4249,7 @@ mod control_tests {
                 on_press: vec![key("P")],
                 on_release: vec![key("R")],
                 invert: false,
+                output: None,
             }),
         );
         down(&mut e, 0, 0);
@@ -4045,6 +4284,7 @@ mod control_tests {
                 on_press: vec![key("P")],
                 on_release: vec![key("R")],
                 invert: true,
+                output: None,
             }),
         );
         assert!(on(&e, &id));
@@ -4086,6 +4326,7 @@ mod control_tests {
                 reset: vec![hat_up()],
                 on_change: vec![key("C")],
                 startup: Startup::RestoreLast,
+                output: None,
             }),
         );
         assert_eq!(view(&e, &id).display.as_deref(), Some("118.000"));
@@ -4425,5 +4666,445 @@ mod control_tests {
         assert_eq!(c["on"], false);
         assert!(c["value"].is_null() && c["display"].is_null());
         assert_eq!(c["shifted"], false);
+    }
+
+    // --- vJoy output ------------------------------------------------------------------------
+
+    use crate::connection::{Connections, VjoySettings};
+    use crate::virtual_control::{Radio, RadioState};
+    use crate::vjoy::{AxisCurve, ButtonOutput, Curve, VjoyAxis, VjoyAxisRef, VjoyPov};
+
+    fn vb(button: u8) -> VjoyButton {
+        VjoyButton { device: 1, button }
+    }
+
+    fn hold(button: u8) -> Option<ButtonOutput> {
+        Some(ButtonOutput {
+            button: vb(button),
+            pulse_ms: None,
+        })
+    }
+
+    fn vjoy_on(e: &mut Engine) {
+        e.set_connections(Connections {
+            vjoy: VjoySettings { enabled: true },
+            ..Default::default()
+        })
+        .unwrap();
+    }
+
+    fn pressed(e: &Engine) -> Vec<u8> {
+        e.vjoy_state().buttons.iter().map(|b| b.button).collect()
+    }
+
+    fn radio_with_outputs(e: &mut Engine) -> String {
+        let state = |name: &str, button: u16, out: u8| RadioState {
+            name: name.into(),
+            select: vec![self::button(button)],
+            output: hold(out),
+            ..Default::default()
+        };
+        add(
+            e,
+            "Radio",
+            VirtualControlKind::Radio(Radio {
+                states: vec![state("A", 0, 1), state("B", 1, 2)],
+                ..Default::default()
+            }),
+        )
+    }
+
+    /// Adds vJoy device 1 as the backend sees it (a virtual device, instance 2).
+    fn add_vjoy_device(e: &mut Engine) -> DeviceId {
+        e.apply(BackendEvent::Added(RawDevice {
+            instance: 2,
+            fingerprint: Fingerprint {
+                vendor_id: 0x1234,
+                product_id: 0xBEAD,
+                serial: None,
+                path: Some("vjoy".into()),
+                name: "vJoy Device".into(),
+            },
+            backend_guid: "v".into(),
+            axes: vec![0.0; 3],
+            buttons: vec![false; 8],
+            hats: vec![HatState::CENTERED],
+        }));
+        e.snapshot()
+            .live
+            .devices
+            .iter()
+            .find(|d| d.kind != crate::device::DeviceKind::Physical)
+            .unwrap()
+            .id
+            .clone()
+    }
+
+    #[test]
+    fn state_outputs_follow_the_controls() {
+        let mut e = engine();
+        let radio = radio_with_outputs(&mut e);
+        let toggle = add(
+            &mut e,
+            "T",
+            VirtualControlKind::Toggle(Toggle {
+                toggle: vec![button(2)],
+                output: hold(3),
+                ..Default::default()
+            }),
+        );
+        add(
+            &mut e,
+            "M",
+            VirtualControlKind::Momentary(Momentary {
+                triggers: vec![button(3)],
+                output: hold(4),
+                ..Default::default()
+            }),
+        );
+        let counter = add(
+            &mut e,
+            "C",
+            VirtualControlKind::Counter(CounterControl {
+                spec: CounterSpec {
+                    min: 0.0,
+                    max: 4.0,
+                    initial: 0.0,
+                    end: EndBehavior::Clamp,
+                    ..Default::default()
+                },
+                increment: vec![button(4)],
+                output: Some(VjoyAxisRef {
+                    device: 2,
+                    axis: VjoyAxis::Slider0,
+                }),
+                ..Default::default()
+            }),
+        );
+        add(
+            &mut e,
+            "Layer",
+            VirtualControlKind::Mode(Mode {
+                states: vec![
+                    ModeState {
+                        name: "Nav".into(),
+                        output: hold(9),
+                        ..Default::default()
+                    },
+                    ModeState {
+                        name: "Combat".into(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+        );
+        // Off: nothing at all.
+        assert_eq!(e.vjoy_state(), VjoyState::default());
+        vjoy_on(&mut e);
+        let s = e.vjoy_state();
+        assert_eq!(s.devices.iter().copied().collect::<Vec<_>>(), [1, 2]);
+        // The mode's first state is active by default.
+        assert_eq!(pressed(&e), [9]);
+        let slider = VjoyAxisRef {
+            device: 2,
+            axis: VjoyAxis::Slider0,
+        };
+        assert_eq!(s.axes[&slider], -1.0);
+        tap_button(&mut e, 1, 0); // radio B
+        tap_button(&mut e, 2, 100); // toggle on
+        down(&mut e, 3, 200); // momentary held
+        tap_button(&mut e, 4, 210);
+        tap_button(&mut e, 4, 260);
+        assert_eq!(pressed(&e), [2, 3, 4, 9]);
+        assert_eq!(e.vjoy_state().axes[&slider], 0.0);
+        up(&mut e, 3, 300);
+        tap_button(&mut e, 0, 400); // radio A
+        assert_eq!(pressed(&e), [1, 3, 9]);
+        // Silent changes count too, e.g. setting a state to match the game.
+        e.set_radio_active(&radio, None).unwrap();
+        e.set_radio_active(&toggle, None).unwrap();
+        e.set_control_value(&counter, 4.0).unwrap();
+        assert_eq!(pressed(&e), [9]);
+        assert_eq!(e.vjoy_state().axes[&slider], 1.0);
+        let json = serde_json::to_value(e.snapshot()).unwrap();
+        assert_eq!(json["vjoyOutput"]["buttons"][0]["button"], 9);
+        assert_eq!(json["vjoyOutput"]["axes"][0]["axis"]["axis"], "slider0");
+    }
+
+    #[test]
+    fn pulses_end_at_their_deadline() {
+        let mut e = engine();
+        vjoy_on(&mut e);
+        add(
+            &mut e,
+            "T",
+            VirtualControlKind::Toggle(Toggle {
+                toggle: vec![button(0)],
+                output: Some(ButtonOutput {
+                    button: vb(5),
+                    pulse_ms: Some(100),
+                }),
+                ..Default::default()
+            }),
+        );
+        down(&mut e, 0, 1000);
+        assert_eq!(pressed(&e), [5]);
+        assert_eq!(e.next_deadline(), Some(1100 * MS));
+        assert!(!e.advance(1099 * MS));
+        assert!(e.advance(1100 * MS));
+        assert!(pressed(&e).is_empty());
+        // Switching off does not pulse (only entering the "on" state does).
+        up(&mut e, 0, 1200);
+        tap_button(&mut e, 0, 1300);
+        assert!(pressed(&e).is_empty());
+        // A vJoy action pulse.
+        e.run_vjoy_command(&VjoyCommand::Button {
+            button: vb(6),
+            op: ButtonOp::Pulse { ms: 50 },
+        });
+        assert_eq!(pressed(&e), [6]);
+        e.advance(1400 * MS);
+        assert!(pressed(&e).is_empty());
+    }
+
+    #[test]
+    fn vjoy_actions_latch_until_changed() {
+        let mut e = engine();
+        let cmd = |op| VjoyCommand::Button { button: vb(2), op };
+        // Disabled: ignored.
+        e.run_vjoy_command(&cmd(ButtonOp::Press));
+        vjoy_on(&mut e);
+        assert!(pressed(&e).is_empty());
+        e.run_vjoy_command(&cmd(ButtonOp::Press));
+        // Its device counts as used, e.g. when testing an action that is not saved yet.
+        assert_eq!(pressed(&e), [2]);
+        add(
+            &mut e,
+            "T",
+            VirtualControlKind::Toggle(Toggle {
+                on_on: vec![Action::Vjoy {
+                    command: cmd(ButtonOp::Press),
+                }],
+                on_off: vec![Action::Vjoy {
+                    command: cmd(ButtonOp::Release),
+                }],
+                toggle: vec![button(0)],
+                ..Default::default()
+            }),
+        );
+        e.run_vjoy_command(&cmd(ButtonOp::Release));
+        tap_button(&mut e, 0, 0);
+        assert_eq!(pressed(&e), [2]);
+        tap_button(&mut e, 0, 100);
+        assert!(pressed(&e).is_empty());
+        e.run_vjoy_command(&cmd(ButtonOp::Toggle));
+        assert_eq!(pressed(&e), [2]);
+        let x = VjoyAxisRef {
+            device: 1,
+            axis: VjoyAxis::X,
+        };
+        e.run_vjoy_command(&VjoyCommand::Axis {
+            axis: x,
+            percent: 75.0,
+        });
+        let pov = VjoyPov { device: 1, pov: 1 };
+        e.run_vjoy_command(&VjoyCommand::Pov {
+            pov,
+            direction: Some(HatDirection::Left),
+        });
+        let s = e.vjoy_state();
+        assert_eq!(s.axes[&x], 0.5);
+        assert_eq!(s.povs[&pov], HatDirection::Left);
+        e.run_vjoy_command(&VjoyCommand::Pov {
+            pov,
+            direction: None,
+        });
+        assert!(e.vjoy_state().povs.is_empty());
+        // Disabling vJoy forgets what actions held.
+        e.set_connections(Connections::default()).unwrap();
+        vjoy_on(&mut e);
+        assert!(pressed(&e).is_empty());
+    }
+
+    #[test]
+    fn profile_switch_releases_the_old_profile_and_applies_the_new() {
+        let mut e = engine();
+        vjoy_on(&mut e);
+        radio_with_outputs(&mut e);
+        tap_button(&mut e, 1, 0); // B: vJoy button 2
+        add(
+            &mut e,
+            "T",
+            VirtualControlKind::Toggle(Toggle {
+                toggle: vec![button(5)],
+                on_on: vec![Action::Vjoy {
+                    command: VjoyCommand::Button {
+                        button: vb(7),
+                        op: ButtonOp::Press,
+                    },
+                }],
+                ..Default::default()
+            }),
+        );
+        tap_button(&mut e, 5, 100);
+        assert_eq!(pressed(&e), [2, 7]);
+        let before = e.vjoy_state();
+        // Another profile with only a mapping on device 3.
+        let other = e.create_profile("Other");
+        e.set_vjoy_mappings(vec![VjoyMapping::Button {
+            device: dev(),
+            index: 9,
+            target: VjoyButton {
+                device: 3,
+                button: 1,
+            },
+        }])
+        .unwrap();
+        assert_eq!(e.setup().active_profile, other);
+        let after = e.vjoy_state();
+        assert!(
+            after.buttons.is_empty(),
+            "the old profile's buttons are gone"
+        );
+        let writes = before.diff(&after);
+        assert!(writes.contains(&crate::vjoy::VjoyWrite::Button(vb(2), false)));
+        assert!(writes.contains(&crate::vjoy::VjoyWrite::Button(vb(7), false)));
+        assert!(writes.contains(&crate::vjoy::VjoyWrite::Acquire(3)));
+        // Back: the radio state output is there again (the action's press is not).
+        e.select_profile(crate::profile::DEFAULT_PROFILE_ID)
+            .unwrap();
+        assert_eq!(pressed(&e), [2]);
+        // Restored at startup without actions.
+        let mut again = Engine::new(e.registry().clone(), e.setup().clone(), &BTreeMap::new());
+        again.restore_active_states(&e.active_states());
+        assert_eq!(pressed(&again), [2]);
+        assert!(again.take_actions().is_empty());
+    }
+
+    #[test]
+    fn mappings_pass_axes_buttons_and_hats_through() {
+        let mut e = engine();
+        vjoy_on(&mut e);
+        let x = VjoyAxisRef {
+            device: 1,
+            axis: VjoyAxis::X,
+        };
+        let pov = VjoyPov { device: 1, pov: 1 };
+        e.set_vjoy_mappings(vec![
+            VjoyMapping::Axis {
+                device: dev(),
+                index: 1,
+                target: x,
+                curve: AxisCurve {
+                    invert: true,
+                    curve: Curve::Expo { factor: 1.0 },
+                    ..Default::default()
+                },
+            },
+            VjoyMapping::Button {
+                device: dev(),
+                index: 3,
+                target: vb(4),
+            },
+            VjoyMapping::Hat {
+                device: dev(),
+                index: 0,
+                target: pov,
+            },
+        ])
+        .unwrap();
+        axis(&mut e, 1, 75.0, 0); // 0.5 → inverted -0.5 → expo -0.125
+        down(&mut e, 3, 10);
+        hat(&mut e, HatState::RIGHT, 20);
+        let s = e.vjoy_state();
+        assert!((s.axes[&x] + 0.125).abs() < 1e-4);
+        assert_eq!(pressed(&e), [4]);
+        assert_eq!(s.povs[&pov], HatDirection::Right);
+        up(&mut e, 3, 30);
+        hat(&mut e, 0, 40);
+        assert!(pressed(&e).is_empty() && e.vjoy_state().povs.is_empty());
+        assert_eq!(
+            e.set_vjoy_mappings(vec![VjoyMapping::Button {
+                device: dev(),
+                index: 0,
+                target: VjoyButton {
+                    device: 0,
+                    button: 1
+                }
+            }]),
+            Err(EngineError::Vjoy(crate::vjoy::VjoyError::Device))
+        );
+    }
+
+    #[test]
+    fn vjoy_devices_never_trigger_nor_feed_mappings() {
+        let mut e = engine();
+        vjoy_on(&mut e);
+        let vjoy = add_vjoy_device(&mut e);
+        let on_vjoy = |i| -> Trigger {
+            TriggerInput::Button {
+                device: vjoy.clone(),
+                index: i,
+            }
+            .into()
+        };
+        let zone: Trigger = TriggerInput::AxisZone {
+            device: vjoy.clone(),
+            index: 0,
+            min: 50.0,
+            max: 100.0,
+        }
+        .into();
+        let t = add(
+            &mut e,
+            "T",
+            VirtualControlKind::Toggle(Toggle {
+                toggle: vec![on_vjoy(0)],
+                on: vec![zone],
+                ..Default::default()
+            }),
+        );
+        let m = add(
+            &mut e,
+            "M",
+            VirtualControlKind::Momentary(Momentary {
+                triggers: vec![on_vjoy(1)],
+                ..Default::default()
+            }),
+        );
+        e.set_vjoy_mappings(vec![VjoyMapping::Button {
+            device: vjoy.clone(),
+            index: 2,
+            target: vb(1),
+        }])
+        .unwrap();
+        let send = |e: &mut Engine, index, pressed, ms| {
+            e.apply(BackendEvent::Button {
+                instance: 2,
+                index,
+                pressed,
+                time_ns: ms * MS,
+            });
+        };
+        send(&mut e, 0, true, 0);
+        send(&mut e, 1, true, 10);
+        send(&mut e, 2, true, 20);
+        for value in [0.0, 1.0] {
+            e.apply(BackendEvent::Axis {
+                instance: 2,
+                index: 0,
+                value,
+                time_ns: 30 * MS,
+            });
+        }
+        assert!(!on(&e, &t) && !on(&e, &m));
+        assert!(pressed(&e).is_empty());
+        assert!(e.take_actions().is_empty());
+        // Learn does not capture them either.
+        e.start_learn();
+        send(&mut e, 0, false, 40);
+        send(&mut e, 0, true, 50);
+        assert_eq!(e.snapshot().learn.unwrap().captured, None);
     }
 }

@@ -13,6 +13,7 @@ mod secrets;
 mod soundpad;
 mod storage;
 mod tray;
+mod vjoy;
 
 use detent_core::diagnostics::action_record;
 use detent_core::settings::{self, AUTOSTART_ARG};
@@ -61,10 +62,15 @@ pub struct Shared {
     diagnostics: Diagnostics,
     soundpad: Arc<Soundpad>,
     discord: Arc<Discord>,
+    vjoy: vjoy::Vjoy,
     recorder: recorder::Recorder,
     meta: Meta,
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
+    /// The vJoy output last handed to the vJoy thread.
+    vjoy_sent: Mutex<detent_core::vjoy::VjoyState>,
+    /// The input backend's clock (event timestamps), for timed outputs started by commands.
+    clock: fn() -> u64,
 }
 
 impl Shared {
@@ -112,6 +118,22 @@ impl Shared {
         if !actions.is_empty() {
             self.executor.submit(actions);
         }
+        self.send_vjoy(engine);
+    }
+
+    /// Hands the engine's vJoy output to the vJoy thread when it changed.
+    fn send_vjoy(&self, engine: &Engine) {
+        let state = engine.vjoy_state();
+        let mut sent = self.vjoy_sent.lock().unwrap_or_else(|e| e.into_inner());
+        if *sent != state {
+            sent.clone_from(&state);
+            self.vjoy.submit(state);
+        }
+    }
+
+    /// Now on the input clock.
+    pub fn now_ns(&self) -> u64 {
+        (self.clock)()
     }
 
     /// Logs a change of the active profile, however it happened.
@@ -224,6 +246,7 @@ pub fn run() {
                 setup,
                 elevated,
                 diagnostics,
+                backend.clock(),
             )?);
             app.manage(shared.clone());
             report_connectors(&shared);
@@ -250,8 +273,16 @@ pub fn run() {
             }
         })
         .invoke_handler(commands::handler())
-        .run(context)
-        .expect("error while running Detent");
+        .build(context)
+        .expect("error while building Detent")
+        .run(|app, event| {
+            // Never leave a vJoy button pressed: give the devices back on the way out.
+            if let tauri::RunEvent::Exit = event
+                && let Some(shared) = app.try_state::<Arc<Shared>>()
+            {
+                shared.vjoy.shutdown();
+            }
+        });
 }
 
 /// The main window's close button: hides it to the tray (input, actions and overlay keep
@@ -328,6 +359,7 @@ fn load(
     setup: Setup,
     elevated: bool,
     diagnostics: Diagnostics,
+    clock: fn() -> u64,
 ) -> Result<Shared, Box<dyn std::error::Error>> {
     let registry: DeviceRegistry = storage.load_json(DEVICES_FILE).unwrap_or_default();
     let values: BTreeMap<String, f64> = storage.load_json(VALUES_FILE).unwrap_or_default();
@@ -361,6 +393,8 @@ fn load(
     });
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
+    let vjoy_enabled = engine.connections().vjoy.enabled;
+    let diagnostics_for_vjoy = diagnostics.clone();
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
@@ -374,9 +408,12 @@ fn load(
         diagnostics,
         soundpad,
         discord,
+        vjoy: vjoy::Vjoy::spawn(vjoy_enabled, diagnostics_for_vjoy),
         recorder: recorder::Recorder::default(),
         meta,
         logged_profile: Mutex::new(String::new()),
+        vjoy_sent: Mutex::new(detent_core::vjoy::VjoyState::default()),
+        clock,
     })
 }
 
@@ -476,6 +513,9 @@ fn report_connectors(shared: &Arc<Shared>) {
     };
     shared.soundpad.on_status(reporter(ConnectorId::Soundpad));
     shared.discord.on_status(reporter(ConnectorId::Discord));
+    shared.vjoy.on_status(reporter(ConnectorId::Vjoy));
+    // Restored states (and the active profile) are on vJoy from the start.
+    shared.send_vjoy(&shared.engine());
 }
 
 /// Warnings and errors from the `log` crate, as event log entries.

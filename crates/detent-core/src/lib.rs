@@ -24,6 +24,7 @@ pub mod soundpad;
 pub mod state;
 pub mod trigger;
 pub mod virtual_control;
+pub mod vjoy;
 
 pub use action::{
     Action, InputOp, KeyInfo, KeyStep, MouseButton, MouseStep, Movement, PathPoint, Playback,

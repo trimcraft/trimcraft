@@ -33,6 +33,8 @@ pub enum Category {
     Action,
     /// Connector status changes.
     Connector,
+    /// vJoy output: devices acquired and released, buttons, axes and POVs written.
+    Output,
     /// Warnings and errors from the app log.
     Log,
 }

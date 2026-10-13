@@ -91,8 +91,8 @@ fn run(
         });
         return;
     }
-    if let Action::SwitchProfile { .. } = &request.action {
-        // The engine switched already, when the action was emitted; it is here for the log.
+    if let Action::SwitchProfile { .. } | Action::Vjoy { .. } = &request.action {
+        // The engine carried it out when the action was emitted; it is here for the log.
         return;
     }
     // Absolute moves need the current monitor layout; it is queried per macro, so a changed

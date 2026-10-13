@@ -4,6 +4,7 @@ use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
 use detent_core::connection::{DiscordSettings, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
+use detent_core::vjoy::VjoyMapping;
 use detent_core::{
     Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
     DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, ManualCommand, MonitorRef,
@@ -40,6 +41,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_radio_active,
         command_radio,
         set_control_value,
+        set_vjoy_mappings,
         toggle_overlay_virtual_control,
         start_learn,
         stop_learn,
@@ -86,6 +88,8 @@ fn with<T>(
     f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
 ) -> Res<T> {
     let mut engine = shared.engine();
+    // Timed outputs a command starts (vJoy pulses) count from now.
+    engine.advance(shared.now_ns());
     let result = f(&mut engine).map_err(|e| e.to_string());
     shared.commit(&mut engine);
     result
@@ -265,6 +269,12 @@ fn command_radio(shared: State<'_, Arc<Shared>>, id: String, command: ManualComm
     with(&shared, |e| e.command_control(&id, command))
 }
 
+/// Replaces the active profile's vJoy mappings (axis, button and hat passthrough).
+#[tauri::command]
+fn set_vjoy_mappings(shared: State<'_, Arc<Shared>>, mappings: Vec<VjoyMapping>) -> Res<()> {
+    with(&shared, |e| e.set_vjoy_mappings(mappings))
+}
+
 /// Sets a counter control's value without running actions.
 #[tauri::command]
 fn set_control_value(shared: State<'_, Arc<Shared>>, id: String, value: f64) -> Res<()> {
@@ -415,9 +425,11 @@ fn set_connections(shared: State<'_, Arc<Shared>>, mut connections: Connections)
     connections.discord.client_secret = current.client_secret;
     let soundpad = connections.soundpad.clone();
     let discord = connections.discord.clone();
+    let vjoy = connections.vjoy.enabled;
     with(&shared, |e| e.set_connections(connections))?;
     shared.soundpad.apply(soundpad);
     shared.discord.apply(discord);
+    shared.vjoy.apply(vjoy);
     Ok(())
 }
 
@@ -429,6 +441,7 @@ async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res
     tauri::async_runtime::spawn_blocking(move || match id {
         ConnectorId::Soundpad => shared.soundpad.test(),
         ConnectorId::Discord => shared.discord.test(),
+        ConnectorId::Vjoy => shared.vjoy.test(),
     })
     .await
     .map_err(|e| e.to_string())?
@@ -586,6 +599,13 @@ fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
             std::thread::sleep(std::time::Duration::from_millis(
                 detent_core::recording::COUNTDOWN_MS,
             ));
+            if let Action::Vjoy { command } = &action {
+                // vJoy output is the engine's state.
+                let mut engine = shared.engine();
+                engine.advance(shared.now_ns());
+                engine.run_vjoy_command(command);
+                shared.commit(&mut engine);
+            }
             shared.executor.submit(vec![ActionRequest::new(
                 "Test play",
                 "editor",

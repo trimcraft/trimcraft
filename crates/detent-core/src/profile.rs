@@ -13,6 +13,7 @@
 
 use crate::overlay::WidgetList;
 use crate::virtual_control::VirtualControl;
+use crate::vjoy::VjoyMapping;
 use serde::{Deserialize, Serialize};
 
 /// Id of the profile the setup of a version without profiles becomes.
@@ -29,6 +30,8 @@ pub struct Profile {
     pub executables: Vec<String>,
     pub virtual_controls: Vec<VirtualControl>,
     pub overlay_widgets: WidgetList,
+    /// Physical axes, buttons and hats passed through to vJoy.
+    pub vjoy_mappings: Vec<VjoyMapping>,
 }
 
 impl Profile {
@@ -38,6 +41,15 @@ impl Profile {
             name: name.into(),
             ..Self::default()
         }
+    }
+
+    /// The vJoy devices this profile writes to: state outputs, vJoy actions and mappings.
+    pub fn vjoy_devices(&self) -> std::collections::BTreeSet<u8> {
+        self.virtual_controls
+            .iter()
+            .flat_map(VirtualControl::vjoy_devices)
+            .chain(self.vjoy_mappings.iter().map(VjoyMapping::target_device))
+            .collect()
     }
 
     /// Whether `exe` (a file name like `dcs.exe`) is one of this profile's executables.

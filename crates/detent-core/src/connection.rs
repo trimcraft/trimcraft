@@ -1,4 +1,4 @@
-//! Connections: external programs Detent talks to (Soundpad, Discord).
+//! Connections: external programs and drivers Detent talks to (Soundpad, Discord, vJoy).
 //!
 //! Each connector has persisted settings (in `setup.json`, under `connections`) and a live
 //! status the app reports. A connector's actions are only offered once it is enabled; actions
@@ -10,6 +10,7 @@
 
 use crate::action::Action;
 use crate::discord::{GuideStep, VoiceState};
+use crate::vjoy::VjoyInfo;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,15 +20,21 @@ use thiserror::Error;
 pub enum ConnectorId {
     Soundpad,
     Discord,
+    Vjoy,
 }
 
 impl ConnectorId {
-    pub const ALL: [ConnectorId; 2] = [ConnectorId::Soundpad, ConnectorId::Discord];
+    pub const ALL: [ConnectorId; 3] = [
+        ConnectorId::Soundpad,
+        ConnectorId::Discord,
+        ConnectorId::Vjoy,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             ConnectorId::Soundpad => "Soundpad",
             ConnectorId::Discord => "Discord",
+            ConnectorId::Vjoy => "vJoy",
         }
     }
 
@@ -36,6 +43,7 @@ impl ConnectorId {
         match action {
             Action::Soundpad { .. } => Some(ConnectorId::Soundpad),
             Action::Discord { .. } => Some(ConnectorId::Discord),
+            Action::Vjoy { .. } => Some(ConnectorId::Vjoy),
             Action::KeyboardMacro { .. }
             | Action::MouseMacro { .. }
             | Action::SwitchProfile { .. } => None,
@@ -102,6 +110,15 @@ pub struct Connections {
     pub soundpad: SoundpadSettings,
     /// Missing in files from before the Discord connector.
     pub discord: DiscordSettings,
+    /// Missing in files from before vJoy output.
+    pub vjoy: VjoySettings,
+}
+
+/// vJoy output: while enabled, Detent owns the vJoy devices the active profile uses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct VjoySettings {
+    pub enabled: bool,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -124,6 +141,7 @@ impl Connections {
         match id {
             ConnectorId::Soundpad => self.soundpad.enabled,
             ConnectorId::Discord => self.discord.enabled,
+            ConnectorId::Vjoy => self.vjoy.enabled,
         }
     }
 
@@ -187,6 +205,8 @@ pub struct ConnectorState {
     pub credentials: Option<CredentialState>,
     /// The setup guide step that fixes the last problem.
     pub guide: Option<GuideStep>,
+    /// Driver version and devices (vJoy).
+    pub vjoy: Option<VjoyInfo>,
 }
 
 /// A connector as the UI shows it.
@@ -203,6 +223,8 @@ pub struct ConnectorView {
     pub credentials: Option<CredentialState>,
     /// The setup guide step that fixes the last problem (Discord), also while disabled.
     pub guide: Option<GuideStep>,
+    /// Driver version and devices (vJoy), also while disabled, so they can be checked first.
+    pub vjoy: Option<VjoyInfo>,
 }
 
 impl ConnectorView {
@@ -211,6 +233,7 @@ impl ConnectorView {
     pub fn new(id: ConnectorId, enabled: bool, state: Option<&ConnectorState>) -> Self {
         let credentials = state.and_then(|s| s.credentials);
         let guide = state.and_then(|s| s.guide);
+        let vjoy = state.and_then(|s| s.vjoy.clone());
         let (status, detail, warning, voice) = match (enabled, state) {
             (false, _) => (ConnectorStatus::NotConfigured, None, None, None),
             (true, None) => (ConnectorStatus::Connecting, None, None, None),
@@ -231,6 +254,7 @@ impl ConnectorView {
             voice,
             credentials,
             guide,
+            vjoy,
         }
     }
 }
@@ -273,7 +297,7 @@ mod tests {
         assert_eq!(c.soundpad.timeout_ms, 500);
         assert_eq!(
             serde_json::to_string(&c).unwrap(),
-            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000},"discord":{"enabled":false,"clientId":"","clientSecret":null}}"#
+            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000},"discord":{"enabled":false,"clientId":"","clientSecret":null},"vjoy":{"enabled":false}}"#
         );
         let c: Connections = serde_json::from_str(
             r#"{"discord":{"enabled":true,"clientId":"1234567890123456789",

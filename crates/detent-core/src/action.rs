@@ -17,6 +17,7 @@ use crate::overlay::MonitorRef;
 use crate::path::{self, Sample, Screens};
 use crate::profile::ProfileTarget;
 use crate::soundpad::SoundpadCommand;
+use crate::vjoy::{VjoyCommand, VjoyError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -65,6 +66,9 @@ pub enum Action {
     Discord { command: DiscordCommand },
     /// Makes another profile active. The engine handles it; it sends no input.
     SwitchProfile { target: ProfileTarget },
+    /// Presses a vJoy button, sets an axis or a POV. The engine handles it (vJoy output is
+    /// part of its state), so it takes effect when it fires, not after earlier macros.
+    Vjoy { command: VjoyCommand },
 }
 
 /// How a mouse macro records movement.
@@ -256,6 +260,8 @@ pub enum ActionError {
     BadPosition,
     #[error("speed must be between {MIN_SPEED_PERCENT}% and {MAX_SPEED_PERCENT}%")]
     BadSpeed,
+    #[error(transparent)]
+    Vjoy(#[from] VjoyError),
 }
 
 /// A key Detent can send: stable name and its set-1 scan code.
@@ -529,6 +535,7 @@ impl Action {
                     sound.path = sound.path.trim().to_owned();
                 }
             }
+            Action::Vjoy { command } => command.validate()?,
             Action::Discord { .. } | Action::SwitchProfile { .. } => {}
         }
         Ok(())
@@ -566,7 +573,10 @@ impl Action {
                     expand_mouse_step(step, playback, target, &mut ops, &mut warnings);
                 }
             }
-            Action::Soundpad { .. } | Action::Discord { .. } | Action::SwitchProfile { .. } => {}
+            Action::Soundpad { .. }
+            | Action::Discord { .. }
+            | Action::SwitchProfile { .. }
+            | Action::Vjoy { .. } => {}
         }
         (ops, warnings)
     }
@@ -581,6 +591,7 @@ impl Action {
             Action::SwitchProfile { target } => {
                 return format!("switch profile: {}", target.describe());
             }
+            Action::Vjoy { command } => return format!("vjoy: {}", command.describe()),
             Action::KeyboardMacro { steps, playback } => (
                 "keys",
                 steps

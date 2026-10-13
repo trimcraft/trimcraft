@@ -14,6 +14,7 @@
 
 use crate::action::{Action, ActionError};
 use crate::function::{CounterSpec, EndBehavior, SpecError};
+use crate::vjoy::{ButtonOutput, VjoyAxisRef, VjoyError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,6 +43,8 @@ pub struct RadioState {
     pub select: Vec<Trigger>,
     pub on_activate: Vec<Action>,
     pub on_deactivate: Vec<Action>,
+    /// vJoy button held while this state is active (or pulsed on entering it).
+    pub output: Option<ButtonOutput>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -71,6 +74,8 @@ pub struct Toggle {
     pub on_off: Vec<Action>,
     /// `Empty`: off at startup.
     pub startup: Startup,
+    /// vJoy button held while on (or pulsed on switching on).
+    pub output: Option<ButtonOutput>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -82,6 +87,8 @@ pub struct Momentary {
     pub on_release: Vec<Action>,
     /// Active while nothing is held instead.
     pub invert: bool,
+    /// vJoy button held while active (or pulsed on activating).
+    pub output: Option<ButtonOutput>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -96,6 +103,8 @@ pub struct CounterControl {
     pub on_change: Vec<Action>,
     /// `Empty`: the initial value at startup.
     pub startup: Startup,
+    /// vJoy axis set in proportion to the value's position between minimum and maximum.
+    pub output: Option<VjoyAxisRef>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -109,6 +118,8 @@ pub struct ModeState {
     pub shift: Vec<Trigger>,
     pub on_activate: Vec<Action>,
     pub on_deactivate: Vec<Action>,
+    /// vJoy button held while this state is active (or pulsed on entering it).
+    pub output: Option<ButtonOutput>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -328,6 +339,8 @@ pub enum ControlError {
     Trigger(#[from] TriggerError),
     #[error(transparent)]
     Spec(#[from] SpecError),
+    #[error(transparent)]
+    Vjoy(#[from] VjoyError),
 }
 
 fn requests(
@@ -789,6 +802,42 @@ impl VirtualControl {
         lists.into_iter().flatten().collect()
     }
 
+    /// Every vJoy button output of the control (per state or for the control).
+    pub fn button_outputs(&self) -> Vec<&ButtonOutput> {
+        match &self.kind {
+            VirtualControlKind::Radio(r) => {
+                r.states.iter().filter_map(|s| s.output.as_ref()).collect()
+            }
+            VirtualControlKind::Mode(m) => {
+                m.states.iter().filter_map(|s| s.output.as_ref()).collect()
+            }
+            VirtualControlKind::Toggle(t) => t.output.iter().collect(),
+            VirtualControlKind::Momentary(m) => m.output.iter().collect(),
+            VirtualControlKind::Counter(_) => Vec::new(),
+        }
+    }
+
+    /// vJoy devices the control writes to (outputs and vJoy actions).
+    pub fn vjoy_devices(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = self
+            .button_outputs()
+            .into_iter()
+            .map(|o| o.button.device)
+            .collect();
+        if let VirtualControlKind::Counter(CounterControl {
+            output: Some(axis), ..
+        }) = &self.kind
+        {
+            out.push(axis.device);
+        }
+        for action in self.actions() {
+            if let Action::Vjoy { command } = action {
+                out.push(command.device());
+            }
+        }
+        out
+    }
+
     fn actions_mut(&mut self) -> Vec<&mut Action> {
         let lists: Vec<&mut Vec<Action>> = match &mut self.kind {
             VirtualControlKind::Radio(r) => r
@@ -830,6 +879,15 @@ impl VirtualControl {
         }
         for action in self.actions_mut() {
             action.normalize()?;
+        }
+        for output in self.button_outputs() {
+            output.validate()?;
+        }
+        if let VirtualControlKind::Counter(CounterControl {
+            output: Some(axis), ..
+        }) = &self.kind
+        {
+            crate::vjoy::validate_axis(axis)?;
         }
         let holds: Vec<bool> = self.bindings_hold_flags();
         for (slot, hold) in self.triggers_mut().into_iter().zip(holds) {
@@ -885,6 +943,7 @@ mod tests {
             name: id.to_uppercase(),
             select: vec![],
             on_activate: vec![key(&format!("{id}-on"))],
+            output: None,
             on_deactivate: vec![key(&format!("{id}-off"))],
         }
     }
@@ -1133,6 +1192,7 @@ mod tests {
                     ],
                     on_activate: vec![],
                     on_deactivate: vec![],
+                    output: None,
                 }],
                 increment: vec![
                     TriggerInput::EncoderStep {

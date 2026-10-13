@@ -15,6 +15,7 @@
 use crate::discord::DiscordCommand;
 use crate::overlay::MonitorRef;
 use crate::path::{self, Sample, Screens};
+use crate::profile::ProfileTarget;
 use crate::soundpad::SoundpadCommand;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -62,6 +63,8 @@ pub enum Action {
     Soundpad { command: SoundpadCommand },
     /// Mute or deafen in Discord.
     Discord { command: DiscordCommand },
+    /// Makes another profile active. The engine handles it; it sends no input.
+    SwitchProfile { target: ProfileTarget },
 }
 
 /// How a mouse macro records movement.
@@ -526,7 +529,7 @@ impl Action {
                     sound.path = sound.path.trim().to_owned();
                 }
             }
-            Action::Discord { .. } => {}
+            Action::Discord { .. } | Action::SwitchProfile { .. } => {}
         }
         Ok(())
     }
@@ -563,7 +566,7 @@ impl Action {
                     expand_mouse_step(step, playback, target, &mut ops, &mut warnings);
                 }
             }
-            Action::Soundpad { .. } | Action::Discord { .. } => {}
+            Action::Soundpad { .. } | Action::Discord { .. } | Action::SwitchProfile { .. } => {}
         }
         (ops, warnings)
     }
@@ -575,6 +578,9 @@ impl Action {
         let (kind, parts, playback): (&str, Vec<String>, &Playback) = match self {
             Action::Soundpad { command } => return format!("soundpad: {}", command.describe()),
             Action::Discord { command } => return format!("discord: {}", command.describe()),
+            Action::SwitchProfile { target } => {
+                return format!("switch profile: {}", target.describe());
+            }
             Action::KeyboardMacro { steps, playback } => (
                 "keys",
                 steps
@@ -1158,6 +1164,27 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&dc).unwrap(),
             r#"{"type":"discord","command":"toggleDeafen"}"#
+        );
+    }
+
+    #[test]
+    fn switch_profile_sends_no_input_and_needs_no_connection() {
+        let mut a: Action =
+            serde_json::from_str(r#"{"type":"switchProfile","target":{"type":"previous"}}"#)
+                .unwrap();
+        assert_eq!(a.normalize(), Ok(()));
+        assert_eq!(a.describe(), "switch profile: previous");
+        assert!(a.expand(None).0.is_empty());
+        assert!(!a.needs_screens());
+        assert_eq!(crate::connection::ConnectorId::for_action(&a), None);
+        let to = Action::SwitchProfile {
+            target: ProfileTarget::Profile {
+                profile: "profile-2".into(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_string(&to).unwrap(),
+            r#"{"type":"switchProfile","target":{"type":"profile","profile":"profile-2"}}"#
         );
     }
 

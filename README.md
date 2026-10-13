@@ -49,7 +49,7 @@ A virtual control is built from physical inputs and can run actions. The first k
   deactivate actions, then B's activate actions.
 - Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
   (button down, up, click, wheel, relative move, move to a position, recorded paths, wait),
-  Soundpad commands and Discord mute/deafen. Keys are sent as scan codes so games that read
+  Soundpad commands, Discord mute/deafen and switching the profile (see Profiles). Keys are sent as scan codes so games that read
   DirectInput or RawInput see them. Every executed action is logged.
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
@@ -99,7 +99,36 @@ Windows does not deliver synthesised input to programs running with higher privi
 game runs as administrator, Detent must too for its macros to reach the game (and for the
 recorder to see input while the game has focus).
 
-Mapping to a virtual joystick and per-game profiles come in later stages.
+Mapping to a virtual joystick comes in a later stage.
+
+## Profiles
+
+A **profile** belongs to one game: it has its own radios (virtual controls), its own overlay
+widgets with their positions and layout, and its own active radio states. Devices, encoders,
+counters, connections, the recorder settings and the overlay's monitor, size, hotkey and
+visibility are shared by all profiles. A setup from before profiles becomes the profile
+**Default**.
+
+- The **Profile** dropdown in the header shows the active profile and switches it by hand.
+  **Manage profiles…** (or the top of **Virtual Controls**) lists all profiles: create, rename,
+  duplicate (a full copy of radios, widgets and states, without the programs), delete (not the
+  last one), and **Make default** (the first profile is the default one).
+- Each profile lists the **programs** that make it active, e.g. `DCS.exe` (case does not matter;
+  a full path keeps only the file name, a name without extension gets `.exe`). Type them in or
+  **Pick from running processes** (programs with a window, with their titles).
+- **Auto-switch** (on by default): when a program a profile lists comes to the front, that
+  profile becomes active. Detent watches the foreground window event-driven
+  (`SetWinEventHook`), without polling. **When no game matches**: *Keep current profile*
+  (default; alt-tabbing to Discord keeps the game's profile) or *Switch to the default
+  profile*. Detent's own windows never switch profiles. If several profiles list the same
+  program, the active one stays, otherwise the first in the list wins.
+- The action **Switch profile** (to a profile, the next or the previous one) lets a controller
+  button switch profiles. A profile chosen by hand (dropdown or action) stays until a program
+  that a profile lists comes to the front; another window of the same program does not count.
+- Switching **never runs actions**: every radio keeps its state per profile and is shown again
+  as it was; the overlay updates at once. Each switch is logged.
+- The overlay widget **Profile name** (button *Show profile name* under Overlay) shows the
+  active profile's name; like all widgets it is set per profile.
 
 ## Connections
 
@@ -137,6 +166,35 @@ credentials** also deletes the secret. Discord lets only one app at a time chang
 settings and reverts that app's changes when it disconnects, so Detent stays connected while
 the connection is enabled (and reconnects when Discord restarts).
 
+## Tray and settings
+
+Detent keeps a **tray icon** while it runs: a left click opens the main window; its menu has
+*Show window*, *Overlay visible* (the same switch as the overlay hotkey) and *Quit*. Starting
+Detent a second time opens the running instance instead.
+
+The gear in the header opens **Settings**. Under *General*:
+
+- **Close button minimizes to the tray** (on by default): closing the window only hides it;
+  inputs, actions and the overlay keep running. Quit from the tray menu. The first time,
+  Windows shows a notification that Detent is still running.
+- **Start with Windows** (off by default): registered per user. A start by Windows always
+  goes to the tray.
+- **Start minimized to the tray** (on by default): also for starts by hand. The very first
+  start (no settings saved yet) always shows the window.
+- **Always run as administrator** (off by default): Windows does not let a normal program send
+  keys and mouse input to a program that runs as administrator. If a game does, Detent must too.
+  With this on, Detent restarts itself as administrator (UAC prompt) when started normally.
+  Together with *Start with Windows* it is registered as a Task Scheduler task with highest
+  privileges instead of a startup entry, so there is no prompt at logon. Creating or removing
+  that task needs administrator rights; until Detent runs as administrator it uses the normal
+  startup entry. **Restart as administrator** does it right away.
+
+The settings page and the version tooltip show whether Detent runs as administrator. When it
+does not and the program in the foreground does, a banner in the main window warns that
+Detent's keys and mouse will not reach it (also in the log).
+
+Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
+
 ## Layout
 
 | Path | What |
@@ -161,8 +219,9 @@ cargo run -p detent-input --example probe -- 30   # print raw input events for 3
 ```
 
 Settings live in `%APPDATA%\cloud.breu.detent`: `devices.json` (known devices and
-labels), `setup.json` (encoders, counters, virtual controls, overlay, recorder, connections), `values.json`
-(current counter values), `control-states.json` (active radio states).
+labels), `setup.json` (encoders, counters, profiles with their virtual controls and overlay widgets, overlay settings, recorder, connections,
+app-wide settings), `values.json`
+(current counter values), `control-states.json` (active radio states of all profiles).
 
 ## CI
 

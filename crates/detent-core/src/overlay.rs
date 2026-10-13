@@ -8,6 +8,7 @@
 
 use crate::device::DeviceId;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
@@ -53,6 +54,8 @@ pub enum OverlayWidget {
         #[serde(default)]
         layout: RadioLayout,
     },
+    /// The name of the active profile.
+    ProfileName,
 }
 
 impl OverlayWidget {
@@ -71,6 +74,7 @@ impl OverlayWidget {
             ) => other.is_control(device, *control),
             (Self::Function { function }, other) => other.is_function(function),
             (Self::Radio { control, .. }, other) => other.is_radio(control),
+            (Self::ProfileName, other) => *other == Self::ProfileName,
         }
     }
 
@@ -173,7 +177,10 @@ pub struct OverlayConfig {
     /// Distance of that stack from the corner, in logical pixels.
     pub margin: u32,
     pub scale: f32,
-    pub widgets: Vec<OverlayItem>,
+    /// The active profile's widgets. The setup file stores them per profile, so there the
+    /// list is empty and left out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub widgets: WidgetList,
 }
 
 impl Default for OverlayConfig {
@@ -185,20 +192,44 @@ impl Default for OverlayConfig {
             anchor: Anchor::default(),
             margin: 32,
             scale: 1.0,
-            widgets: Vec::new(),
+            widgets: WidgetList::default(),
         }
     }
 }
 
-impl OverlayConfig {
+/// The widgets of one profile, in drawing order.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WidgetList(pub Vec<OverlayItem>);
+
+impl std::ops::Deref for WidgetList {
+    type Target = Vec<OverlayItem>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for WidgetList {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<Vec<OverlayItem>> for WidgetList {
+    fn from(items: Vec<OverlayItem>) -> Self {
+        Self(items)
+    }
+}
+
+impl WidgetList {
     /// Adds the widget if `is_it` matches none, removes the match otherwise. Returns whether
     /// it is shown afterwards.
     fn toggle(&mut self, is_it: impl Fn(&OverlayWidget) -> bool, new: OverlayWidget) -> bool {
-        if let Some(pos) = self.widgets.iter().position(|w| is_it(&w.widget)) {
-            self.widgets.remove(pos);
+        if let Some(pos) = self.iter().position(|w| is_it(&w.widget)) {
+            self.remove(pos);
             false
         } else {
-            self.widgets.push(new.into());
+            self.push(new.into());
             true
         }
     }
@@ -224,11 +255,11 @@ impl OverlayConfig {
     }
 
     pub fn remove_function(&mut self, function: &str) {
-        self.widgets.retain(|w| !w.widget.is_function(function));
+        self.retain(|w| !w.widget.is_function(function));
     }
 
     pub fn has_virtual_control(&self, control: &str) -> bool {
-        self.widgets.iter().any(|w| w.widget.is_radio(control))
+        self.iter().any(|w| w.widget.is_radio(control))
     }
 
     pub fn toggle_virtual_control(&mut self, control: &str) -> bool {
@@ -242,7 +273,29 @@ impl OverlayConfig {
     }
 
     pub fn remove_virtual_control(&mut self, control: &str) {
-        self.widgets.retain(|w| !w.widget.is_radio(control));
+        self.retain(|w| !w.widget.is_radio(control));
+    }
+
+    pub fn has_profile_name(&self) -> bool {
+        self.iter().any(|w| w.widget == OverlayWidget::ProfileName)
+    }
+
+    pub fn toggle_profile_name(&mut self) -> bool {
+        self.toggle(
+            |w| *w == OverlayWidget::ProfileName,
+            OverlayWidget::ProfileName,
+        )
+    }
+
+    /// Points radio widgets at controls that got a new id (old id to new id).
+    pub fn rename_virtual_controls(&mut self, renamed: &HashMap<String, String>) {
+        for item in self.iter_mut() {
+            if let OverlayWidget::Radio { control, .. } = &mut item.widget
+                && let Some(new) = renamed.get(control)
+            {
+                control.clone_from(new);
+            }
+        }
     }
 }
 
@@ -252,17 +305,23 @@ mod tests {
 
     #[test]
     fn toggle_adds_then_removes() {
-        let mut cfg = OverlayConfig::default();
+        let mut cfg = WidgetList::default();
         let dev = DeviceId("a".into());
         assert!(cfg.toggle_control(&dev, ControlRef::Axis { index: 2 }));
         assert!(cfg.toggle_control(&dev, ControlRef::Button { index: 2 }));
-        assert_eq!(cfg.widgets.len(), 2);
+        assert_eq!(cfg.len(), 2);
         assert!(!cfg.toggle_control(&dev, ControlRef::Axis { index: 2 }));
-        assert_eq!(cfg.widgets.len(), 1);
+        assert_eq!(cfg.len(), 1);
         assert!(cfg.toggle_virtual_control("vc-1"));
         assert!(cfg.has_virtual_control("vc-1"));
-        cfg.remove_virtual_control("vc-1");
-        assert!(!cfg.has_virtual_control("vc-1"));
+        cfg.rename_virtual_controls(&HashMap::from([("vc-1".into(), "vc-7".into())]));
+        assert!(cfg.has_virtual_control("vc-7"));
+        cfg.remove_virtual_control("vc-7");
+        assert!(!cfg.has_virtual_control("vc-7"));
+        assert!(cfg.toggle_profile_name());
+        assert!(cfg.has_profile_name());
+        assert!(!cfg.toggle_profile_name());
+        assert!(!cfg.has_profile_name());
     }
 
     #[test]
@@ -291,6 +350,16 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<OverlayItem>(&serde_json::to_string(&radio).unwrap()).unwrap(),
             radio
+        );
+        let name: OverlayItem = OverlayWidget::ProfileName.into();
+        assert_eq!(
+            serde_json::to_string(&name).unwrap(),
+            r#"{"type":"profileName","position":null}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<OverlayItem>(r#"{"type":"profileName","position":null}"#)
+                .unwrap(),
+            name
         );
     }
 

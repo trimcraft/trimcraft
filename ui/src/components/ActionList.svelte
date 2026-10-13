@@ -1,12 +1,13 @@
 <script lang="ts">
   // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad and Discord
-  // commands.
+  // commands, profile switches.
   import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
   import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
   import MacroEditor from "./MacroEditor.svelte";
   import SoundpadEditor from "./SoundpadEditor.svelte";
   import DiscordEditor from "./DiscordEditor.svelte";
+  import ProfileTargetEditor from "./ProfileTargetEditor.svelte";
 
   let {
     label,
@@ -38,6 +39,8 @@
         return { type, command: { type: "play", sound: { title: "", path: "" }, output: "both" } };
       case "discord":
         return { type, command: "toggleMute" };
+      case "switchProfile":
+        return { type, target: { type: "next" } };
     }
   }
 
@@ -60,7 +63,7 @@
     {#each actions as action, ai (ai)}
       <div class="action" class:inactive={inactive(action)}>
         <div class="row head">
-          <button class="link" onclick={() => (open = open === ai ? null : ai)}>{open === ai ? "▾" : "▸"} {actionText(action)}</button>
+          <button class="link" onclick={() => (open = open === ai ? null : ai)}>{open === ai ? "▾" : "▸"} {actionText(action, snapshot.profiles)}</button>
           <span class="spacer"></span>
           <button class="small" title="Move up" onclick={() => move(actions, ai, -1)}>↑</button>
           <button class="small" title="Move down" onclick={() => move(actions, ai, 1)}>↓</button>
@@ -78,6 +81,8 @@
               <SoundpadEditor bind:command={action.command} connector={connectorView("soundpad")} />
             {:else if action.type === "discord"}
               <DiscordEditor bind:command={action.command} connector={connectorView("discord")} />
+            {:else if action.type === "switchProfile"}
+              <ProfileTargetEditor bind:target={action.target} profiles={snapshot.profiles} />
             {:else}
               <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
@@ -92,6 +97,7 @@
       <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
       {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
       {#if enabled("discord")}<button class="small" onclick={() => addAction("discord")}>+ Discord</button>{/if}
+      <button class="small" onclick={() => addAction("switchProfile")}>+ Switch profile</button>
     </div>
   </div>
 </div>

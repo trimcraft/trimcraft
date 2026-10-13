@@ -102,7 +102,9 @@ export type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 export type OverlayWidget =
   | { type: "control"; device: DeviceId; control: ControlRef; label: string | null }
   | { type: "function"; function: string }
-  | { type: "radio"; control: string; layout: RadioLayout };
+  | { type: "radio"; control: string; layout: RadioLayout }
+  /** The active profile's name. */
+  | { type: "profileName" };
 
 export type RadioLayout = "vertical" | "horizontal";
 
@@ -160,6 +162,13 @@ export interface EngineSnapshot {
   halfDetected: ButtonPair[];
   buttonStats: ButtonStats[];
   functions: FunctionView[];
+  /** All profiles in order; the first is the default profile. */
+  profiles: ProfileView[];
+  activeProfile: string;
+  profileSwitching: ProfileSwitching;
+  /** The program in the foreground (not Detent), as auto-switching sees it. */
+  foreground: string | null;
+  /** The active profile's virtual controls. */
   virtualControls: VirtualControlView[];
   /** Null unless learn mode is on or just captured something. */
   learn: LearnView | null;
@@ -169,8 +178,12 @@ export interface EngineSnapshot {
   connections: Connections;
   /** Every connector with its live status. */
   connectors: ConnectorView[];
+  /** Global settings with the active profile's widgets. */
   overlay: OverlayConfig;
   detector: DetectorConfig;
+  /** App-wide settings (Settings page). */
+  settings: AppSettings;
+  shell: ShellStatus;
 }
 
 export interface AppMeta {
@@ -179,6 +192,8 @@ export interface AppMeta {
   dataDir: string;
   logDir: string;
   platform: string;
+  /** Detent runs as administrator. */
+  elevated: boolean;
 }
 
 // --- Virtual controls (detent-core: virtual_control.rs, action.rs) ---------------------------
@@ -254,7 +269,8 @@ export type Action =
   | KeyboardMacro
   | MouseMacro
   | { type: "soundpad"; command: SoundpadCommand }
-  | { type: "discord"; command: DiscordCommand };
+  | { type: "discord"; command: DiscordCommand }
+  | { type: "switchProfile"; target: ProfileTarget };
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
@@ -452,4 +468,58 @@ export interface DiagEntry {
   deviceName: string | null;
   text: string;
   detail: string | null;
+}
+
+// --- Settings page (detent-core: settings.rs) ------------------------------------------------
+
+export interface AppSettings {
+  /** The close button hides the window; Detent keeps running in the tray. */
+  closeToTray: boolean;
+  startWithWindows: boolean;
+  /** Start in the tray, also when started by hand (a start by Windows always does). */
+  startMinimized: boolean;
+  /** Relaunch elevated (UAC prompt) when started without administrator rights. */
+  runAsAdmin: boolean;
+  /** Set by the app; ignored when saving. */
+  trayNoticeShown: boolean;
+}
+
+/** How Detent is started at logon: Run registry value or elevated Task Scheduler task. */
+export type AutostartKind = "off" | "runKey" | "task";
+
+export interface ShellStatus {
+  elevated: boolean;
+  /** What is registered right now. */
+  autostart: AutostartKind;
+  /** Why autostart differs from the settings, or why changing it failed. */
+  autostartNote: string | null;
+  /** The foreground program runs as administrator and Detent does not: its name. */
+  elevatedForeground: string | null;
+}
+
+// --- Profiles (detent-core: profile.rs) -------------------------------------------------------
+
+/** A profile without its controls and widgets (the snapshot carries the active profile's). */
+export interface ProfileView {
+  id: string;
+  name: string;
+  /** Executable names that make the profile active, e.g. "DCS.exe". */
+  executables: string[];
+}
+
+/** When no profile lists the foreground program: keep the profile, or go to the default (first) one. */
+export type NoMatch = "keepCurrent" | "switchToDefault";
+
+export interface ProfileSwitching {
+  autoSwitch: boolean;
+  noMatch: NoMatch;
+}
+
+/** Which profile a "Switch profile" action makes active. */
+export type ProfileTarget = { type: "profile"; profile: string } | { type: "next" } | { type: "previous" };
+
+/** A program with a window, for "Pick from running processes". */
+export interface ProcessWindow {
+  exe: string;
+  title: string;
 }

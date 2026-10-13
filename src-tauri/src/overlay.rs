@@ -150,6 +150,7 @@ pub fn refresh_visibility(app: &AppHandle) {
 /// recorded (it shows the recording indicator). It only takes the mouse in edit mode;
 /// otherwise clicks go through to the game.
 pub fn set_visible(app: &AppHandle, visible: bool) {
+    crate::tray::set_overlay_checked(app, visible);
     let Some(window) = app.get_webview_window(LABEL) else {
         return;
     };
@@ -172,17 +173,23 @@ pub fn set_visible(app: &AppHandle, visible: bool) {
 
 /// Hotkey handler: flips visibility and remembers it.
 pub fn toggle(app: &AppHandle) {
+    set_shown(app, !saved_visible(app), "by hotkey");
+}
+
+/// The saved visibility (hotkey, tray, Overlay panel).
+pub fn saved_visible(app: &AppHandle) -> bool {
+    app.state::<Arc<Shared>>().engine().setup().overlay.visible
+}
+
+/// Shows or hides the overlay and remembers it; `how` goes into the log.
+pub fn set_shown(app: &AppHandle, visible: bool, how: &str) {
     let shared = app.state::<Arc<Shared>>();
     let mut engine = shared.engine();
-    let visible = !engine.setup().overlay.visible;
     engine.set_overlay_visible(visible);
     shared.commit(&mut engine);
     drop(engine);
     set_visible(app, visible);
-    log::info!(
-        "overlay {} by hotkey",
-        if visible { "shown" } else { "hidden" }
-    );
+    log::info!("overlay {} {how}", if visible { "shown" } else { "hidden" });
 }
 
 pub fn register_hotkey(app: &AppHandle, hotkey: &str) -> Result<(), String> {

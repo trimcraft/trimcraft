@@ -18,6 +18,9 @@ import type {
   MouseMacro,
   MouseStep,
   Movement,
+  OverlayItem,
+  ProcessWindow,
+  ProfileTarget,
   PulseStats,
   Radio,
   RecordKind,
@@ -143,6 +146,13 @@ export function createDemo(): Backend {
     halfDetected: [],
     buttonStats: [],
     functions: [],
+    profiles: [
+      { id: "profile-1", name: "Default", executables: [] },
+      { id: "profile-2", name: "DCS World", executables: ["DCS.exe"] },
+    ],
+    activeProfile: "profile-1",
+    profileSwitching: { autoSwitch: true, noMatch: "keepCurrent" },
+    foreground: null,
     virtualControls: [],
     learn: null,
     overlayEditing: false,
@@ -158,6 +168,10 @@ export function createDemo(): Backend {
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
+    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false },
+    // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
+    // banner shows. "Restart as administrator" clears both.
+    shell: { elevated: false, autostart: "off", autostartNote: null, elevatedForeground: "DemoGame.exe" },
   };
   const listeners = new Set<(s: EngineSnapshot) => void>();
   const positions = new Map<string, number>();
@@ -197,8 +211,11 @@ export function createDemo(): Backend {
     discordStatus();
   }
   const voiceText = (v: VoiceState) => `mic muted: ${v.mute ? "yes" : "no"}, deafened: ${v.deaf ? "yes" : "no"}`;
+  /** "Switch profile" actions, carried out after the trigger (like the engine). */
+  const pendingSwitches: ProfileTarget[] = [];
   const runAction = (a: Action) => {
     if (a.type === "discord" && s.connections.discord.enabled) runDiscord(a.command);
+    if (a.type === "switchProfile") pendingSwitches.push(a.target);
   };
 
   // Virtual controls: same semantics as detent-core's virtual_control.rs, without actions
@@ -251,12 +268,80 @@ export function createDemo(): Backend {
       if (has(r.clear)) runCommand(c, { type: "clear" });
       if (has(r.toggleOff)) runCommand(c, { type: "toggleOff" });
     }
+    runSwitches();
   };
   const findControl = (id: string) => {
-    const c = s.virtualControls.find((x) => x.id === id);
+    const c = allControls().find((x) => x.id === id);
     if (!c) throw new Error(`unknown virtual control ${id}`);
     return c;
   };
+
+  // Profiles: the active one's controls and widgets live in the snapshot, the others here.
+  // Control ids are unique across profiles, as in the app.
+  const stash = new Map<string, { controls: VirtualControlView[]; widgets: OverlayItem[] }>();
+  const demoState = (name: string) => ({ id: "", name, select: [], onActivate: [], onDeactivate: [] });
+  stash.set("profile-2", {
+    controls: [
+      {
+        id: "vc-1",
+        name: "Radio",
+        kind: {
+          type: "radio",
+          states: ["UHF", "VHF", "Intercom"].map((n, i) => ({ ...demoState(n), id: `st-${i + 1}` })),
+          increment: [],
+          decrement: [],
+          clear: [],
+          toggleOff: [],
+          end: "wrap",
+          toggleOnReselect: false,
+          startup: "restoreLast",
+        },
+        active: "st-2",
+        activeName: "VHF",
+      },
+    ],
+    widgets: [
+      { type: "profileName", position: { x: 0.45, y: 0.02 } },
+      { type: "radio", control: "vc-1", layout: "horizontal", position: null },
+    ],
+  });
+  const allControls = () => [...s.virtualControls, ...[...stash.values()].flatMap((p) => p.controls)];
+  const allWidgetLists = () => [s.overlay.widgets, ...[...stash.values()].map((p) => p.widgets)];
+  const findProfile = (id: string) => {
+    const p = s.profiles.find((x) => x.id === id);
+    if (!p) throw new Error(`unknown profile ${id}`);
+    return p;
+  };
+  /** Makes a profile active without running actions; its radios keep their states. */
+  const activate = (id: string) => {
+    if (id === s.activeProfile) return;
+    findProfile(id);
+    stash.set(s.activeProfile, { controls: s.virtualControls, widgets: s.overlay.widgets });
+    const next = stash.get(id) ?? { controls: [], widgets: [] };
+    stash.delete(id);
+    s.virtualControls = next.controls;
+    s.overlay.widgets = next.widgets;
+    s.activeProfile = id;
+    console.info(`[demo] profile "${findProfile(id).name}" active`);
+  };
+  function runSwitches() {
+    for (const target of pendingSwitches.splice(0)) {
+      const n = s.profiles.length;
+      const i = s.profiles.findIndex((p) => p.id === s.activeProfile);
+      const to =
+        target.type === "next" ? s.profiles[(i + 1) % n] : target.type === "previous" ? s.profiles[(i + n - 1) % n] : s.profiles.find((p) => p.id === target.profile);
+      if (to) activate(to.id);
+    }
+  }
+  let nextProfile = 3;
+  const newProfileId = () => `profile-${nextProfile++}`;
+  const DEMO_WINDOWS: ProcessWindow[] = [
+    { exe: "DCS.exe", title: "Digital Combat Simulator" },
+    { exe: "Discord.exe", title: "#general | Discord" },
+    { exe: "explorer.exe", title: "Downloads" },
+    { exe: "Il-2.exe", title: "IL-2 Sturmovik: Great Battles" },
+    { exe: "Soundpad.exe", title: "Soundpad" },
+  ];
 
   const counterValue = (f: FunctionDef): number => {
     const { spec } = f.kind;
@@ -376,11 +461,11 @@ export function createDemo(): Backend {
 
   let nextEnc = 1;
   let nextFn = 1;
-  let nextVc = 1;
+  let nextVc = 2;
   const ok = async () => emit();
 
   return {
-    meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser" }),
+    meta: async () => ({ version: "0.1.0-demo", backend: "browser demo", dataDir: "–", logDir: "–", platform: "browser", elevated: s.shell.elevated }),
     async subscribe(cb) {
       listeners.add(cb);
       cb(structuredClone(s));
@@ -413,7 +498,7 @@ export function createDemo(): Backend {
       s.encoders = s.encoders.filter((e) => e.id !== id);
       for (const f of s.functions) if (f.kind.input.type === "encoder" && f.kind.input.encoder === id) f.kind.input = { type: "none" };
       const keep = (t: Trigger) => !(t.type === "encoderStep" && t.encoder === id);
-      for (const c of s.virtualControls) {
+      for (const c of allControls()) {
         const r = c.kind;
         r.increment = r.increment.filter(keep);
         r.decrement = r.decrement.filter(keep);
@@ -440,7 +525,10 @@ export function createDemo(): Backend {
     },
     async removeFunction(id) {
       s.functions = s.functions.filter((f) => f.id !== id);
-      s.overlay.widgets = s.overlay.widgets.filter((w) => !(w.type === "function" && w.function === id));
+      for (const list of allWidgetLists()) {
+        const i = list.findIndex((w) => w.type === "function" && w.function === id);
+        if (i >= 0) list.splice(i, 1);
+      }
       emit();
     },
     async setFunctionValue(id, value) {
@@ -481,6 +569,7 @@ export function createDemo(): Backend {
         if (a.type === "soundpad" && a.command.type === "play" && !a.command.sound.title.trim() && !a.command.sound.path.trim()) {
           throw new Error("choose a Soundpad sound to play");
         }
+        if (a.type === "switchProfile" && a.target.type === "profile") findProfile(a.target.profile);
       }
       let nextState = Math.max(0, ...r.states.map((st) => Number(st.id.replace("st-", "")) || 0)) + 1;
       r.states.forEach((st, i) => {
@@ -518,6 +607,7 @@ export function createDemo(): Backend {
     },
     async commandRadio(id, command) {
       runCommand(findControl(id), { type: command });
+      runSwitches();
       emit();
     },
     async toggleOverlayVirtualControl(id) {
@@ -643,6 +733,101 @@ export function createDemo(): Backend {
       s.recorderConfig = structuredClone(config);
       await ok();
     },
+    async setSettings(settings) {
+      s.settings = { ...structuredClone(settings), trayNoticeShown: s.settings.trayNoticeShown };
+      // Like detent-core's plan_autostart: the task needs administrator rights.
+      const { startWithWindows, runAsAdmin } = s.settings;
+      const elevated = s.shell.elevated;
+      s.shell.autostart = !startWithWindows ? "off" : runAsAdmin && elevated ? "task" : "runKey";
+      s.shell.autostartNote =
+        startWithWindows && runAsAdmin && !elevated
+          ? "Registered without administrator rights for now (UAC prompt at logon); Detent switches to a Task Scheduler task at the next start as administrator."
+          : null;
+      await ok();
+    },
+    async restartElevated() {
+      s.shell.elevated = true;
+      s.shell.elevatedForeground = null;
+      if (s.settings.startWithWindows) {
+        s.shell.autostart = s.settings.runAsAdmin ? "task" : "runKey";
+        s.shell.autostartNote = null;
+      }
+      await ok();
+    },
+    async selectProfile(id) {
+      activate(id);
+      emit();
+    },
+    async createProfile(name) {
+      const id = newProfileId();
+      s.profiles.push({ id, name: name.trim() || `Profile ${s.profiles.length + 1}`, executables: [] });
+      activate(id);
+      emit();
+      return id;
+    },
+    async duplicateProfile(id, name) {
+      const source = findProfile(id);
+      const data = id === s.activeProfile ? { controls: s.virtualControls, widgets: s.overlay.widgets } : (stash.get(id) ?? { controls: [], widgets: [] });
+      const renamed = new Map<string, string>();
+      const controls = structuredClone(data.controls).map((c) => {
+        const newId = `vc-${nextVc++}`;
+        renamed.set(c.id, newId);
+        const last = lastActive.get(c.id);
+        if (last) lastActive.set(newId, last);
+        return { ...c, id: newId };
+      });
+      const widgets = structuredClone(data.widgets).map((w) => (w.type === "radio" ? { ...w, control: renamed.get(w.control) ?? w.control } : w));
+      const copy = { id: newProfileId(), name: name.trim() || `${source.name} copy`, executables: [] };
+      s.profiles.push(copy);
+      stash.set(copy.id, { controls, widgets });
+      activate(copy.id);
+      emit();
+      return copy.id;
+    },
+    async renameProfile(id, name) {
+      const p = findProfile(id);
+      if (name.trim()) p.name = name.trim();
+      emit();
+    },
+    async deleteProfile(id) {
+      findProfile(id);
+      if (s.profiles.length === 1) throw new Error("the last profile cannot be deleted");
+      s.profiles = s.profiles.filter((p) => p.id !== id);
+      if (id === s.activeProfile) {
+        const first = s.profiles[0]!.id;
+        const next = stash.get(first) ?? { controls: [], widgets: [] };
+        stash.delete(first);
+        s.virtualControls = next.controls;
+        s.overlay.widgets = next.widgets;
+        s.activeProfile = first;
+      } else stash.delete(id);
+      emit();
+    },
+    async makeDefaultProfile(id) {
+      const p = findProfile(id);
+      s.profiles = [p, ...s.profiles.filter((x) => x.id !== id)];
+      emit();
+    },
+    async setProfileExecutables(id, executables) {
+      const p = findProfile(id);
+      const clean: string[] = [];
+      for (const raw of executables) {
+        const name = raw.trim().replace(/^"|"$/g, "").split(/[\\/]/).pop()!.trim();
+        if (!name || /[<>:"|?*]/.test(name)) throw new Error(`"${raw}" is not a program name; enter e.g. DCS.exe`);
+        const exe = name.includes(".") ? name : `${name}.exe`;
+        if (!clean.some((e) => e.toLowerCase() === exe.toLowerCase())) clean.push(exe);
+      }
+      p.executables = clean;
+      emit();
+    },
+    setProfileSwitching: async (switching) => { s.profileSwitching = { ...switching }; await ok(); },
+    async toggleOverlayProfileName() {
+      const i = s.overlay.widgets.findIndex((w) => w.type === "profileName");
+      if (i >= 0) s.overlay.widgets.splice(i, 1); else s.overlay.widgets.push({ type: "profileName", position: null });
+      emit();
+      return i < 0;
+    },
+    listProcessWindows: async () => structuredClone(DEMO_WINDOWS),
     async testAction(action) {
       setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
     },

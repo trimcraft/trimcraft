@@ -20,13 +20,17 @@ detent-input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
-tauri = "2"
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
 # Opens the Discord Developer Portal in the default browser (setup guide).
 tauri-plugin-opener = "2"
 # Discord token endpoint (HTTPS, rustls).
 ureq = "2"
+# A second launch shows the running instance instead of starting another one.
+tauri-plugin-single-instance = "2"
+# One-time "keeps running in the tray" notification; used from Rust only.
+tauri-plugin-notification = "2"
 
 [lints]
 workspace = true
@@ -40,9 +44,12 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_UI_Accessibility",
     "Win32_UI_Input",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

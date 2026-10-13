@@ -7,6 +7,7 @@
   import BackupSettings from "./BackupSettings.svelte";
   import OverlayAppearanceSettings from "./OverlayAppearanceSettings.svelte";
   import UpdatesSettings from "./UpdatesSettings.svelte";
+  import AboutSettings from "./AboutSettings.svelte";
   import { settingsNav } from "../../lib/nav.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
@@ -16,7 +17,8 @@
   const BACKUP: Section = { id: "backup", title: "Backup & transfer", component: BackupSettings };
   const APPEARANCE: Section = { id: "appearance", title: "Overlay appearance", component: OverlayAppearanceSettings };
   const UPDATES: Section = { id: "updates", title: "Updates", component: UpdatesSettings };
-  const SECTIONS: Section[] = [GENERAL, APPEARANCE, BACKUP, UPDATES];
+  const ABOUT: Section = { id: "about", title: "About", component: AboutSettings };
+  const SECTIONS: Section[] = [GENERAL, BACKUP, APPEARANCE, UPDATES, ABOUT];
 
   let section = $derived(SECTIONS.find((s) => s.id === settingsNav.section) ?? GENERAL);
 </script>

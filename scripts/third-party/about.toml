@@ -1,0 +1,23 @@
+# cargo-about configuration for THIRD_PARTY_LICENSES (scripts/third-party-licenses.sh).
+# Licences of crates that end up in trimcraft.exe; all are compatible with GPL-3.0-or-later.
+accepted = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+targets = ["x86_64-pc-windows-msvc"]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
+# Trimcraft's own crates (publish = false) are covered by LICENSE.
+private = { ignore = true }

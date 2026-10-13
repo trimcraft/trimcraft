@@ -34,6 +34,10 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_LICENSES": "THIRD_PARTY_LICENSES"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",

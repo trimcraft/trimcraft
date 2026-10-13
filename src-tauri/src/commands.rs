@@ -2,7 +2,7 @@
 
 use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
 use crate::{volume, webhook};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use trimcraft_core::audio::VoiceRef;
@@ -73,6 +73,9 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         get_diagnostics,
         clear_diagnostics,
         open_log_folder,
+        open_about_link,
+        support_links,
+        third_party_licenses,
         crate::transfer::export_setup,
         crate::transfer::pick_import_file,
         crate::transfer::cancel_import,
@@ -732,6 +735,72 @@ fn open_log_folder(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
         .map_err(|e| format!("cannot open the log folder: {e}"))
 }
 
+/// Donation pages, shown as "Support Trimcraft" buttons on the Credits page. A button appears
+/// only while its URL is set; both are empty until the accounts exist.
+/// GitHub Sponsors: "https://github.com/sponsors/<name>", Ko-fi: "https://ko-fi.com/<name>".
+/// Keep README.md ("Support Trimcraft") and .github/FUNDING.yml in step.
+const SUPPORT_URLS: SupportUrls = SupportUrls {
+    github_sponsors: "",
+    ko_fi: "",
+};
+
+struct SupportUrls {
+    github_sponsors: &'static str,
+    ko_fi: &'static str,
+}
+
+/// Links on Settings > About and the Credits page. Only these fixed URLs can be opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum AboutLink {
+    Repository,
+    Issues,
+    License,
+    GithubSponsors,
+    KoFi,
+}
+
+impl AboutLink {
+    /// Empty for a donation page that is not set up.
+    fn url(self) -> &'static str {
+        match self {
+            Self::Repository => "https://github.com/trimcraft/trimcraft",
+            Self::Issues => "https://github.com/trimcraft/trimcraft/issues/new/choose",
+            Self::License => "https://www.gnu.org/licenses/gpl-3.0.html",
+            Self::GithubSponsors => SUPPORT_URLS.github_sponsors,
+            Self::KoFi => SUPPORT_URLS.ko_fi,
+        }
+    }
+}
+
+#[tauri::command]
+fn open_about_link(app: AppHandle, link: AboutLink) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = link.url();
+    if url.is_empty() {
+        return Err("this link is not set up".into());
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("cannot open the browser: {e}"))
+}
+
+/// The donation pages that are set up, for the "Support Trimcraft" buttons.
+#[tauri::command]
+fn support_links() -> Vec<AboutLink> {
+    [AboutLink::GithubSponsors, AboutLink::KoFi]
+        .into_iter()
+        .filter(|l| !l.url().is_empty())
+        .collect()
+}
+
+/// The licences of the third-party software built into Trimcraft (THIRD_PARTY_LICENSES, also
+/// installed next to the program).
+#[tauri::command]
+fn third_party_licenses() -> &'static str {
+    include_str!("../../THIRD_PARTY_LICENSES")
+}
+
 /// Saves the Settings page ("General") and registers or removes autostart to match.
 #[tauri::command]
 fn set_settings(
@@ -863,6 +932,33 @@ mod tests {
     #[test]
     fn ui_payloads_deserialise() {
         let _: ControlRef = serde_json::from_str(r#"{"type":"axis","index":2}"#).unwrap();
+        for (link, url) in [
+            ("repository", "https://github.com/trimcraft/trimcraft"),
+            (
+                "issues",
+                "https://github.com/trimcraft/trimcraft/issues/new/choose",
+            ),
+            ("license", "https://www.gnu.org/licenses/gpl-3.0.html"),
+        ] {
+            let parsed: AboutLink = serde_json::from_str(&format!("\"{link}\"")).unwrap();
+            assert_eq!(parsed.url(), url);
+        }
+        assert!(serde_json::from_str::<AboutLink>(r#""https://example.com""#).is_err());
+        assert!(third_party_licenses().starts_with("Third-party licences for Trimcraft"));
+        // Donation pages: names as the UI sends them; a set URL is on the right site.
+        for (link, prefix) in [
+            ("githubSponsors", "https://github.com/sponsors/"),
+            ("koFi", "https://ko-fi.com/"),
+        ] {
+            let parsed: AboutLink = serde_json::from_str(&format!("\"{link}\"")).unwrap();
+            assert_eq!(
+                serde_json::to_string(&parsed).unwrap(),
+                format!("\"{link}\"")
+            );
+            let url = parsed.url();
+            assert!(url.is_empty() || url.starts_with(prefix), "{url}");
+            assert_eq!(support_links().contains(&parsed), !url.is_empty());
+        }
         let _: ButtonPair =
             serde_json::from_str(r#"{"device":"f00d:0003#1","decrement":10,"increment":11}"#)
                 .unwrap();

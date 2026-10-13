@@ -1,6 +1,7 @@
 {
   "name": "trimcraft",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "repository": "github:trimcraft/trimcraft",
   "version": "0.1.0",
   "type": "module",

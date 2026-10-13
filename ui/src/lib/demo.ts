@@ -37,6 +37,7 @@ import type {
   VirtualControlView,
   VoiceState,
 } from "./types";
+import { ABOUT_URLS } from "./about";
 import { CONTROL_TYPES, actionText, applyCurve, controlActions, defaultCurve, newTrigger, sameInput, triggerLists } from "./format";
 
 type Cmd = { type: "increment" | "decrement" | "clear" | "toggleOff" } | { type: "select"; index: number };
@@ -1353,6 +1354,16 @@ export function createDemo(): Backend {
     },
     async openLogFolder() {
       throw new Error("not available in the browser demo");
+    },
+    async openAboutLink(link) {
+      if (!ABOUT_URLS[link]) throw new Error("this link is not set up");
+      window.open(ABOUT_URLS[link], "_blank", "noopener");
+    },
+    async supportLinks() {
+      return (["githubSponsors", "koFi"] as const).filter((l) => ABOUT_URLS[l] !== "");
+    },
+    async thirdPartyLicenses() {
+      return "Third-party licences for Trimcraft\n\n(In the app this shows THIRD_PARTY_LICENSES from the repository.)\n";
     },
   };
 }

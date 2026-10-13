@@ -249,6 +249,9 @@ export interface AppMeta {
   elevated: boolean;
 }
 
+/** Links on Settings > About (src-tauri commands.rs AboutLink); the app opens only these. */
+export type AboutLink = "repository" | "issues" | "license" | "githubSponsors" | "koFi";
+
 // --- Virtual controls (trimcraft-core: virtual_control.rs, action.rs) ------------------------
 
 export type HatDirection = "up" | "upRight" | "right" | "downRight" | "down" | "downLeft" | "left" | "upLeft";

@@ -1,0 +1,8 @@
+# Donation links for GitHub's "Sponsor" button.
+# TODO(orchestrator): uncomment once the accounts exist, with the real names. GitHub shows a
+# broken Sponsor button for names that do not exist, so keep them commented out until then.
+# Keep in step with SUPPORT_URLS in src-tauri/src/commands.rs and "Support Trimcraft" in
+# README.md.
+
+# github: [<name>]   # https://github.com/sponsors/<name>
+# ko_fi: <name>      # https://ko-fi.com/<name>

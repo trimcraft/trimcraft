@@ -288,7 +288,7 @@ mod platform {
                         unsafe { PostQuitMessage(0) };
                         return true;
                     }
-                    if s.kind == RecordKind::Keyboard {
+                    if s.kind.keys {
                         s.push(RawEvent::Key {
                             scan,
                             extended,
@@ -551,7 +551,7 @@ mod platform {
             .store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
 
         let mut start_events = Vec::new();
-        if kind == RecordKind::Mouse && movement == Movement::Absolute {
+        if kind.mouse && movement == Movement::Absolute {
             let mut p = POINT { x: 0, y: 0 };
             // SAFETY: `p` is a valid POINT to write into.
             if unsafe { GetCursorPos(&mut p) } != 0 {
@@ -572,14 +572,16 @@ mod platform {
 
         let result = (|| {
             let _keyboard = hook(WH_KEYBOARD_LL, keyboard_proc)?;
-            let _mouse = match kind {
-                RecordKind::Mouse => Some(hook(WH_MOUSE_LL, mouse_proc)?),
-                RecordKind::Keyboard => None,
+            let _mouse = if kind.mouse {
+                Some(hook(WH_MOUSE_LL, mouse_proc)?)
+            } else {
+                None
             };
             let window = message_window()?;
-            let _raw = match (kind, movement) {
-                (RecordKind::Mouse, Movement::Relative) => Some(RawMouse::register(window.0)?),
-                _ => None,
+            let _raw = if kind.mouse && movement == Movement::Relative {
+                Some(RawMouse::register(window.0)?)
+            } else {
+                None
             };
             on_started();
             // A stop requested before the queue existed would have been missed.
@@ -630,7 +632,7 @@ mod tests {
                 thread_id: AtomicU32::new(0),
             };
             let mut started = false;
-            let ended = platform::capture(RecordKind::Mouse, movement, None, &control, || {
+            let ended = platform::capture(RecordKind::MOUSE, movement, None, &control, || {
                 started = true
             })
             .unwrap();
@@ -649,7 +651,7 @@ mod tests {
             thread_id: AtomicU32::new(0),
         };
         let ended = platform::capture(
-            RecordKind::Keyboard,
+            RecordKind::KEYBOARD,
             Movement::Absolute,
             None,
             &control,

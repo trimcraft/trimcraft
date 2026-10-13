@@ -6,8 +6,10 @@ mod discord;
 mod elevation;
 mod executor;
 mod foreground;
+mod input;
 mod launch;
 mod overlay;
+mod player;
 mod profile_watch;
 mod recorder;
 mod secrets;
@@ -71,6 +73,8 @@ pub struct Shared {
     speech: Arc<speech::Speech>,
     sound: Arc<sound::Sound>,
     recorder: recorder::Recorder,
+    /// Plays input macros; stops them on signals from the engine and on panic.
+    player: player::Player,
     meta: Meta,
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
@@ -94,6 +98,10 @@ impl Shared {
     /// connection is disabled stay stored but are skipped with a warning.
     fn dispatch(&self, engine: &mut Engine) {
         self.log_profile(engine);
+        let signals = engine.take_macro_signals();
+        if !signals.is_empty() {
+            self.player.signal(signals);
+        }
         let actions: Vec<_> = engine
             .take_actions()
             .into_iter()
@@ -202,8 +210,25 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                .with_handler(|app, shortcut, event| {
+                    if event.state != tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        return;
+                    }
+                    let shared = app.state::<Arc<Shared>>();
+                    let panic = shared.engine().setup().settings.panic_hotkey.clone();
+                    if panic
+                        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+                        .ok()
+                        .as_ref()
+                        == Some(shortcut)
+                    {
+                        log::warn!("panic hotkey: stopping all macros");
+                        let player = shared.player.clone();
+                        // Stopping waits for the macro threads; not on the event loop.
+                        let _ = std::thread::Builder::new()
+                            .name("detent-panic".into())
+                            .spawn(move || player.panic());
+                    } else {
                         overlay::toggle(app);
                     }
                 })
@@ -239,6 +264,10 @@ pub fn run() {
             sync_autostart(&shared);
             tray::create(&handle, shared.engine().setup().overlay.visible)?;
             overlay::create(&handle, &shared)?;
+            let panic = shared.engine().setup().settings.panic_hotkey.clone();
+            if let Err(e) = overlay::register_hotkey(&handle, &panic) {
+                log::error!("panic hotkey {panic:?} could not be registered: {e}");
+            }
             start_diagnostics(handle.clone(), shared.diagnostics.clone());
             watch_foreground(&shared);
             if let Some(main) = handle.get_webview_window("main") {
@@ -259,8 +288,16 @@ pub fn run() {
             }
         })
         .invoke_handler(commands::handler())
-        .run(context)
-        .expect("error while running Detent");
+        .build(context)
+        .expect("error while building Detent")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event
+                && let Some(shared) = app.try_state::<Arc<Shared>>()
+            {
+                // Nothing stays pressed after Detent is gone.
+                shared.player.shutdown();
+            }
+        });
 }
 
 /// The main window's close button: hides it to the tray (input, actions and overlay keep
@@ -375,12 +412,14 @@ fn load(
     ));
     let speech = Arc::new(speech::Speech::spawn());
     let sound = Arc::new(sound::Sound::spawn());
+    let player = player::Player::new(app.clone(), diagnostics.clone());
     let services = executor::Services {
         soundpad: soundpad.clone(),
         discord: discord.clone(),
         voicemeeter: voicemeeter.clone(),
         speech: speech.clone(),
         sound: sound.clone(),
+        player: player.clone(),
     };
     Ok(Shared {
         engine: Mutex::new(engine),
@@ -394,6 +433,7 @@ fn load(
         speech,
         sound,
         recorder: recorder::Recorder::default(),
+        player,
         meta,
         logged_profile: Mutex::new(String::new()),
     })

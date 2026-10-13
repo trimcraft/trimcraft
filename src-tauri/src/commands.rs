@@ -219,6 +219,14 @@ fn set_hotkey(app: AppHandle, shared: State<'_, Arc<Shared>>, hotkey: String) ->
     if old == hotkey {
         return Ok(());
     }
+    let panic = shared.engine().setup().settings.panic_hotkey.clone();
+    if hotkey
+        .parse::<tauri_plugin_global_shortcut::Shortcut>()
+        .ok()
+        == panic.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
+    {
+        return Err("the overlay hotkey must differ from the panic hotkey".into());
+    }
     overlay::unregister_hotkey(&app, &old);
     if let Err(e) = overlay::register_hotkey(&app, &hotkey) {
         // Keep the previous hotkey working.
@@ -597,19 +605,24 @@ fn set_recorder_config(shared: State<'_, Arc<Shared>>, config: RecorderConfig) -
     with(&shared, |e| e.set_recorder_config(config))
 }
 
-/// Plays an action being edited. Keyboard and mouse macros wait for the recording countdown,
-/// so the user can switch to the game first; everything else runs at once. Placeholders get
-/// "Test play", "editor" and the active profile.
+/// Plays an action being edited. Input macros wait for the recording countdown, so the user
+/// can switch to the game first; everything else runs at once. Placeholders get "Test play",
+/// "editor" and the active profile. A "while active" macro has no state to end here, so it
+/// plays once; "n times" plays n times (stop it with the panic hotkey).
 #[tauri::command]
 fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     action.normalize().map_err(|e| e.to_string())?;
     if !shared.engine().action_enabled(&action) {
         return Err("this action's connection is disabled; enable it under Connections".into());
     }
-    let countdown = matches!(
-        action,
-        Action::KeyboardMacro { .. } | Action::MouseMacro { .. }
-    );
+    let countdown = matches!(action, Action::InputMacro(_));
+    if let Action::InputMacro(m) = &mut action {
+        // Not guarded against the saved macro: a test may run while it does.
+        m.id.clear();
+        if m.repeat == detent_core::macros::Repeat::WhileActive {
+            m.repeat = detent_core::macros::Repeat::Once;
+        }
+    }
     let mut request = ActionRequest::new("Test play", "editor", Phase::Activate, &action);
     request.profile = shared.engine().setup().profile().name.clone();
     let shared = Arc::clone(&shared);
@@ -689,7 +702,29 @@ fn open_log_folder(app: AppHandle, shared: State<'_, Arc<Shared>>) -> Res<()> {
 
 /// Saves the Settings page ("General") and registers or removes autostart to match.
 #[tauri::command]
-fn set_settings(shared: State<'_, Arc<Shared>>, settings: AppSettings) -> Res<()> {
+fn set_settings(
+    app: AppHandle,
+    shared: State<'_, Arc<Shared>>,
+    mut settings: AppSettings,
+) -> Res<()> {
+    settings.panic_hotkey = settings.panic_hotkey.trim().to_owned();
+    let old = shared.engine().setup().settings.panic_hotkey.clone();
+    if settings.panic_hotkey != old {
+        let overlay_hotkey = shared.engine().setup().overlay.hotkey.clone();
+        let same = |a: &str, b: &str| {
+            a.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
+                == b.parse::<tauri_plugin_global_shortcut::Shortcut>().ok()
+        };
+        if same(&settings.panic_hotkey, &overlay_hotkey) {
+            return Err("the panic hotkey must differ from the overlay hotkey".into());
+        }
+        overlay::unregister_hotkey(&app, &old);
+        if let Err(e) = overlay::register_hotkey(&app, &settings.panic_hotkey) {
+            // Keep the previous one working.
+            let _ = overlay::register_hotkey(&app, &old);
+            return Err(e);
+        }
+    }
     with(&shared, |e| {
         e.set_settings(settings);
         Ok(())
@@ -894,8 +929,38 @@ mod tests {
         assert_eq!(view["missing"], "Voicemeeter is not installed");
 
         // Recorder and test play.
-        let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
-        let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();
+        let both: RecordKind = serde_json::from_str(r#"{"keys":true,"mouse":true}"#).unwrap();
+        assert_eq!(both, RecordKind::BOTH);
+        // Input macros as MacroEditor.svelte builds them, and Stop macros.
+        let mut mixed: Action = serde_json::from_str(
+            r#"{"type":"inputMacro","id":"mac-1","movement":"absolute","monitor":null,
+                "playback":{"speedPercent":100,"minDelayMs":0,"endpointOnly":false},
+                "repeat":{"type":"times","count":3},"onEnd":"finishRun","pauseMs":250,"retrigger":"restart",
+                "steps":[{"type":"keyDown","key":"LeftCtrl"},{"type":"click","button":"left","holdMs":null},
+                  {"type":"delay","ms":20},{"type":"keyUp","key":"LeftCtrl"}]}"#,
+        )
+        .unwrap();
+        mixed.normalize().unwrap();
+        assert_eq!(mixed.input_macro().unwrap().pause_ms, 250);
+        let _: Action = serde_json::from_str(
+            r#"{"type":"inputMacro","steps":[],"repeat":{"type":"whileActive"}}"#,
+        )
+        .unwrap();
+        for stop in [
+            r#"{"type":"stopMacros","target":{"type":"all"}}"#,
+            r#"{"type":"stopMacros","target":{"type":"macro","id":"mac-1"}}"#,
+        ] {
+            let mut a: Action = serde_json::from_str(stop).unwrap();
+            a.normalize().unwrap();
+        }
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"panicHotkey":"Ctrl+Alt+P"}"#).unwrap();
+        assert_eq!(settings.panic_hotkey, "Ctrl+Alt+P");
+        assert!(
+            detent_core::settings::DEFAULT_PANIC_HOTKEY
+                .parse::<tauri_plugin_global_shortcut::Shortcut>()
+                .is_ok()
+        );
         let _: Movement = serde_json::from_str(r#""absolute""#).unwrap();
         let _: Movement = serde_json::from_str(r#""relative""#).unwrap();
         let config: RecorderConfig = serde_json::from_str(

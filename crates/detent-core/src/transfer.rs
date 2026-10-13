@@ -590,6 +590,7 @@ mod tests {
             ..Default::default()
         };
         VirtualControl {
+            show_toast: false,
             id: id.into(),
             name: name.into(),
             kind: VirtualControlKind::Radio(radio),

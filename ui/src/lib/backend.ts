@@ -9,6 +9,7 @@ import type {
   ConnectorId,
   ControlRef,
   DetectorConfig,
+  DiscordSetup,
   DeviceId,
   EngineSnapshot,
   FunctionDef,
@@ -70,6 +71,10 @@ export interface Backend {
   forgetDiscordAuthorization(): Promise<void>;
   /** Deletes client secret and tokens and clears the client ID. */
   removeDiscordCredentials(): Promise<void>;
+  /** Redirect URI, scopes and portal link for the setup guide. */
+  discordSetup(): Promise<DiscordSetup>;
+  /** Opens the Discord Developer Portal in the default browser. */
+  openDiscordPortal(): Promise<void>;
   /** Soundpad's live sound list; fails when Soundpad is not reachable. */
   soundpadSounds(): Promise<Sound[]>;
   /** Records into the snapshot's `recorder.result` after a countdown. */
@@ -128,6 +133,8 @@ async function tauriBackend(): Promise<Backend> {
     saveDiscordCredentials: (clientId, clientSecret) => invoke("save_discord_credentials", { clientId, clientSecret }),
     forgetDiscordAuthorization: () => invoke("forget_discord_authorization"),
     removeDiscordCredentials: () => invoke("remove_discord_credentials"),
+    discordSetup: () => invoke("discord_setup"),
+    openDiscordPortal: () => invoke("open_discord_portal"),
     soundpadSounds: () => invoke("soundpad_sounds"),
     startRecording: (kind, movement) => invoke("start_recording", { kind, movement }),
     stopRecording: () => invoke("stop_recording"),

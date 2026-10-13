@@ -315,6 +315,16 @@ export interface Sound {
 export type DiscordCommand = "mute" | "unmute" | "deafen" | "undeafen" | "toggleMute" | "toggleDeafen";
 
 /** The user's own mute and deaf state in Discord. */
+/** The setup guide step that fixes a problem; the UI numbers the steps. */
+export type GuideStep = "clientId" | "clientSecret" | "redirect" | "discordRunning" | "authorize" | "appTesters";
+
+/** Values the setup guide shows, from the constants the connector uses. */
+export interface DiscordSetup {
+  redirectUri: string;
+  scopes: string[];
+  portalUrl: string;
+}
+
 export interface VoiceState {
   mute: boolean;
   deaf: boolean;
@@ -352,6 +362,8 @@ export interface ConnectorView {
   voice: VoiceState | null;
   /** For connectors with credentials (Discord). */
   credentials: CredentialState | null;
+  /** The setup guide step that fixes the last problem (Discord), also while disabled. */
+  guide: GuideStep | null;
 }
 
 export interface SoundpadSettings {

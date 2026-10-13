@@ -334,6 +334,7 @@ impl Worker {
                 }
                 self.settings = settings;
                 self.state.credentials = Some(credential_state());
+                self.state.guide = None;
                 self.retry_now();
                 if !self.settings.enabled {
                     self.state.warning = None;
@@ -343,6 +344,7 @@ impl Worker {
             Msg::Forget => {
                 self.disconnect();
                 self.state.credentials = Some(credential_state());
+                self.state.guide = None;
                 self.retry_now();
                 self.report();
             }
@@ -453,6 +455,7 @@ impl Worker {
             .as_ref()
             .map(|c| format!("Connected as {}", c.user));
         self.state.voice = self.conn.as_ref().and_then(|c| c.client.voice());
+        self.state.guide = None;
         self.set_status(ConnectorStatus::Connected, detail);
     }
 
@@ -482,6 +485,7 @@ impl Worker {
 
     /// Connecting failed: show it and plan the next attempt.
     fn failed(&mut self, e: DiscordError) {
+        self.state.guide = e.guide_step();
         if e.retry() {
             self.retry_at = Some(Instant::now() + self.backoff);
             self.backoff = (self.backoff * 2).min(BACKOFF_MAX);
@@ -511,6 +515,7 @@ impl Worker {
                 if self.settings.enabled {
                     self.failed(e.clone());
                 } else {
+                    self.state.guide = e.guide_step();
                     self.set_status(ConnectorStatus::NotConfigured, None);
                 }
                 return Err(e);

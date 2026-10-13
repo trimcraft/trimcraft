@@ -123,6 +123,8 @@ pub fn run() {
                 ])
                 .build(),
         )
+        // Used from Rust only (open_discord_portal); the windows get no opener permission.
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {

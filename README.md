@@ -108,6 +108,8 @@ Manager (generic credentials `detent/discord/…`), never in the file or the log
 
 ### Discord
 
+The Discord card under **Connections** has a step-by-step setup guide (with a link to the
+Developer Portal); when something fails, the error points at the step that fixes it. In short:
 Detent talks to the Discord client through its local RPC interface (named pipe
 `\\?\pipe\discord-ipc-0`), using your own application from the Discord Developer Portal:
 

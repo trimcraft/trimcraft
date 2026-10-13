@@ -50,6 +50,8 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_connections,
         test_connection,
         save_discord_credentials,
+        discord_setup,
+        open_discord_portal,
         forget_discord_authorization,
         remove_discord_credentials,
         soundpad_sounds,
@@ -408,6 +410,23 @@ fn save_discord_credentials(
     })
 }
 
+/// Redirect URI, scopes and portal link for the in-app setup guide, from the constants the
+/// connector uses.
+#[tauri::command]
+fn discord_setup() -> discord::SetupInfo {
+    discord::setup_info()
+}
+
+/// Opens the Discord Developer Portal in the default browser. Only this fixed URL can be
+/// opened, so the UI cannot open arbitrary links.
+#[tauri::command]
+fn open_discord_portal(app: AppHandle) -> Res<()> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(discord::PORTAL_URL, None::<&str>)
+        .map_err(|e| format!("cannot open the browser: {e}"))
+}
+
 /// "Forget authorization": deletes the OAuth tokens and disconnects. The next Test connection
 /// asks in Discord again.
 #[tauri::command]
@@ -618,6 +637,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(dc.radio().states[0].on_deactivate.len(), 4);
+        // The setup guide reads these (ui/src/lib/types.ts: DiscordSetup).
+        let setup = serde_json::to_value(discord_setup()).unwrap();
+        assert_eq!(setup["redirectUri"], discord::REDIRECT_URI);
+        assert_eq!(setup["portalUrl"], discord::PORTAL_URL);
+        assert_eq!(setup["scopes"].as_array().unwrap().len(), 3);
 
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();

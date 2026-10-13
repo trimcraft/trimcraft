@@ -6,6 +6,7 @@ import type {
   Action,
   DeviceSnapshot,
   DiscordCommand,
+  GuideStep,
   EngineSnapshot,
   FunctionDef,
   FunctionView,
@@ -151,8 +152,8 @@ export function createDemo(): Backend {
       discord: { enabled: false, clientId: "", clientSecret: null },
     },
     connectors: [
-      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null },
-      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false } },
+      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null },
+      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null },
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
@@ -164,18 +165,24 @@ export function createDemo(): Backend {
   const emit = () => listeners.forEach((l) => l(structuredClone(s)));
 
   // Discord: a simulated voice state, changed by Discord actions (idempotent, like the app).
+  // To see the guide hints: a client ID ending in 0000 is "refused" (App Testers step), a
+  // secret of "wrong" is rejected (Client Secret step).
   const demoVoice: VoiceState = { mute: false, deaf: false };
+  let demoSecretWrong = false;
   const discordView = () => s.connectors.find((c) => c.id === "discord")!;
-  function discordStatus() {
+  const NO_CREDENTIALS = "Enter the Client ID and Client Secret of your Discord application and save them";
+  const NOT_AUTHORIZED = "Not authorized yet: press Test connection and approve the request in Discord";
+  function discordStatus(problem: { message: string; guide: GuideStep } | null = null, reported = problem !== null) {
     const c = discordView();
     c.enabled = s.connections.discord.enabled;
     const creds = c.credentials!;
+    if (!s.connections.discord.clientId || !creds.secretSaved) problem = { message: NO_CREDENTIALS, guide: "clientId" };
+    else if (!creds.authorized && !problem) problem = { message: NOT_AUTHORIZED, guide: "authorize" };
+    // Like the app: hints come from a connection attempt (enabled, or Test connection).
+    c.guide = c.enabled || reported ? (problem?.guide ?? null) : null;
     if (!c.enabled) Object.assign(c, { status: { state: "notConfigured" }, detail: null, voice: null });
-    else if (!s.connections.discord.clientId || !creds.secretSaved) {
-      Object.assign(c, { status: { state: "error", message: "Enter the Client ID and Client Secret of your Discord application and save them" }, detail: null, voice: null });
-    } else if (!creds.authorized) {
-      Object.assign(c, { status: { state: "error", message: "Not authorized yet: press Test connection and approve the request in Discord" }, detail: null, voice: null });
-    } else Object.assign(c, { status: { state: "connected" }, detail: "Connected as Demo User", voice: { ...demoVoice } });
+    else if (problem) Object.assign(c, { status: { state: "error", message: problem.message }, detail: null, voice: null });
+    else Object.assign(c, { status: { state: "connected" }, detail: "Connected as Demo User", voice: { ...demoVoice } });
   }
   function runDiscord(command: DiscordCommand) {
     if (discordView().status.state !== "connected") return console.info(`[demo] discord: ${command} skipped, not connected`);
@@ -505,12 +512,24 @@ export function createDemo(): Backend {
       if (id === "soundpad") return `Connected, ${DEMO_SOUNDS.length} sounds (demo)`;
       const creds = discordView().credentials!;
       if (!s.connections.discord.clientId || !creds.secretSaved) {
-        throw new Error("Enter the Client ID and Client Secret of your Discord application and save them");
+        discordStatus(null, true);
+        emit();
+        throw new Error(NO_CREDENTIALS);
       }
       if (!creds.authorized) {
-        Object.assign(discordView(), { status: { state: "waitingForApproval" }, detail: "Approve the request in your Discord client" });
+        Object.assign(discordView(), { status: { state: "waitingForApproval" }, detail: "Approve the request in your Discord client", guide: null });
         emit();
         await new Promise((r) => setTimeout(r, 1500));
+        const problem: { message: string; guide: GuideStep } | null = s.connections.discord.clientId.endsWith("0000")
+          ? { message: "Discord refused the RPC scopes for this application. Unapproved applications may only use RPC for their testers: in the Developer Portal, App Testers, add your own Discord account and accept the invitation (code 5000: OAuth2 Error: invalid_scope) (demo)", guide: "appTesters" }
+          : demoSecretWrong
+            ? { message: "Discord rejected the Client Secret (or Client ID): copy both again from the Developer Portal, OAuth2 page (invalid_client) (demo)", guide: "clientSecret" }
+            : null;
+        if (problem) {
+          discordStatus(problem);
+          emit();
+          throw new Error(problem.message);
+        }
         creds.authorized = true;
       }
       discordStatus();
@@ -522,6 +541,7 @@ export function createDemo(): Backend {
       const creds = discordView().credentials!;
       if (!clientSecret?.trim() && !creds.secretSaved) throw new Error("enter the Client Secret");
       if (clientId.trim() !== s.connections.discord.clientId) creds.authorized = false;
+      if (clientSecret?.trim()) demoSecretWrong = clientSecret.trim() === "wrong";
       creds.secretSaved = true;
       s.connections.discord = { ...s.connections.discord, clientId: clientId.trim(), clientSecret: { store: "windowsCredentialManager", target: "detent/discord/client-secret" } };
       discordStatus();
@@ -537,6 +557,10 @@ export function createDemo(): Backend {
       s.connections.discord = { ...s.connections.discord, clientId: "", clientSecret: null };
       discordStatus();
       emit();
+    },
+    discordSetup: async () => ({ redirectUri: "https://localhost/", scopes: ["rpc", "rpc.voice.read", "rpc.voice.write"], portalUrl: "https://discord.com/developers/applications" }),
+    async openDiscordPortal() {
+      window.open("https://discord.com/developers/applications", "_blank", "noopener");
     },
     soundpadSounds: async () => structuredClone(DEMO_SOUNDS),
     async startRecording(kind, movement) {

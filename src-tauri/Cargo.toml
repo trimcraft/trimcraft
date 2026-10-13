@@ -23,6 +23,8 @@ log.workspace = true
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
+# Opens the Discord Developer Portal in the default browser (setup guide).
+tauri-plugin-opener = "2"
 # Discord token endpoint (HTTPS, rustls).
 ureq = "2"
 # Client secret and OAuth tokens in the OS credential store.

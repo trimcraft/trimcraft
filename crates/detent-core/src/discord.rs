@@ -32,6 +32,37 @@ pub const SCOPES: [&str; 3] = ["rpc", "rpc.voice.read", "rpc.voice.write"];
 /// Nothing is ever served there; RPC hands the code over the pipe.
 pub const REDIRECT_URI: &str = "https://localhost/";
 pub const TOKEN_URL: &str = "https://discord.com/api/oauth2/token";
+/// Where the user creates the application (the setup guide links here).
+pub const PORTAL_URL: &str = "https://discord.com/developers/applications";
+
+/// The values the in-app setup guide shows, from the same constants the code uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupInfo {
+    pub redirect_uri: &'static str,
+    pub scopes: [&'static str; 3],
+    pub portal_url: &'static str,
+}
+
+pub fn setup_info() -> SetupInfo {
+    SetupInfo {
+        redirect_uri: REDIRECT_URI,
+        scopes: SCOPES,
+        portal_url: PORTAL_URL,
+    }
+}
+
+/// The step of the in-app setup guide that fixes a problem (the UI numbers the steps).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GuideStep {
+    ClientId,
+    ClientSecret,
+    Redirect,
+    DiscordRunning,
+    Authorize,
+    AppTesters,
+}
 /// Discord tries `discord-ipc-0` to `discord-ipc-9`.
 pub const PIPE_COUNT: u32 = 10;
 /// Larger frames are refused as corrupt. Voice settings with device lists are a few KB.
@@ -457,6 +488,19 @@ pub enum DiscordError {
 }
 
 impl DiscordError {
+    /// The setup guide step to point at, if one fixes this.
+    pub fn guide_step(&self) -> Option<GuideStep> {
+        Some(match self {
+            Self::NoCredentials | Self::InvalidClientId(_) => GuideStep::ClientId,
+            Self::InvalidSecret => GuideStep::ClientSecret,
+            Self::RedirectMismatch => GuideStep::Redirect,
+            Self::NotRunning | Self::VoiceLocked(_) => GuideStep::DiscordRunning,
+            Self::NotAuthorized | Self::Declined(_) | Self::TokenRejected => GuideStep::Authorize,
+            Self::AppNotApproved(_) => GuideStep::AppTesters,
+            _ => return None,
+        })
+    }
+
     /// Whether reconnecting on its own can help. Otherwise the user has to act first
     /// (credentials, approval, Developer Portal settings).
     pub fn retry(&self) -> bool {
@@ -1052,6 +1096,31 @@ mod tests {
             DiscordError::AppNotApproved("x".into())
                 .to_string()
                 .contains("App Testers")
+        );
+        // Errors point at the guide step that fixes them.
+        assert_eq!(
+            DiscordError::AppNotApproved("x".into()).guide_step(),
+            Some(GuideStep::AppTesters)
+        );
+        assert_eq!(
+            DiscordError::InvalidSecret.guide_step(),
+            Some(GuideStep::ClientSecret)
+        );
+        assert_eq!(
+            DiscordError::RedirectMismatch.guide_step(),
+            Some(GuideStep::Redirect)
+        );
+        assert_eq!(
+            DiscordError::NotRunning.guide_step(),
+            Some(GuideStep::DiscordRunning)
+        );
+        assert_eq!(DiscordError::Timeout("x").guide_step(), None);
+        let info = serde_json::to_value(setup_info()).unwrap();
+        assert_eq!(info["redirectUri"], "https://localhost/");
+        assert_eq!(info["scopes"][2], "rpc.voice.write");
+        assert_eq!(
+            serde_json::to_value(GuideStep::AppTesters).unwrap(),
+            "appTesters"
         );
     }
 

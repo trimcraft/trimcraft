@@ -9,7 +9,7 @@
 //! credential store; the app reads and writes the secret there.
 
 use crate::action::Action;
-use crate::discord::VoiceState;
+use crate::discord::{GuideStep, VoiceState};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -183,6 +183,8 @@ pub struct ConnectorState {
     pub voice: Option<VoiceState>,
     /// For connectors with credentials (Discord).
     pub credentials: Option<CredentialState>,
+    /// The setup guide step that fixes the last problem.
+    pub guide: Option<GuideStep>,
 }
 
 /// A connector as the UI shows it.
@@ -197,6 +199,8 @@ pub struct ConnectorView {
     pub warning: Option<String>,
     pub voice: Option<VoiceState>,
     pub credentials: Option<CredentialState>,
+    /// The setup guide step that fixes the last problem (Discord), also while disabled.
+    pub guide: Option<GuideStep>,
 }
 
 impl ConnectorView {
@@ -204,6 +208,7 @@ impl ConnectorView {
     /// shown either way, so they can be entered before enabling.
     pub fn new(id: ConnectorId, enabled: bool, state: Option<&ConnectorState>) -> Self {
         let credentials = state.and_then(|s| s.credentials);
+        let guide = state.and_then(|s| s.guide);
         let (status, detail, warning, voice) = match (enabled, state) {
             (false, _) => (ConnectorStatus::NotConfigured, None, None, None),
             (true, None) => (ConnectorStatus::Connecting, None, None, None),
@@ -223,6 +228,7 @@ impl ConnectorView {
             warning,
             voice,
             credentials,
+            guide,
         }
     }
 }
@@ -334,10 +340,12 @@ mod tests {
                 secret_saved: true,
                 authorized: true,
             }),
+            guide: Some(GuideStep::AppTesters),
             ..Default::default()
         };
         let off = ConnectorView::new(ConnectorId::Discord, false, Some(&discord));
         assert_eq!((off.voice, off.credentials.is_some()), (None, true));
+        assert_eq!(off.guide, Some(GuideStep::AppTesters));
         let json = serde_json::to_value(ConnectorView::new(
             ConnectorId::Discord,
             true,

@@ -11,6 +11,8 @@
   import RecorderSettings from "./components/RecorderSettings.svelte";
   import RecordingBanner from "./components/RecordingBanner.svelte";
   import ConnectionsView from "./components/ConnectionsView.svelte";
+  import ProfileSelector from "./components/ProfileSelector.svelte";
+  import ProfilesPanel from "./components/ProfilesPanel.svelte";
   import { SECTIONS, nav, show } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
@@ -37,6 +39,7 @@
   </nav>
   <span class="spacer"></span>
   {#if snapshot}<RecordingBanner {snapshot} />{/if}
+  {#if snapshot}<ProfileSelector {snapshot} />{/if}
   {#if meta}
     {#if !isTauri}<span class="badge warn">browser demo, not connected to devices</span>{/if}
     <span class="version muted mono" title="Detent {meta.version} · input backend: {meta.backend}">v{meta.version}</span>
@@ -74,6 +77,7 @@
   {:else}
     <main class="single">
       <div class="content">
+        <ProfilesPanel {snapshot} />
         <VirtualControlsView {snapshot} />
         <RecorderSettings {snapshot} />
         <OverlayPanel {snapshot} />

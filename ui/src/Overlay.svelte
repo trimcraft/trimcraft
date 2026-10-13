@@ -14,7 +14,8 @@
   let dragging = $state<{ index: number; pos: WidgetPosition; dx: number; dy: number } | null>(null);
   /** Rendered element per widget index, for measuring. */
   let elements: HTMLElement[] = $state([]);
-  let fixedForSession = false;
+  /** Profile whose stacked widgets were fixed in this edit session (widgets are per profile). */
+  let fixedFor: string | null = null;
 
   onMount(() => {
     let stop: (() => void) | undefined;
@@ -51,11 +52,11 @@
   // so nothing jumps and every widget can be dragged.
   $effect(() => {
     if (!editing) {
-      fixedForSession = false;
+      fixedFor = null;
       return;
     }
-    if (fixedForSession || !snapshot || stacked.length === 0) return;
-    fixedForSession = true;
+    if (!snapshot || fixedFor === snapshot.activeProfile || stacked.length === 0) return;
+    fixedFor = snapshot.activeProfile;
     // Plain data, not reactive proxies: it crosses into IPC (or the demo).
     const s = $state.snapshot(snapshot);
     tick().then(() => {

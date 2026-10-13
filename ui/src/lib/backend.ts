@@ -19,6 +19,8 @@ import type {
   Movement,
   OverlayConfig,
   OverlayItem,
+  ProcessWindow,
+  ProfileSwitching,
   RadioCommand,
   RecordKind,
   RecorderConfig,
@@ -85,6 +87,22 @@ export interface Backend {
   setRecorderConfig(config: RecorderConfig): Promise<void>;
   /** Plays the action after the countdown. */
   testAction(action: Action): Promise<void>;
+  /** Makes a profile active (no actions run). */
+  selectProfile(id: string): Promise<void>;
+  /** Creates an empty profile and makes it active; resolves with its id. */
+  createProfile(name: string): Promise<string>;
+  /** Copies a profile (without its executables) and makes the copy active. */
+  duplicateProfile(id: string, name: string): Promise<string>;
+  renameProfile(id: string, name: string): Promise<void>;
+  /** Fails for the last profile. */
+  deleteProfile(id: string): Promise<void>;
+  /** Moves a profile to the front: the default profile. */
+  makeDefaultProfile(id: string): Promise<void>;
+  setProfileExecutables(id: string, executables: string[]): Promise<void>;
+  setProfileSwitching(switching: ProfileSwitching): Promise<void>;
+  toggleOverlayProfileName(): Promise<boolean>;
+  /** Programs with a window, for the executable picker. */
+  listProcessWindows(): Promise<ProcessWindow[]>;
 }
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -142,6 +160,16 @@ async function tauriBackend(): Promise<Backend> {
     clearRecording: () => invoke("clear_recording"),
     setRecorderConfig: (config) => invoke("set_recorder_config", { config }),
     testAction: (action) => invoke("test_action", { action }),
+    selectProfile: (id) => invoke("select_profile", { id }),
+    createProfile: (name) => invoke("create_profile", { name }),
+    duplicateProfile: (id, name) => invoke("duplicate_profile", { id, name }),
+    renameProfile: (id, name) => invoke("rename_profile", { id, name }),
+    deleteProfile: (id) => invoke("delete_profile", { id }),
+    makeDefaultProfile: (id) => invoke("make_default_profile", { id }),
+    setProfileExecutables: (id, executables) => invoke("set_profile_executables", { id, executables }),
+    setProfileSwitching: (switching) => invoke("set_profile_switching", { switching }),
+    toggleOverlayProfileName: () => invoke("toggle_overlay_profile_name"),
+    listProcessWindows: () => invoke("list_process_windows"),
   };
 }
 

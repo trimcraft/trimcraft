@@ -44,7 +44,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 
 - `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
-  `setup` (persisted config, schema-versioned), `virtual_control` (radios, triggers, transitions),
+  `setup` (persisted config, schema-versioned, migrations), `profile` (per-game profiles,
+  executable matching, auto-switch decisions), `virtual_control` (radios, triggers, transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
@@ -62,10 +63,11 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
+  `foreground.rs` (foreground program watcher via `SetWinEventHook`, process window list),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test), `Overlay.svelte`
-  (overlay window), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  (overlay window), `ProfilesPanel`/`ProfileSelector` (profiles), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload

@@ -56,6 +56,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
+  `transfer` (export files, secret stripping, import validation, profile merge), `backup` (backup file names
+  and retention),
   `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
@@ -72,12 +74,14 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   feeding profile switching and the elevation warning), `profile_watch.rs` (profile switching
   from the foreground program, process window list),
   `commands.rs` (IPC; payload shapes are tested),
+  `backups.rs` (automatic setup backups, hooked into the setup save), `transfer.rs` (export/import/restore
+  commands and their dialogs),
   `storage.rs` (atomic JSON files). The event log is a `Diagnostics` handle shared by the engine, executor and log bridge (`lib.rs`);
   a thread sends new entries to the UI every 100 ms (`detent://diagnostics`).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
   via the gear, one component per section in `components/settings`), `Overlay.svelte`
   (overlay window), `components/DiagnosticsView.svelte` + `lib/diagnostics.svelte.ts` (event log tab),
-  `ProfilesPanel`/`ProfileSelector` (profiles), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
+  `ProfilesPanel`/`ProfileSelector` (profiles), `ImportFlow` + `settings/BackupSettings` (export, import, backups), `lib/types.ts` mirrors the Rust JSON, `lib/backend.ts` switches between
   Tauri IPC and the browser demo.
 
 When changing a serialised Rust type, update `ui/src/lib/types.ts`, the demo, and the payload

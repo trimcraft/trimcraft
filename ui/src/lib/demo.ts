@@ -5,7 +5,9 @@ import type { Backend } from "./backend";
 import type {
   Action,
   DeviceSnapshot,
+  BackupInfo,
   DiagEntry,
+  ExportKind,
   DiscordCommand,
   GuideStep,
   EngineSnapshot,
@@ -459,6 +461,24 @@ export function createDemo(): Backend {
     if (batch.length) diagListeners.forEach((cb) => cb(structuredClone(batch)));
   }, 100);
 
+  // --- Backups: a few made-up ones; "Back up now" adds to the list ---------------------------
+  let pendingImport: { id: string; name: string; executables?: string[]; virtualControls?: unknown[] }[] | null = null;
+  const demoBackups: BackupInfo[] = [3600, 26 * 3600, 5 * 86400].map((age, i) => {
+    const unixSecs = Math.floor(Date.now() / 1000) - age;
+    const d = new Date(unixSecs * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return { name: `setup-${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.json`, unixSecs, size: 4200 + i * 310, profiles: 2 + i };
+  });
+  function addBackup(_reason: string): BackupInfo {
+    let unixSecs = Math.floor(Date.now() / 1000);
+    while (demoBackups.some((b) => b.unixSecs === unixSecs)) unixSecs++;
+    const d = new Date(unixSecs * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    const info = { name: `setup-${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.json`, unixSecs, size: 4400, profiles: s.profiles.length };
+    demoBackups.unshift(info);
+    return info;
+  }
+
   let nextEnc = 1;
   let nextFn = 1;
   let nextVc = 2;
@@ -830,6 +850,96 @@ export function createDemo(): Backend {
     listProcessWindows: async () => structuredClone(DEMO_WINDOWS),
     async testAction(action) {
       setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
+    },
+    // --- Backup and transfer: files go through the browser (download / file picker) ----------
+    async exportSetup(ids) {
+      const chosen = ids ? s.profiles.filter((p) => ids.includes(p.id)) : s.profiles;
+      if (!chosen.length) throw new Error("no profile selected");
+      const profiles = chosen.map((p) => {
+        const data = p.id === s.activeProfile ? { controls: s.virtualControls, widgets: s.overlay.widgets } : (stash.get(p.id) ?? { controls: [], widgets: [] });
+        return { id: p.id, name: p.name, executables: p.executables, virtualControls: data.controls, overlayWidgets: data.widgets };
+      });
+      const file = {
+        format: "detent-export", formatVersion: 1, schemaVersion: 2, exportedAt: new Date().toISOString(), detentVersion: "0.1.0-demo",
+        kind: ids ? "profiles" : "all", credentialsRemoved: true, strippedFields: ["connections.discord.clientSecret"],
+        note: "Credentials are never exported.", setup: { schemaVersion: 2, profiles, activeProfile: chosen[0]!.id },
+      };
+      const name = ids?.length === 1 ? `${chosen[0]!.name}.detent.json` : "detent-demo.detent.json";
+      const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
+      const a = Object.assign(document.createElement("a"), { href: url, download: name });
+      a.click();
+      URL.revokeObjectURL(url);
+      return name;
+    },
+    async pickImportFile() {
+      const text = await new Promise<string | null>((resolve) => {
+        const input = Object.assign(document.createElement("input"), { type: "file", accept: ".json" });
+        input.onchange = () => (input.files?.[0] ? input.files[0].text().then(resolve) : resolve(null));
+        input.addEventListener("cancel", () => resolve(null));
+        input.click();
+      });
+      if (text === null) return null;
+      let file: { format?: string; formatVersion?: number; exportedAt?: string; kind?: ExportKind; setup?: { schemaVersion?: number; profiles?: { id: string; name: string; executables?: string[]; virtualControls?: unknown[] }[] } };
+      try {
+        file = JSON.parse(text);
+      } catch {
+        throw new Error("this is not a Detent export file: not valid JSON");
+      }
+      if (file.format !== "detent-export" || !file.setup?.profiles) throw new Error("this is not a Detent export file");
+      if ((file.formatVersion ?? 1) > 1) throw new Error("this file was exported by a newer Detent; update Detent to import it");
+      if ((file.setup.schemaVersion ?? 1) > 2) throw new Error("this file was written by a newer Detent (configuration schema); update Detent to import it");
+      pendingImport = file.setup.profiles;
+      return {
+        kind: file.kind ?? "all", exportedAt: file.exportedAt ?? null, detentVersion: null, schemaVersion: file.setup.schemaVersion ?? 1,
+        profiles: pendingImport.map((p) => ({ id: p.id, name: p.name, controls: p.virtualControls?.length ?? 0, executables: p.executables ?? [] })),
+        strippedFields: ["connections.discord.clientSecret"],
+      };
+    },
+    async cancelImport() {
+      pendingImport = null;
+    },
+    async applyImport(mode) {
+      if (!pendingImport) throw new Error("no import file is open; choose a file first");
+      addBackup("before import");
+      const incoming = mode.type === "replaceAll" ? pendingImport : pendingImport.filter((p) => mode.profiles.includes(p.id));
+      if (mode.type === "replaceAll") {
+        s.profiles = [];
+        stash.clear();
+      }
+      const added = incoming.map((p) => {
+        let name = p.name;
+        for (let i = 2; s.profiles.some((x) => x.name.toLowerCase() === name.toLowerCase()); i++) name = `${p.name} (${i})`;
+        const id = newProfileId();
+        s.profiles.push({ id, name, executables: [] });
+        stash.set(id, { controls: [], widgets: [] });
+        return { id, name, renamedFrom: name === p.name ? null : p.name };
+      });
+      if (mode.type === "replaceAll") {
+        s.activeProfile = s.profiles[0]!.id;
+        s.virtualControls = [];
+        s.overlay.widgets = [];
+        stash.delete(s.activeProfile);
+      }
+      pendingImport = null;
+      emit();
+      const renamed = added.filter((a) => a.renamedFrom).length;
+      return {
+        message: mode.type === "replaceAll" ? `Imported the whole configuration (${added.length} profiles).` : `Added ${added.length} profile(s).${renamed ? ` ${renamed} renamed because the name was taken.` : ""}`,
+        report: mode.type === "replaceAll" ? null : { added, droppedExecutables: [], addedEncoders: 0, addedFunctions: 0 },
+      };
+    },
+    async listBackups() {
+      return structuredClone(demoBackups);
+    },
+    async backupNow() {
+      return addBackup("manual");
+    },
+    async restoreBackup(name) {
+      addBackup("before restore");
+      return `Restored ${name} (demo: nothing changes).`;
+    },
+    async openBackupFolder() {
+      throw new Error("not available in the browser demo");
     },
     async subscribeDiagnostics(cb) {
       diagListeners.add(cb);

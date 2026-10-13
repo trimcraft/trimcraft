@@ -195,6 +195,26 @@ Detent's keys and mouse will not reach it (also in the log).
 
 Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
 
+## Backup and transfer
+
+Settings has a section **Backup & transfer**.
+
+- **Export** writes the configuration, or selected profiles, to a `.detent.json` file (also per profile in the profile
+  list). The file holds the schema version and the export time. Credentials are never exported: the Discord client secret
+  reference and any field named like a secret, token, password or authorization header are emptied, and the file lists
+  what was left out. After importing, enter those under Connections.
+- **Import** reads such a file (or a plain `setup.json`). Older schemas are converted; files from a newer Detent are
+  refused with a message. **Replace all** swaps the whole configuration (this computer's tray and startup settings stay,
+  and so do the Discord credentials when the file names the same Client ID) after a confirmation. **Add profiles** adds the
+  chosen profiles: names that are taken get a number ("DCS (2)"), ids are renumbered where they clash, the encoders and
+  counters the profiles use come along, and programs that another profile already lists are not taken over. Before
+  either, a backup of the current configuration is written; if that fails, nothing is imported.
+- **Automatic backups**: whenever `setup.json` is saved, at most every 5 minutes, and before every import and restore,
+  Detent copies it to `backups\setup-YYYYMMDD-HHMMSS.json` (UTC) in the config folder. It keeps the latest 20 and the
+  newest of each of the last 14 days. The list shows date, profile count and size; **Restore** (after a confirmation,
+  with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
+  in the event log.
+
 ## Layout
 
 | Path | What |

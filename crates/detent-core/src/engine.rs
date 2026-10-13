@@ -1191,6 +1191,82 @@ impl Engine {
         Ok(())
     }
 
+    // --- Import and restore ----------------------------------------------------------------
+
+    /// Replaces the whole setup (import "Replace all", restoring a backup). Function values
+    /// and radio states of functions and controls that still exist are kept; the rest start
+    /// fresh. The caller has validated `setup` (see `transfer::parse_import`) and built it with
+    /// `transfer::prepare_replace`.
+    pub fn replace_setup(&mut self, setup: Setup) {
+        let values = self.values();
+        self.setup = setup;
+        self.positions = self
+            .setup
+            .functions
+            .iter()
+            .map(|f| {
+                let pos = match (&f.kind, values.get(&f.id)) {
+                    (FunctionKind::Counter { spec, .. }, Some(v)) => spec.position_of(*v),
+                    _ => f.initial_position(),
+                };
+                (f.id.clone(), pos)
+            })
+            .collect();
+        let mut memory = std::mem::take(&mut self.memory);
+        memory.retain(|id, m| {
+            let Some(control) = self
+                .setup
+                .profiles
+                .iter()
+                .flat_map(|p| &p.virtual_controls)
+                .find(|c| &c.id == id)
+            else {
+                return false;
+            };
+            m.retain_existing(control.radio());
+            !m.is_empty()
+        });
+        self.memory = memory;
+        self.detector = EncoderDetector::new(self.setup.detector);
+        self.steps.clear();
+        self.learn = Learn::Off;
+        self.overlay_editing = false;
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        self.dirty.controls = true;
+        if let Some(log) = &self.diagnostics {
+            log.record(Record::new(
+                Category::Log,
+                "Configuration replaced (import or restore)",
+            ));
+        }
+    }
+
+    /// Adds profiles of an imported setup (see `transfer::merge_profiles`). Nothing changes on
+    /// error.
+    pub fn import_profiles(
+        &mut self,
+        source: &Setup,
+        selected: &[String],
+    ) -> Result<crate::transfer::MergeReport, crate::transfer::TransferError> {
+        let report = crate::transfer::merge_profiles(&mut self.setup, source, selected)?;
+        for f in &self.setup.functions {
+            self.positions
+                .entry(f.id.clone())
+                .or_insert_with(|| f.initial_position());
+        }
+        self.dirty.setup = true;
+        self.dirty.values = true;
+        if let Some(log) = &self.diagnostics {
+            let names: Vec<&str> = report.added.iter().map(|p| p.name.as_str()).collect();
+            log.record(Record::new(
+                Category::Log,
+                format!("Imported {} profile(s): {}", names.len(), names.join(", ")),
+            ));
+        }
+        Ok(report)
+    }
+
     // --- Profiles -------------------------------------------------------------------------
     //
     // Switching profiles never runs actions: each profile's radios keep their states and are
@@ -2561,6 +2637,42 @@ mod tests {
 
     fn engine_shell(engine: &Engine) -> ShellStatus {
         engine.shell_status().clone()
+    }
+
+    #[test]
+    fn replacing_the_setup_keeps_state_of_what_still_exists() {
+        let (mut engine, id) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0); // B
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+        let kept = engine.setup().clone();
+        let mut other = kept.clone();
+        other.profiles[0].virtual_controls.clear();
+        engine.replace_setup(other);
+        assert!(engine.active_states().is_empty());
+        assert!(engine.take_dirty().setup);
+        // Back to the original: the radio starts fresh (its memory went with the control).
+        engine.replace_setup(kept.clone());
+        assert_eq!(active(&engine, &id), None);
+        // A setup that keeps the control keeps its state.
+        press(&mut engine, 0, 100);
+        engine.replace_setup(kept);
+        assert_eq!(active(&engine, &id).as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn importing_profiles_adds_them_without_switching() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let source = engine.setup().clone();
+        let before = engine.setup().active_profile.clone();
+        let report = engine
+            .import_profiles(&source, &[DEFAULT_PROFILE_ID.into()])
+            .unwrap();
+        assert_eq!(report.added[0].name, "Default (2)");
+        assert_eq!(engine.setup().profiles.len(), 2);
+        assert_eq!(engine.setup().active_profile, before);
+        assert!(engine.take_dirty().setup);
+        assert!(engine.import_profiles(&source, &["ghost".into()]).is_err());
+        assert_eq!(engine.setup().profiles.len(), 2);
     }
 
     #[test]

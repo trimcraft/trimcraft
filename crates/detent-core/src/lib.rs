@@ -5,6 +5,7 @@
 //! [`BackendEvent`]s; the [`Engine`] turns them into the state the UI and the overlay show.
 
 pub mod action;
+pub mod backup;
 pub mod connection;
 pub mod device;
 pub mod diagnostics;
@@ -22,6 +23,7 @@ pub mod settings;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
+pub mod transfer;
 pub mod virtual_control;
 
 pub use action::{

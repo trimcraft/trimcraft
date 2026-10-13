@@ -137,8 +137,16 @@ Versions live in four files and must agree (a test and `scripts/check-versions.m
    `https://github.com/trimcraft/trimcraft/releases/latest/download/latest.json` (public key in
    `tauri.conf.json`, `plugins.updater`).
 
+Windows code signing (SignPath Foundation) is prepared and switched on by the repository variable
+`SIGNPATH_ENABLED=true` (setup: `docs/signpath-setup.md`, configuration: `.signpath/`). Then the
+workflow builds `trimcraft.exe`, has SignPath sign it, bundles the installer around it with
+`tauri bundle --no-binary-patching`, has SignPath sign the installer, and only then creates the
+updater `.sig` and `latest.json` (`scripts/updater-manifest.mjs`) and publishes. Each SignPath
+request waits for a manual approval. Only tag runs are submitted; the public "Code signing
+policy" section in the README must stay true (what is signed, roles, network use).
+
 Running the workflow by hand (Actions, Release, "Run workflow") is a dry run: it builds and signs
-and keeps the files as an artifact, but publishes nothing. Never mark a release as prerelease or
+(updater signature only) and keeps the files as an artifact, but publishes nothing. Never mark a release as prerelease or
 draft: `/releases/latest`, and with it the updater, only sees normal releases.
 
 ## Testing with real hardware

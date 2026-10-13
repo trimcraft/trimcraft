@@ -1,0 +1,10 @@
+# SignPath pipeline policy for the signing policy "release-signing" of the project "trimcraft".
+# SignPath reads it from the default branch when a signing request comes in (external
+# definition, see .signpath/README.md). Changes to this file are reviewed like code.
+github-build-policies:
+  version: '1.0'
+  # A release job that failed (e.g. an approval timed out) may be re-run and still be signed.
+  # The run is still tied to its tag and commit.
+  disallow_reruns: false
+  runners:
+    require_github_hosted: true

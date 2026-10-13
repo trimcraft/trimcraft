@@ -19,6 +19,15 @@ you are credited unless you prefer otherwise.
 
 Trimcraft is in early access. Only the latest release gets security fixes.
 
+## Releases
+
+Releases are built only by the [release workflow](.github/workflows/release.yml) from a tagged
+commit of this repository, on GitHub-hosted runners, and published as GitHub releases. Update
+packages carry a signature from the project's update key, which Trimcraft checks before it
+installs an update. Windows code signing goes through the SignPath Foundation and covers only
+these tagged builds; see the [code signing policy](README.md#code-signing-policy). A Trimcraft
+installer from anywhere else, or one whose Authenticode signature is not valid, is not ours.
+
 ## Scope
 
 Things that matter most:

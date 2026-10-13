@@ -35,6 +35,12 @@ human or agent):
 
 See the README's "Build from source" section for the toolchain.
 
+Releases are code-signed from the tagged builds of this repository
+([code signing policy](README.md#code-signing-policy)). Changes to the build scripts, workflows
+(`.github/`) and the signing configuration (`.signpath/`) are reviewed as carefully as code, and
+pull requests must not make the build download or bundle anything that is not built from this
+repository's sources or its declared dependencies.
+
 ## Licence of contributions
 
 Trimcraft is licensed under the GNU General Public License v3.0 or later. By submitting a

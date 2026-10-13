@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration "trimcraft-exe": the program, before it is bundled.
+  The release workflow uploads trimcraft.exe as a GitHub artifact, which is a zip with the file
+  at its root. Product name and version are enforced; the workflow passes the version.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="trimcraft.exe" product-name="Trimcraft" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

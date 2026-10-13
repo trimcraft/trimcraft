@@ -59,8 +59,9 @@ The screenshots show the browser demo with made-up devices. More: [Hardware Test
 1. Download `Trimcraft_<version>_x64-setup.exe` from the
    [latest release](https://github.com/trimcraft/trimcraft/releases/latest).
 2. Run it. It installs for the current user; no administrator rights needed.
-3. The installer and the program are **not code-signed**, so Windows SmartScreen warns on the
-   first start ("Windows protected your PC"): click **More info**, then **Run anyway**.
+3. Releases up to now are **not code-signed**, so Windows SmartScreen warns on the first start
+   ("Windows protected your PC"): click **More info**, then **Run anyway**. Code signing through
+   the SignPath Foundation is underway; see the [code signing policy](#code-signing-policy).
 
 Trimcraft is early access: back up your configuration (**Settings → Backup & transfer**) before
 updating.
@@ -71,8 +72,8 @@ Trimcraft looks for a new release when it starts (**Settings → Updates**; can 
 shows an **update** badge next to its version when one is available. **Download & install** there
 installs it for your user and restarts Trimcraft; it asks first when macros are running or vJoy
 is in use. Update packages are signed with the project's update key, and Trimcraft installs only
-packages with a valid signature (this is separate from Windows code signing, which the installer
-does not have).
+packages with a valid signature (this is separate from Windows code signing, see the
+[code signing policy](#code-signing-policy)).
 
 ## Running as administrator
 
@@ -93,11 +94,58 @@ it then starts through the Task Scheduler without a prompt.
 ## Privacy
 
 - No telemetry, no accounts, no analytics. Trimcraft only goes online for what you configure
-  (Discord sign-in, your HTTP requests) and for update checks.
+  (Discord sign-in, your HTTP requests) and for update checks; the full list is in the
+  [code signing policy](#code-signing-policy) below.
 - Everything stays on your computer: settings in `%APPDATA%\cloud.breu.trimcraft`, logs in
   `%LOCALAPPDATA%\cloud.breu.trimcraft\logs`.
 - Secrets (Discord client secret and tokens, secret HTTP headers) are stored in the **Windows
   Credential Manager**, never in the settings files, exports or logs.
+
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org).
+
+> [!NOTE]
+> Trimcraft has applied to the SignPath Foundation's open source program. Releases published
+> before the approval, including v0.1.0, are not Windows code-signed.
+
+**What is signed:** only the Windows installer `Trimcraft_<version>_x64-setup.exe` and the
+program `trimcraft.exe` inside it. Both are built from a tagged commit of this repository by the
+[release workflow](.github/workflows/release.yml) on GitHub-hosted runners and submitted to
+SignPath from that run; nothing built elsewhere or by hand is signed. The installer contains no
+third-party programs: vJoy, Voicemeeter, Soundpad and Discord are installed separately.
+
+**Team roles:**
+
+- Committers and reviewers: [@bresam](https://github.com/bresam)
+  ([members of the trimcraft organisation](https://github.com/orgs/trimcraft/people))
+- Approvers: [@bresam](https://github.com/bresam)
+
+Contributions from anyone else arrive as pull requests and are reviewed by a committer before
+they are merged, including changes to the build scripts and workflows. Every signing request is
+approved manually.
+
+**Privacy:** This program will not transfer any information to other networked systems unless
+specifically requested by the user or the person installing or operating it, with one exception
+that is on by default: the update check. In detail:
+
+- **Update check:** on start, Trimcraft fetches `latest.json` from this repository's GitHub
+  releases (github.com); **Download & install** downloads the update from there. Turn the check
+  off under Settings → Updates.
+  [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)
+  applies.
+- **Discord:** only when you set up the Discord connection. Trimcraft talks to the Discord
+  desktop app on your computer and, for the sign-in, to Discord's token endpoint (discord.com).
+  [Discord's privacy policy](https://discord.com/privacy) applies.
+- **HTTP request actions:** exactly the requests you configure, to the addresses you configure.
+- **Links and launch actions:** web pages you open (links in Trimcraft, your launch actions)
+  open in your browser.
+- **Installer:** if the Microsoft Edge WebView2 Runtime is missing (it is part of current
+  Windows 10 and 11), the installer downloads it from Microsoft.
+  [Microsoft's privacy statement](https://privacy.microsoft.com/privacystatement) applies.
+
+There is no telemetry, analytics or crash reporting.
 
 ## Connections
 

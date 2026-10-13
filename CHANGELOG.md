@@ -7,6 +7,12 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+### Added
+
+- **Code signing policy** in the README: Windows code signing through the SignPath Foundation
+  (applied for), what is signed, who approves, and every way Trimcraft uses the network. The
+  release workflow is prepared to sign the program and installer once the project is approved.
+
 ## [0.1.0] - 2026-10-13
 
 The first public release (early access), for Windows 10/11.

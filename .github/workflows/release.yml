@@ -5,7 +5,20 @@ name: Release
 # installer, its updater signature and latest.json. Run by hand (workflow_dispatch) it is a dry
 # run: it builds and signs but publishes nothing; the files are kept as a workflow artifact.
 #
-# Never runs for pull requests: the signing key is a repository secret.
+# Windows code signing through the SignPath Foundation is prepared but off until the repository
+# variable SIGNPATH_ENABLED is 'true' (docs/signpath-setup.md). Off, the tauri-action steps
+# below run as before. On, the build is split so the installer, the program inside it and the
+# updater signature belong together:
+#   1. build trimcraft.exe (bundling patches its bundle type into it),
+#   2. SignPath signs trimcraft.exe,
+#   3. bundle the NSIS installer around the signed program, without patching it again,
+#   4. SignPath signs the installer,
+#   5. only then the updater signature (.sig) and latest.json, from the final installer,
+#   6. publish.
+# SignPath signs only runs of a tag (origin verification), so a dry run with signing on goes
+# through the same steps without the two SignPath requests and keeps the files.
+#
+# Never runs for pull requests: the signing keys are repository secrets.
 on:
   push:
     tags: ['v*']
@@ -25,6 +38,12 @@ jobs:
     permissions:
       # Creating the release and uploading its files.
       contents: write
+      # SignPath reads this run's job details and downloads the unsigned artifacts.
+      actions: read
+    env:
+      SIGNPATH: ${{ vars.SIGNPATH_ENABLED == 'true' }}
+      # Only a tag build goes to SignPath; its signing policy accepts nothing else.
+      SIGN_WINDOWS: ${{ vars.SIGNPATH_ENABLED == 'true' && github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,7 +59,9 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
 
+      # Binaries signed through SignPath are built from source, without reusing cached builds.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: env.SIGNPATH != 'true'
 
       # Cargo.toml, package.json, package-lock.json and tauri.conf.json agree, and for a tag
       # they match it (v0.1.0 releases version 0.1.0).
@@ -78,10 +99,12 @@ jobs:
         shell: bash
         run: ./scripts/check.sh
 
+      # --- Without Windows code signing (SIGNPATH_ENABLED is not 'true') ---
+
       # Tag: build the per-user NSIS installer with signed updater artifacts
       # (tauri.release.conf.json) and publish it with the .sig and latest.json.
       - name: Build, sign and publish
-        if: github.event_name == 'push'
+        if: env.SIGNPATH != 'true' && github.event_name == 'push'
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -99,7 +122,7 @@ jobs:
 
       # Dry run: the same build and signing, nothing published.
       - name: Build and sign (dry run)
-        if: github.event_name != 'push'
+        if: env.SIGNPATH != 'true' && github.event_name != 'push'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -107,11 +130,158 @@ jobs:
         run: npx tauri build --bundles nsis --config src-tauri/tauri.release.conf.json
 
       - name: Keep the dry run's files
-        if: github.event_name != 'push'
+        if: env.SIGNPATH != 'true' && github.event_name != 'push'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: trimcraft-release-dry-run
           path: |
             target/release/bundle/nsis/*-setup.exe
             target/release/bundle/nsis/*-setup.exe.sig
+          if-no-files-found: error
+
+      # --- With Windows code signing through SignPath (SIGNPATH_ENABLED is 'true') ---
+
+      # Builds trimcraft.exe and an installer that is thrown away: bundling patches the bundle
+      # type (nsis) into the program, which has to happen before it is signed. No updater
+      # artifacts (no tauri.release.conf.json): they come from the final installer.
+      - name: Build the program
+        if: env.SIGNPATH == 'true'
+        shell: bash
+        run: |
+          npx tauri build --bundles nsis --ci
+          rm -rf target/release/bundle/nsis
+          mkdir -p "$RUNNER_TEMP/unsigned-app"
+          cp target/release/trimcraft.exe "$RUNNER_TEMP/unsigned-app/"
+
+      # SignPath takes the program as a GitHub artifact: a zip with trimcraft.exe at its root
+      # (.signpath/artifact-configurations/trimcraft-exe.xml).
+      - name: Upload the unsigned program
+        id: unsigned-app
+        if: env.SIGN_WINDOWS == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signpath-unsigned-app
+          path: ${{ runner.temp }}/unsigned-app/trimcraft.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Sign the program (SignPath)
+        if: env.SIGN_WINDOWS == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APP_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-app.outputs.artifact-id }}
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+          wait-for-completion: true
+          # Each request waits for a manual approval in SignPath.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed-app
+
+      - name: Use the signed program
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          $signed = Join-Path $env:RUNNER_TEMP 'signed-app/trimcraft.exe'
+          $sig = Get-AuthenticodeSignature $signed
+          if ($sig.Status -ne 'Valid') { throw "trimcraft.exe: signature $($sig.Status): $($sig.StatusMessage)" }
+          Write-Output "trimcraft.exe signed by $($sig.SignerCertificate.Subject)"
+          Copy-Item $signed target/release/trimcraft.exe -Force
+
+      # The installer around the program (signed on a tag). --no-binary-patching keeps the
+      # program byte for byte; it already carries the bundle type from the first build.
+      - name: Bundle the installer
+        id: installer
+        if: env.SIGNPATH == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npx tauri bundle --bundles nsis --no-binary-patching --ci
+          name="Trimcraft_${VERSION}_x64-setup.exe"
+          test -f "target/release/bundle/nsis/$name"
+          mkdir -p "$RUNNER_TEMP/unsigned-installer"
+          cp "target/release/bundle/nsis/$name" "$RUNNER_TEMP/unsigned-installer/"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the unsigned installer
+        id: unsigned-installer
+        if: env.SIGN_WINDOWS == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signpath-unsigned-installer
+          path: ${{ runner.temp }}/unsigned-installer/${{ steps.installer.outputs.name }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Sign the installer (SignPath)
+        if: env.SIGN_WINDOWS == 'true'
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned-installer.outputs.artifact-id }}
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: ${{ runner.temp }}/signed-installer
+
+      - name: Use the signed installer
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        env:
+          NAME: ${{ steps.installer.outputs.name }}
+        run: |
+          $signed = Join-Path $env:RUNNER_TEMP "signed-installer/$env:NAME"
+          $sig = Get-AuthenticodeSignature $signed
+          if ($sig.Status -ne 'Valid') { throw "${env:NAME}: signature $($sig.Status): $($sig.StatusMessage)" }
+          Write-Output "$env:NAME signed by $($sig.SignerCertificate.Subject)"
+          Copy-Item $signed "target/release/bundle/nsis/$env:NAME" -Force
+
+      # The updater signature and latest.json, from the installer that is published.
+      - name: Updater signature and latest.json
+        if: env.SIGNPATH == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NAME: ${{ steps.installer.outputs.name }}
+          DOWNLOAD_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}
+        run: |
+          dir=target/release/bundle/nsis
+          npx tauri signer sign --app-version "$VERSION" "$dir/$NAME"
+          node scripts/updater-manifest.mjs "$VERSION" "$dir/$NAME" "$RUNNER_TEMP/notes.md" \
+            "$DOWNLOAD_URL" > "$dir/latest.json"
+
+      - name: Publish
+        if: env.SIGN_WINDOWS == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          NAME: ${{ steps.installer.outputs.name }}
+        run: |
+          dir=target/release/bundle/nsis
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+            --title "Trimcraft $TAG (early access)" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$dir/$NAME" "$dir/$NAME.sig" "$dir/latest.json"
+
+      - name: Keep the dry run's files (signing path)
+        if: env.SIGNPATH == 'true' && github.event_name != 'push'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trimcraft-release-dry-run
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
+            target/release/bundle/nsis/latest.json
           if-no-files-found: error

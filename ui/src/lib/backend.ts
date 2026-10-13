@@ -26,8 +26,10 @@ import type {
   RadioCommand,
   RecordKind,
   RecorderConfig,
+  SecretRef,
   Sound,
   VirtualControlDef,
+  VoiceRef,
   WidgetPosition,
 } from "./types";
 import { createDemo } from "./demo";
@@ -87,8 +89,16 @@ export interface Backend {
   cancelRecording(): Promise<void>;
   clearRecording(): Promise<void>;
   setRecorderConfig(config: RecorderConfig): Promise<void>;
-  /** Plays the action after the countdown. */
+  /** Plays the action (macros after the countdown). */
   testAction(action: Action): Promise<void>;
+  /** Installed Windows voices. */
+  listVoices(): Promise<VoiceRef[]>;
+  /** Names of the sound output devices. */
+  listSoundDevices(): Promise<string[]>;
+  /** Executable names of programs that have an audio session now. */
+  listAudioPrograms(): Promise<string[]>;
+  /** Stores a secret HTTP header value in the credential store; resolves with its reference. */
+  storeHttpSecret(value: string): Promise<SecretRef>;
   /** Calls `onBatch` with the buffered entries first, then with new ones about every 100 ms. Entries may repeat; drop them by `seq`. */
   subscribeDiagnostics(onBatch: (entries: DiagEntry[]) => void): Promise<() => void>;
   clearDiagnostics(): Promise<void>;
@@ -171,6 +181,10 @@ async function tauriBackend(): Promise<Backend> {
     clearRecording: () => invoke("clear_recording"),
     setRecorderConfig: (config) => invoke("set_recorder_config", { config }),
     testAction: (action) => invoke("test_action", { action }),
+    listVoices: () => invoke("list_voices"),
+    listSoundDevices: () => invoke("list_sound_devices"),
+    listAudioPrograms: () => invoke("list_audio_programs"),
+    storeHttpSecret: (value) => invoke("store_http_secret", { value }),
     async subscribeDiagnostics(onBatch) {
       // Listen first, then fetch the buffer: nothing is missed, a few entries may arrive twice.
       const unlisten = await listen<DiagEntry[]>("detent://diagnostics", (e) => onBatch(e.payload));

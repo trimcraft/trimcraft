@@ -161,10 +161,12 @@ export function createDemo(): Backend {
     connections: {
       soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 },
       discord: { enabled: false, clientId: "", clientSecret: null },
+      voicemeeter: { enabled: false },
     },
     connectors: [
-      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null },
-      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null },
+      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
+      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null, missing: null },
+      { id: "voicemeeter", name: "Voicemeeter", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, missing: null },
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
@@ -652,11 +654,16 @@ export function createDemo(): Backend {
           emit();
         }, 800);
       }
+      // Voicemeeter: "installed" and running in the demo.
+      const vm = s.connectors.find((x) => x.id === "voicemeeter")!;
+      vm.enabled = connections.voicemeeter.enabled;
+      Object.assign(vm, vm.enabled ? { status: { state: "connected" }, detail: "Voicemeeter Banana (demo)" } : { status: { state: "notConfigured" }, detail: null });
       discordStatus();
       emit();
     },
     async testConnection(id) {
       if (id === "soundpad") return `Connected, ${DEMO_SOUNDS.length} sounds (demo)`;
+      if (id === "voicemeeter") return "Connected to Voicemeeter Banana (demo)";
       const creds = discordView().credentials!;
       if (!s.connections.discord.clientId || !creds.secretSaved) {
         discordStatus(null, true);
@@ -829,7 +836,19 @@ export function createDemo(): Backend {
     },
     listProcessWindows: async () => structuredClone(DEMO_WINDOWS),
     async testAction(action) {
-      setTimeout(() => console.info("[demo] test play:", actionText(action)), 3000);
+      const macro = action.type === "keyboardMacro" || action.type === "mouseMacro";
+      setTimeout(() => console.info("[demo] test play:", actionText(action)), macro ? 3000 : 0);
+    },
+    listVoices: async () => [
+      { id: "demo/zira", name: "Microsoft Zira Desktop - English (United States)" },
+      { id: "demo/hedda", name: "Microsoft Hedda - German (Germany)" },
+    ],
+    listSoundDevices: async () => ["Speakers (Realtek Audio)", "Headphones (Demo Headset)"],
+    listAudioPrograms: async () => ["chrome.exe", "Discord.exe", "DCS.exe"],
+    async storeHttpSecret(value) {
+      if (!value) throw new Error("enter the secret value");
+      // The demo keeps no secrets; only the reference comes back.
+      return { store: "windowsCredentialManager", target: `detent/http/demo-${Date.now().toString(16)}` };
     },
     async subscribeDiagnostics(cb) {
       diagListeners.add(cb);

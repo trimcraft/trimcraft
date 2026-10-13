@@ -270,7 +270,107 @@ export type Action =
   | MouseMacro
   | { type: "soundpad"; command: SoundpadCommand }
   | { type: "discord"; command: DiscordCommand }
-  | { type: "switchProfile"; target: ProfileTarget };
+  | { type: "switchProfile"; target: ProfileTarget }
+  | SpeakAction
+  | PlaySoundAction
+  | { type: "volume"; target: VolumeTarget; command: VolumeCommand }
+  | { type: "voicemeeter"; target: VmTarget; command: VmCommand }
+  | { type: "mediaKey"; key: MediaKey }
+  | LaunchAction
+  | HttpAction;
+
+// --- More actions (detent-core: audio.rs, voicemeeter.rs, launch.rs, webhook.rs) -------------
+
+/** An installed Windows voice; looked up by id. */
+export interface VoiceRef {
+  id: string;
+  name: string;
+}
+
+/** Text may contain {control}, {state}, {profile}, {value}. A new speech interrupts the last. */
+export interface SpeakAction {
+  type: "speak";
+  text: string;
+  /** Null: the Windows default voice. */
+  voice: VoiceRef | null;
+  /** -10..10, 0 is normal. */
+  rate: number;
+  /** 0..100. */
+  volume: number;
+  /** The queue waits until the text is spoken. */
+  wait: boolean;
+}
+
+export interface PlaySoundAction {
+  type: "playSound";
+  path: string;
+  /** 0..100. */
+  volume: number;
+  /** Output device name; null: the Windows default. */
+  device: string | null;
+  stopPrevious: boolean;
+  wait: boolean;
+}
+
+export type VolumeTarget = { type: "master" } | { type: "app"; process: string };
+
+export type VolumeCommand =
+  | { type: "set"; percent: number }
+  | { type: "change"; delta: number }
+  | { type: "mute" }
+  | { type: "unmute" }
+  | { type: "toggleMute" };
+
+export type VmKind = "strip" | "bus";
+
+/** Index from 0; the UI shows it from 1. */
+export interface VmTarget {
+  kind: VmKind;
+  index: number;
+}
+
+export type VmCommand =
+  | { type: "setGain"; db: number }
+  | { type: "changeGain"; deltaDb: number }
+  | { type: "mute" }
+  | { type: "unmute" }
+  | { type: "toggleMute" };
+
+export type MediaKey = "playPause" | "next" | "previous" | "stop" | "volumeUp" | "volumeDown" | "mute";
+
+export type LaunchTarget =
+  | { type: "program"; path: string; arguments: string; workingDir: string; onlyIfNotRunning: boolean }
+  | { type: "url"; url: string }
+  | { type: "open"; path: string };
+
+export interface LaunchAction {
+  type: "launch";
+  target: LaunchTarget;
+  /** Programs: the queue waits until the program has exited. */
+  wait: boolean;
+}
+
+export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface HttpHeader {
+  name: string;
+  /** Empty when the value is secret. */
+  value: string;
+  /** Where a secret value is stored; null for a plain value. */
+  secret: SecretRef | null;
+}
+
+export interface HttpAction {
+  type: "http";
+  method: HttpMethod;
+  /** Placeholders in the URL are URL-encoded. */
+  url: string;
+  headers: HttpHeader[];
+  /** Not sent for GET and DELETE. */
+  body: string;
+  timeoutMs: number;
+  wait: boolean;
+}
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
@@ -348,7 +448,7 @@ export interface VoiceState {
 
 // --- Connections (detent-core: connection.rs) -------------------------------------------------
 
-export type ConnectorId = "soundpad" | "discord";
+export type ConnectorId = "soundpad" | "discord" | "voicemeeter";
 
 export type ConnectorStatus =
   | { state: "notConfigured" }
@@ -380,6 +480,8 @@ export interface ConnectorView {
   credentials: CredentialState | null;
   /** The setup guide step that fixes the last problem (Discord), also while disabled. */
   guide: GuideStep | null;
+  /** The program the connector needs is not installed (Voicemeeter); its actions are hidden. */
+  missing: string | null;
 }
 
 export interface SoundpadSettings {
@@ -398,10 +500,15 @@ export interface DiscordSettings {
   clientSecret: SecretRef | null;
 }
 
+export interface VoicemeeterSettings {
+  enabled: boolean;
+}
+
 /** Connector settings as stored in setup.json. Secrets never go here. */
 export interface Connections {
   soundpad: SoundpadSettings;
   discord: DiscordSettings;
+  voicemeeter: VoicemeeterSettings;
 }
 
 export interface RadioState {

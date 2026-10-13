@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad and Discord
-  // commands, profile switches.
+  // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad, Discord and
+  // Voicemeeter commands, profile switches, speech, sound files, volume, media keys, launch and
+  // HTTP requests (editors in ./actions).
   import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
   import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
@@ -8,6 +9,13 @@
   import SoundpadEditor from "./SoundpadEditor.svelte";
   import DiscordEditor from "./DiscordEditor.svelte";
   import ProfileTargetEditor from "./ProfileTargetEditor.svelte";
+  import SpeakEditor from "./actions/SpeakEditor.svelte";
+  import PlaySoundEditor from "./actions/PlaySoundEditor.svelte";
+  import VolumeEditor from "./actions/VolumeEditor.svelte";
+  import VoicemeeterEditor from "./actions/VoicemeeterEditor.svelte";
+  import LaunchEditor from "./actions/LaunchEditor.svelte";
+  import HttpEditor from "./actions/HttpEditor.svelte";
+  import { MEDIA_KEYS } from "../lib/format";
 
   let {
     label,
@@ -18,10 +26,26 @@
 
   let open = $state<number | null>(null);
   /** The connector an action needs (keyboard and mouse macros are built in). */
-  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" || a.type === "discord" ? a.type : null);
+  const connectorOf = (a: Action): ConnectorId | null =>
+    a.type === "soundpad" || a.type === "discord" || a.type === "voicemeeter" ? a.type : null;
   const connectorView = (id: ConnectorId) => snapshot.connectors.find((c) => c.id === id);
-  /** A connector's actions are offered, and run, only while it is enabled. */
-  const enabled = (id: ConnectorId) => snapshot.connections[id].enabled;
+  /** A connector's actions are offered, and run, only while it is enabled (and installed). */
+  const enabled = (id: ConnectorId) => snapshot.connections[id].enabled && !connectorView(id)?.missing;
+
+  /** What "Add action" offers, in groups. */
+  let addable = $derived.by(() => {
+    const groups: [string, [Action["type"], string][]][] = [
+      ["Input", [["keyboardMacro", "Keyboard macro"], ["mouseMacro", "Mouse macro"], ["mediaKey", "Media key"]]],
+      ["Sound", [["speak", "Speak text"], ["playSound", "Play sound file"], ["volume", "Audio volume"]]],
+      ["Programs", [["launch", "Launch program / open"], ["http", "HTTP request (webhook)"], ["switchProfile", "Switch profile"]]],
+    ];
+    const connectors: [Action["type"], string][] = [];
+    if (enabled("soundpad")) connectors.push(["soundpad", "Soundpad"]);
+    if (enabled("discord")) connectors.push(["discord", "Discord"]);
+    if (enabled("voicemeeter")) connectors.push(["voicemeeter", "Voicemeeter"]);
+    if (connectors.length) groups.push(["Connections", connectors]);
+    return groups;
+  });
   const inactive = (a: Action) => {
     const id = connectorOf(a);
     return id !== null && !enabled(id);
@@ -41,6 +65,20 @@
         return { type, command: "toggleMute" };
       case "switchProfile":
         return { type, target: { type: "next" } };
+      case "speak":
+        return { type, text: "{state}", voice: null, rate: 0, volume: 100, wait: false };
+      case "playSound":
+        return { type, path: "", volume: 100, device: null, stopPrevious: false, wait: false };
+      case "volume":
+        return { type, target: { type: "master" }, command: { type: "toggleMute" } };
+      case "voicemeeter":
+        return { type, target: { kind: "strip", index: 0 }, command: { type: "toggleMute" } };
+      case "mediaKey":
+        return { type, key: "playPause" };
+      case "launch":
+        return { type, target: { type: "program", path: "", arguments: "", workingDir: "", onlyIfNotRunning: true }, wait: false };
+      case "http":
+        return { type, method: "POST", url: "https://", headers: [], body: "", timeoutMs: 5000, wait: false };
     }
   }
 
@@ -83,6 +121,25 @@
               <DiscordEditor bind:command={action.command} connector={connectorView("discord")} />
             {:else if action.type === "switchProfile"}
               <ProfileTargetEditor bind:target={action.target} profiles={snapshot.profiles} />
+            {:else if action.type === "speak"}
+              <SpeakEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "playSound"}
+              <PlaySoundEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "volume"}
+              <VolumeEditor bind:target={action.target} bind:command={action.command} />
+            {:else if action.type === "voicemeeter"}
+              <VoicemeeterEditor bind:target={action.target} bind:command={action.command} connector={connectorView("voicemeeter")} />
+            {:else if action.type === "mediaKey"}
+              <div class="row">
+                <select bind:value={action.key}>
+                  {#each MEDIA_KEYS as [value, text] (value)}<option {value}>{text}</option>{/each}
+                </select>
+                <span class="muted small">Sent like a keyboard's media key: the active media player or Windows reacts.</span>
+              </div>
+            {:else if action.type === "launch"}
+              <LaunchEditor bind:action={actions[ai] as typeof action} />
+            {:else if action.type === "http"}
+              <HttpEditor bind:action={actions[ai] as typeof action} />
             {:else}
               <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
@@ -93,11 +150,22 @@
       <span class="muted small">none</span>
     {/each}
     <div class="row">
-      <button class="small" onclick={() => addAction("keyboardMacro")}>+ Keyboard macro</button>
-      <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
-      {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
-      {#if enabled("discord")}<button class="small" onclick={() => addAction("discord")}>+ Discord</button>{/if}
-      <button class="small" onclick={() => addAction("switchProfile")}>+ Switch profile</button>
+      <select
+        class="small add"
+        value=""
+        onchange={(e) => {
+          const type = e.currentTarget.value as Action["type"];
+          e.currentTarget.value = "";
+          if (type) addAction(type);
+        }}
+      >
+        <option value="" disabled>+ Add action…</option>
+        {#each addable as [group, types] (group)}
+          <optgroup label={group}>
+            {#each types as [value, text] (value)}<option {value}>{text}</option>{/each}
+          </optgroup>
+        {/each}
+      </select>
     </div>
   </div>
 </div>

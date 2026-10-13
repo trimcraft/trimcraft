@@ -843,6 +843,63 @@ mod tests {
         )
         .unwrap();
         assert!(settings.start_with_windows && settings.run_as_admin && !settings.close_to_tray);
+        // More action types, as ActionList.svelte creates them (newAction) and the editors
+        // change them.
+        let more: Vec<Action> = serde_json::from_str(
+            r#"[
+              {"type":"speak","text":"{state}","voice":{"id":"HKEY_LOCAL_MACHINE/x","name":"Zira"},"rate":0,"volume":100,"wait":false},
+              {"type":"playSound","path":"C:/s.wav","volume":100,"device":null,"stopPrevious":false,"wait":true},
+              {"type":"volume","target":{"type":"master"},"command":{"type":"toggleMute"}},
+              {"type":"volume","target":{"type":"app","process":"Discord.exe"},"command":{"type":"set","percent":50}},
+              {"type":"voicemeeter","target":{"kind":"strip","index":0},"command":{"type":"changeGain","deltaDb":3}},
+              {"type":"mediaKey","key":"playPause"},
+              {"type":"launch","target":{"type":"program","path":"C:/a.exe","arguments":"","workingDir":"","onlyIfNotRunning":true},"wait":false},
+              {"type":"launch","target":{"type":"url","url":"https://example.com"},"wait":false},
+              {"type":"http","method":"POST","url":"https://x.test","headers":[
+                {"name":"Authorization","value":"","secret":{"store":"windowsCredentialManager","target":"detent/http/1"}}],
+               "body":"","timeoutMs":5000,"wait":false}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(more.len(), 9);
+        for mut action in more {
+            action.normalize().unwrap();
+        }
+        let connections: Connections = serde_json::from_str(
+            r#"{"soundpad":{"enabled":false,"timeoutMs":500,"listMaxAgeMs":10000},
+                "discord":{"enabled":false,"clientId":"","clientSecret":null},
+                "voicemeeter":{"enabled":true}}"#,
+        )
+        .unwrap();
+        assert!(connections.voicemeeter.enabled);
+        let id: ConnectorId = serde_json::from_str(r#""voicemeeter""#).unwrap();
+        assert_eq!(id, ConnectorId::Voicemeeter);
+        // What the pickers and store_http_secret return (types.ts: VoiceRef, SecretRef).
+        let voice = serde_json::to_value(VoiceRef {
+            id: "a".into(),
+            name: "b".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            (voice["id"].as_str(), voice["name"].as_str()),
+            (Some("a"), Some("b"))
+        );
+        let secret = serde_json::to_value(SecretRef::WindowsCredentialManager {
+            target: "detent/http/1".into(),
+        })
+        .unwrap();
+        assert_eq!(secret["store"], "windowsCredentialManager");
+        let view = serde_json::to_value(detent_core::connection::ConnectorView::new(
+            ConnectorId::Voicemeeter,
+            false,
+            Some(&detent_core::ConnectorState {
+                missing: Some("Voicemeeter is not installed".into()),
+                ..Default::default()
+            }),
+        ))
+        .unwrap();
+        assert_eq!(view["missing"], "Voicemeeter is not installed");
+
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();
         let _: RecordKind = serde_json::from_str(r#""mouse""#).unwrap();

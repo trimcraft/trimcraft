@@ -90,6 +90,14 @@
         </div>
       {:else if c.id === "discord"}
         <DiscordSettings connector={c} settings={snapshot.connections.discord} />
+      {:else if c.id === "voicemeeter"}
+        {#if c.missing}
+          <p class="warning small">{c.missing}. Install Voicemeeter (Standard, Banana or Potato) from VB-Audio to use its actions.</p>
+        {/if}
+        <p class="muted small">
+          Sets gain and mute of Voicemeeter's strips and buses through its remote API (<span class="mono">VoicemeeterRemote64.dll</span>
+          from the installation folder). Voicemeeter must be running. While enabled, Detent checks it every few seconds.
+        </p>
       {/if}
     </div>
   {/each}

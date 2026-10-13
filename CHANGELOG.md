@@ -7,11 +7,7 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
-### Added
-
-- **Code signing policy** in the README: Windows code signing through the SignPath Foundation
-  (applied for), what is signed, who approves, and every way Trimcraft uses the network. The
-  release workflow is prepared to sign the program and installer once the project is approved.
+## [0.1.1] - 2026-10-14
 
 ### Fixed
 
@@ -22,12 +18,21 @@ expect rough edges, and back up your configuration before updating.
   the navigation, and a start that takes longer than usual says so instead of showing
   "Starting…" forever.
 
+### Changed
+
+- Updated dependencies, including the HTTP client used for the Discord connection and HTTP
+  request actions.
+- Faster builds and releases.
+
 ## [0.1.0] - 2026-10-13
 
 The first public release (early access), for Windows 10/11.
 
 ### Added
 
+- **Code signing policy** in the README: Windows code signing through the SignPath Foundation
+  (applied for), what is signed, who approves, and every way Trimcraft uses the network. The
+  release workflow is prepared to sign the program and installer once the project is approved.
 - **Devices and hardware test**: every connected game controller with all axes, buttons and hats
   live; stable identities across restarts and re-plugging, also for two units of the same model;
   vJoy devices are recognised and never used as input.
@@ -60,5 +65,6 @@ The first public release (early access), for Windows 10/11.
 - **Updates**: Trimcraft checks for new releases on startup (can be turned off) and installs
   them from Settings, Updates; releases are signed.
 
-[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.0

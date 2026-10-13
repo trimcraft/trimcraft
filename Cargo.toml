@@ -23,3 +23,8 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# No [profile.release] on purpose: the defaults (opt-level 3, 16 codegen units, no LTO) are the
+# fastest release build. LTO or codegen-units = 1 would shrink the program somewhat (the
+# installer is about 5.5 MiB) but make every CI and release build slower, and Trimcraft is not
+# CPU-bound.

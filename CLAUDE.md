@@ -49,6 +49,10 @@ node scripts/screenshots.mjs docs/images http://localhost:1420 virtual-controls 
 Docs: `README.md` is the public front page (short); behaviour in detail goes to
 `docs/user-guide.md`. Update the guide when you change what the user sees.
 
+CI (`.github/workflows/ci.yml`) runs the gate and the release build as two parallel jobs; build
+caches are saved only from `main`, and the release workflow reuses the build job's cache except
+for builds signed through SignPath, which are always built from source.
+
 On Windows, a checkout in a deep path (e.g. a worktree under `.claude/worktrees`) makes the SDL3
 CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a short directory.
 
@@ -129,8 +133,9 @@ Versions live in four files and must agree (a test and `scripts/check-versions.m
    compare links at the bottom. The release notes are this section; the workflow fails without it.
 3. Run `./scripts/check.sh`, commit, merge to `main`.
 4. Tag that commit `vX.Y.Z` and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. `.github/workflows/release.yml` checks that the tag matches the version, runs the gate, builds
-   the NSIS installer with signed updater artifacts (secrets `TAURI_SIGNING_PRIVATE_KEY` and
+5. `.github/workflows/release.yml` checks that the tag matches the version, checks that the CI
+   workflow passed for the tagged commit (waiting while it still runs; it does not run the gate
+   again), builds the NSIS installer with signed updater artifacts (secrets `TAURI_SIGNING_PRIVATE_KEY` and
    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; `src-tauri/tauri.release.conf.json` turns them on) and
    publishes "Trimcraft vX.Y.Z (early access)" as a normal release with the installer, its `.sig`
    and `latest.json`. Installed copies find it through
@@ -146,7 +151,9 @@ request waits for a manual approval. Only tag runs are submitted; the public "Co
 policy" section in the README must stay true (what is signed, roles, network use).
 
 Running the workflow by hand (Actions, Release, "Run workflow") is a dry run: it builds and signs
-(updater signature only) and keeps the files as an artifact, but publishes nothing. Never mark a release as prerelease or
+(updater signature only) and keeps the files as an artifact, but publishes nothing. It also needs
+a passed CI run for its commit; for a branch, start CI on it by hand first (`gh workflow run
+ci.yml --ref <branch>`). Never mark a release as prerelease or
 draft: `/releases/latest`, and with it the updater, only sees normal releases.
 
 ## Testing with real hardware

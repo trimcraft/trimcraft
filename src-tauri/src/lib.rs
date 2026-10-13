@@ -1,6 +1,7 @@
 //! Detent desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod autostart;
+mod backups;
 mod commands;
 mod discord;
 mod elevation;
@@ -12,6 +13,7 @@ mod recorder;
 mod secrets;
 mod soundpad;
 mod storage;
+mod transfer;
 mod tray;
 
 use detent_core::diagnostics::action_record;
@@ -65,6 +67,9 @@ pub struct Shared {
     meta: Meta,
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
+    backups: Arc<backups::Backups>,
+    /// An import file the user picked and has not applied yet.
+    pending_import: Mutex<Option<detent_core::transfer::ImportFile>>,
 }
 
 impl Shared {
@@ -138,8 +143,10 @@ impl Shared {
             self.storage.save_json(DEVICES_FILE, engine.registry());
         }
         if dirty.setup {
-            self.storage
-                .save_text(SETUP_FILE, &engine.setup().to_json());
+            let text = engine.setup().to_json();
+            if self.storage.save_text(SETUP_FILE, &text) {
+                self.backups.note_saved(&text);
+            }
         }
         if dirty.values {
             self.storage.save_json(VALUES_FILE, &engine.values());
@@ -189,6 +196,8 @@ pub fn run() {
         )
         // Used from Rust only (open_discord_portal); the windows get no opener permission.
         .plugin(tauri_plugin_opener::init())
+        // Used from Rust only (export and import dialogs); the windows get no dialog permission.
+        .plugin(tauri_plugin_dialog::init())
         // Used from Rust only (tray notice); the windows get no notification permission.
         .plugin(tauri_plugin_notification::init())
         .plugin(
@@ -361,6 +370,7 @@ fn load(
     });
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
     let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
+    let backups = backups::Backups::spawn(&storage.dir, diagnostics.clone());
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
@@ -377,6 +387,8 @@ fn load(
         recorder: recorder::Recorder::default(),
         meta,
         logged_profile: Mutex::new(String::new()),
+        backups,
+        pending_import: Mutex::new(None),
     })
 }
 

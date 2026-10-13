@@ -6,6 +6,7 @@
   import { backend, errorText } from "../lib/backend";
   import ConnectorBadge from "./ConnectorBadge.svelte";
   import DiscordSettings from "./DiscordSettings.svelte";
+  import { vjoyAxisName } from "../lib/format";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
@@ -39,7 +40,7 @@
 <section class="panel">
   <h2>Connections</h2>
   <p class="muted small">
-    Programs Detent can control. Enable a connection to use its actions in Virtual Controls; actions of a disabled
+    Programs and drivers Detent can control. Enable a connection to use its actions in Virtual Controls; actions of a disabled
     connection stay saved but do not run.
   </p>
   {#if error}<p class="error">{error}</p>{/if}
@@ -90,6 +91,36 @@
         </div>
       {:else if c.id === "discord"}
         <DiscordSettings connector={c} settings={snapshot.connections.discord} />
+      {:else if c.id === "vjoy"}
+        <p class="muted small">
+          Feeds virtual joysticks (vJoy devices 1–16) that games see as controllers: state outputs of virtual controls,
+          vJoy mappings and vJoy actions. While enabled, Detent owns the devices the active profile uses and gives them back
+          when disabled or on exit. Axes, buttons and POVs of a device are set in <b>Configure vJoy</b> (vJoyConf, in the
+          Start menu); Detent cannot change them. Check the output with <b>vJoy Monitor</b> or Windows' <span class="mono">joy.cpl</span>.
+        </p>
+        {#if c.vjoy?.version}
+          <table class="devices">
+            <thead><tr><th>Device</th><th>Axes</th><th>Buttons</th><th>POVs</th><th>Status</th></tr></thead>
+            <tbody>
+              {#each c.vjoy.devices.filter((d) => d.owner !== "missing") as d (d.id)}
+                <tr>
+                  <td>vJoy {d.id}</td>
+                  <td>{d.axes.map(vjoyAxisName).join(", ") || "none"}</td>
+                  <td class:warning={d.buttons === 0}>{d.buttons}</td>
+                  <td>{d.continuousPovs ? `${d.continuousPovs} (8-way)` : d.discretePovs ? `${d.discretePovs} (4-way)` : "0"}</td>
+                  <td class:ok={d.owner === "detent"} class:warning={d.owner === "other"}>
+                    {d.owner === "detent" ? "owned by Detent" : d.owner === "other" ? "used by another program" : "free"}
+                  </td>
+                </tr>
+              {:else}
+                <tr><td colspan="5" class="warning">No vJoy device is configured: add one in Configure vJoy.</td></tr>
+              {/each}
+            </tbody>
+          </table>
+          {#if c.vjoy.devices.some((d) => d.owner !== "missing" && d.buttons === 0)}
+            <p class="warning small">A device without buttons cannot take button outputs: add buttons (and POVs) in Configure vJoy.</p>
+          {/if}
+        {/if}
       {/if}
     </div>
   {/each}
@@ -106,4 +137,7 @@
   .ok { color: var(--ok); }
   .warning { color: var(--warn); }
   button:disabled { opacity: 0.5; cursor: default; }
+  .devices { border-collapse: collapse; font-size: 12px; }
+  .devices th { text-align: left; color: var(--muted); font-weight: normal; padding: 2px 12px 2px 0; }
+  .devices td { padding: 2px 12px 2px 0; border-top: 1px solid var(--line); }
 </style>

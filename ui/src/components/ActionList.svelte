@@ -7,6 +7,7 @@
   import MacroEditor from "./MacroEditor.svelte";
   import SoundpadEditor from "./SoundpadEditor.svelte";
   import DiscordEditor from "./DiscordEditor.svelte";
+  import VjoyActionEditor from "./VjoyActionEditor.svelte";
   import ProfileTargetEditor from "./ProfileTargetEditor.svelte";
 
   let {
@@ -18,7 +19,7 @@
 
   let open = $state<number | null>(null);
   /** The connector an action needs (keyboard and mouse macros are built in). */
-  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" || a.type === "discord" ? a.type : null);
+  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" || a.type === "discord" || a.type === "vjoy" ? a.type : null);
   const connectorView = (id: ConnectorId) => snapshot.connectors.find((c) => c.id === id);
   /** A connector's actions are offered, and run, only while it is enabled. */
   const enabled = (id: ConnectorId) => snapshot.connections[id].enabled;
@@ -41,6 +42,8 @@
         return { type, command: "toggleMute" };
       case "switchProfile":
         return { type, target: { type: "next" } };
+      case "vjoy":
+        return { type, command: { type: "button", button: { device: 1, button: 1 }, op: { type: "pulse", ms: 100 } } };
     }
   }
 
@@ -81,6 +84,8 @@
               <SoundpadEditor bind:command={action.command} connector={connectorView("soundpad")} />
             {:else if action.type === "discord"}
               <DiscordEditor bind:command={action.command} connector={connectorView("discord")} />
+            {:else if action.type === "vjoy"}
+              <VjoyActionEditor bind:command={action.command} {snapshot} />
             {:else if action.type === "switchProfile"}
               <ProfileTargetEditor bind:target={action.target} profiles={snapshot.profiles} />
             {:else}
@@ -97,6 +102,7 @@
       <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
       {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
       {#if enabled("discord")}<button class="small" onclick={() => addAction("discord")}>+ Discord</button>{/if}
+      {#if enabled("vjoy")}<button class="small" onclick={() => addAction("vjoy")}>+ vJoy</button>{/if}
       <button class="small" onclick={() => addAction("switchProfile")}>+ Switch profile</button>
     </div>
   </div>

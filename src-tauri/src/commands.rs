@@ -899,6 +899,43 @@ mod tests {
         ] {
             let _: detent_core::PressKind = serde_json::from_str(press).unwrap();
         }
+
+        // vJoy (ui/src/lib/types.ts: VjoyMapping, VjoyCommand, ButtonOutput).
+        let mappings: Vec<VjoyMapping> = serde_json::from_str(
+            r#"[{"type":"axis","device":"d","index":1,"target":{"device":1,"axis":"y"},
+                 "curve":{"invert":true,"deadzoneCenter":5,"deadzoneLow":2,"deadzoneHigh":2,"saturation":90,"curve":{"type":"expo","factor":0.4}}},
+                {"type":"button","device":"d","index":3,"target":{"device":2,"button":7}},
+                {"type":"hat","device":"d","index":0,"target":{"device":2,"pov":1}}]"#,
+        )
+        .unwrap();
+        assert!(mappings.iter().all(|m| m.validate().is_ok()));
+        for command in [
+            r#"{"type":"button","button":{"device":1,"button":3},"op":{"type":"press"}}"#,
+            r#"{"type":"button","button":{"device":1,"button":3},"op":{"type":"pulse","ms":100}}"#,
+            r#"{"type":"axis","axis":{"device":1,"axis":"slider1"},"percent":50}"#,
+            r#"{"type":"pov","pov":{"device":1,"pov":1},"direction":"downLeft"}"#,
+            r#"{"type":"pov","pov":{"device":1,"pov":1},"direction":null}"#,
+        ] {
+            let mut action: Action =
+                serde_json::from_str(&format!(r#"{{"type":"vjoy","command":{command}}}"#)).unwrap();
+            action.normalize().unwrap();
+        }
+        let mut toggle: VirtualControl = serde_json::from_str(
+            r#"{"id":"","name":"T","kind":{"type":"toggle","toggle":[],"on":[],"off":[],"onOn":[],"onOff":[],
+                "startup":"restoreLast","output":{"button":{"device":1,"button":2},"pulseMs":null}}}"#,
+        )
+        .unwrap();
+        toggle.normalize().unwrap();
+        let counter: VirtualControl = serde_json::from_str(
+            r#"{"id":"","name":"C","kind":{"type":"counter","spec":{"min":1,"max":5,"step":1,"initial":1,"end":"wrap","decimals":0},
+                "output":{"device":1,"axis":"z"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(counter.vjoy_devices(), [1]);
+        let c: Connections = serde_json::from_str(r#"{"vjoy":{"enabled":true}}"#).unwrap();
+        assert!(c.vjoy.enabled);
+        let id: ConnectorId = serde_json::from_str(r#""vjoy""#).unwrap();
+        assert_eq!(id, ConnectorId::Vjoy);
     }
 
     #[test]

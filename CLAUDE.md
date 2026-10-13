@@ -58,6 +58,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
+  `vjoy` (vJoy targets, axis curves, mappings, desired output state and its diff),
   `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
@@ -65,7 +66,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
   `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
   `discord.rs` (Discord connector: IPC pipe, token endpoint over HTTPS, worker thread with
-  reconnect), `secrets.rs` (credential store via `keyring`),
+  reconnect), `vjoy.rs` (vJoy connector: `vJoyInterface.dll` loaded at run time behind the
+  `VjoyApi` trait, worker thread writing output diffs), `secrets.rs` (credential store via
+  `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `tray.rs` (tray icon and menu), `autostart.rs` (Run key or elevated Task Scheduler task),

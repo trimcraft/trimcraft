@@ -23,6 +23,7 @@ import type {
   OverlayItem,
   ProcessWindow,
   ProfileSwitching,
+  VjoyMapping,
   ControlCommand,
   RecordKind,
   RecorderConfig,
@@ -59,6 +60,8 @@ export interface Backend {
   commandRadio(id: string, command: ControlCommand): Promise<void>;
   /** Sets a counter control's value without running actions. */
   setControlValue(id: string, value: number): Promise<void>;
+  /** Replaces the active profile's vJoy mappings. */
+  setVjoyMappings(mappings: VjoyMapping[]): Promise<void>;
   toggleOverlayVirtualControl(id: string): Promise<boolean>;
   startLearn(): Promise<void>;
   stopLearn(): Promise<void>;
@@ -152,6 +155,7 @@ async function tauriBackend(): Promise<Backend> {
     setRadioActive: (id, state) => invoke("set_radio_active", { id, state }),
     commandRadio: (id, command) => invoke("command_radio", { id, command }),
     setControlValue: (id, value) => invoke("set_control_value", { id, value }),
+    setVjoyMappings: (mappings) => invoke("set_vjoy_mappings", { mappings }),
     toggleOverlayVirtualControl: (id) => invoke("toggle_overlay_virtual_control", { id }),
     startLearn: () => invoke("start_learn"),
     stopLearn: () => invoke("stop_learn"),

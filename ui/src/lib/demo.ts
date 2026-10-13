@@ -27,10 +27,14 @@ import type {
   Sound,
   Trigger,
   VirtualControlDef,
+  VjoyAxis,
+  VjoyInfo,
+  VjoyMapping,
+  VjoyStateView,
   VirtualControlView,
   VoiceState,
 } from "./types";
-import { CONTROL_TYPES, actionText, controlActions, newTrigger, sameInput, triggerLists } from "./format";
+import { CONTROL_TYPES, actionText, applyCurve, controlActions, defaultCurve, newTrigger, sameInput, triggerLists } from "./format";
 
 type Cmd = { type: "increment" | "decrement" | "clear" | "toggleOff" } | { type: "select"; index: number };
 
@@ -56,6 +60,20 @@ const DEMO_MONITORS: MonitorInfo[] = [
   { name: "DEMO-1", x: 0, y: 0, width: 2560, height: 1440, primary: true, scale: 1 },
   { name: "DEMO-2", x: 2560, y: 0, width: 1920, height: 1080, primary: false, scale: 1 },
 ];
+
+/** A vJoy installation like a fresh one: device 1 with three axes and no buttons, device 2 with
+ *  buttons and a POV. */
+const DEMO_VJOY: VjoyInfo = {
+  version: "2.2.2",
+  devices: Array.from({ length: 16 }, (_, i) => ({
+    id: i + 1,
+    owner: i < 2 ? ("free" as const) : ("missing" as const),
+    axes: i === 0 ? (["x", "y", "z"] as VjoyAxis[]) : i === 1 ? (["x", "y", "z", "rx", "ry", "rz", "slider0", "slider1"] as VjoyAxis[]) : [],
+    buttons: i === 1 ? 32 : 0,
+    discretePovs: 0,
+    continuousPovs: i === 1 ? 1 : 0,
+  })),
+};
 
 const DEMO_SOUNDS: Sound[] = ["Siren", "Dog barking", "Duck quack", "Applause", "Drum roll", "Sad trombone"].map(
   (title, i) => ({ index: i + 1, title, path: `C:\\Sounds\\${title.toLowerCase().replace(/ /g, "-")}.mp3`, duration: `0:0${i + 1}` }),
@@ -155,6 +173,8 @@ export function createDemo(): Backend {
     profileSwitching: { autoSwitch: true, noMatch: "keepCurrent" },
     foreground: null,
     virtualControls: [],
+    vjoyMappings: [],
+    vjoyOutput: { devices: [], buttons: [], axes: [], povs: [] },
     learn: null,
     overlayEditing: false,
     recorder: { session: 0, phase: "idle", kind: null, movement: "absolute", result: null, error: null },
@@ -162,10 +182,12 @@ export function createDemo(): Backend {
     connections: {
       soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 },
       discord: { enabled: false, clientId: "", clientSecret: null },
+      vjoy: { enabled: false },
     },
     connectors: [
-      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null },
-      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null },
+      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, vjoy: null },
+      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false }, guide: null, vjoy: null },
+      { id: "vjoy", name: "vJoy", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null, guide: null, vjoy: DEMO_VJOY },
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
@@ -178,7 +200,10 @@ export function createDemo(): Backend {
   const positions = new Map<string, number>();
   let tick = 0;
 
-  const emit = () => listeners.forEach((l) => l(structuredClone(s)));
+  const emit = () => {
+    s.vjoyOutput = vjoyOutput();
+    listeners.forEach((l) => l(structuredClone(s)));
+  };
 
   // Discord: a simulated voice state, changed by Discord actions (idempotent, like the app).
   // To see the guide hints: a client ID ending in 0000 is "refused" (App Testers step), a
@@ -393,7 +418,7 @@ export function createDemo(): Backend {
   // Profiles: the active one's controls and widgets live in the snapshot, the others here.
   // Control ids are unique across profiles, as in the app.
   const stash = new Map<string, { controls: VirtualControlView[]; widgets: OverlayItem[] }>();
-  const demoState = (name: string) => ({ id: "", name, select: [], onActivate: [], onDeactivate: [] });
+  const demoState = (name: string) => ({ id: "", name, select: [], onActivate: [], onDeactivate: [], output: null });
   stash.set("profile-2", {
     controls: [
       {
@@ -417,7 +442,7 @@ export function createDemo(): Backend {
         display: null,
         shifted: false,
       },
-      viewOf({ id: "vc-2", name: "Master arm", kind: { type: "toggle", toggle: [newTrigger({ type: "button", device: "f00d:0002#1", index: 3 })], on: [], off: [], onOn: [], onOff: [], startup: "restoreLast" } }),
+      viewOf({ id: "vc-2", name: "Master arm", kind: { type: "toggle", toggle: [newTrigger({ type: "button", device: "f00d:0002#1", index: 3 })], on: [], off: [], onOn: [], onOff: [], startup: "restoreLast", output: { button: { device: 2, button: 1 }, pulseMs: null } } }),
       viewOf({
         id: "vc-3",
         name: "COM1",
@@ -429,6 +454,7 @@ export function createDemo(): Backend {
           reset: [{ ...newTrigger({ type: "button", device: "f00d:0003#1", index: 2 }), press: { kind: "long", ms: 800 } }],
           onChange: [],
           startup: "restoreLast",
+          output: { device: 1, axis: "z" },
         },
       }),
       viewOf({
@@ -443,7 +469,7 @@ export function createDemo(): Backend {
           startup: "restoreLast",
         },
       }),
-      viewOf({ id: "vc-5", name: "PTT", kind: { type: "momentary", triggers: [newTrigger({ type: "button", device: "f00d:0001#1", index: 0 })], onPress: [], onRelease: [], invert: false } }),
+      viewOf({ id: "vc-5", name: "PTT", kind: { type: "momentary", triggers: [newTrigger({ type: "button", device: "f00d:0001#1", index: 0 })], onPress: [], onRelease: [], invert: false, output: { button: { device: 2, button: 2 }, pulseMs: null } } }),
     ],
     widgets: [
       { type: "profileName", position: { x: 0.45, y: 0.02 } },
@@ -466,6 +492,9 @@ export function createDemo(): Backend {
     if (id === s.activeProfile) return;
     findProfile(id);
     stash.set(s.activeProfile, { controls: s.virtualControls, widgets: s.overlay.widgets });
+    stashedMappings.set(s.activeProfile, s.vjoyMappings);
+    s.vjoyMappings = stashedMappings.get(id) ?? [];
+    stashedMappings.delete(id);
     const next = stash.get(id) ?? { controls: [], widgets: [] };
     stash.delete(id);
     s.virtualControls = next.controls;
@@ -473,6 +502,39 @@ export function createDemo(): Backend {
     s.activeProfile = id;
     console.info(`[demo] profile "${findProfile(id).name}" active`);
   };
+  /** vJoy mappings of the profiles that are not active. */
+  const stashedMappings = new Map<string, VjoyMapping[]>([
+    ["profile-2", [{ type: "axis", device: "f00d:0001#1", index: 1, target: { device: 1, axis: "y" }, curve: { ...defaultCurve(), curve: { type: "expo", factor: 0.4 } } }]],
+  ]);
+
+  /** What Detent would write to vJoy, like detent-core's Engine::vjoy_state (without pulses). */
+  function vjoyOutput(): VjoyStateView {
+    const out: VjoyStateView = { devices: [], buttons: [], axes: [], povs: [] };
+    if (!s.connections.vjoy.enabled) return out;
+    const devices = new Set<number>();
+    for (const m of s.vjoyMappings) {
+      devices.add(m.target.device);
+      const d = s.devices.find((x) => x.id === m.device);
+      if (!d) continue;
+      if (m.type === "axis") out.axes.push({ axis: m.target, value: applyCurve(m.curve, d.state.axes[m.index] ?? 0) });
+      if (m.type === "button" && d.state.buttons[m.index]) out.buttons.push(m.target);
+      if (m.type === "hat" && HAT_MASKS[d.state.hats[m.index] ?? 0]) out.povs.push({ pov: m.target, direction: HAT_MASKS[d.state.hats[m.index]!]! });
+    }
+    for (const c of s.virtualControls) {
+      const k = c.kind;
+      const output =
+        k.type === "radio" || k.type === "mode" ? k.states.find((st) => st.id === c.active)?.output : k.type === "toggle" || k.type === "momentary" ? (c.on ? k.output : null) : null;
+      for (const o of k.type === "radio" || k.type === "mode" ? k.states.map((st) => st.output) : k.type === "counter" ? [] : [k.output]) if (o) devices.add(o.button.device);
+      if (output && output.pulseMs === null) out.buttons.push(output.button);
+      if (k.type === "counter" && k.output) {
+        devices.add(k.output.device);
+        out.axes.push({ axis: k.output, value: Math.max(-1, Math.min(1, (((c.value ?? k.spec.min) - k.spec.min) / (k.spec.max - k.spec.min)) * 2 - 1)) });
+      }
+    }
+    out.devices = [...devices].sort((a, b) => a - b);
+    return out;
+  }
+
   function runSwitches() {
     for (const target of pendingSwitches.splice(0)) {
       const n = s.profiles.length;
@@ -787,6 +849,13 @@ export function createDemo(): Backend {
       runSwitches();
       emit();
     },
+    async setVjoyMappings(mappings) {
+      for (const m of mappings) {
+        if (m.target.device < 1 || m.target.device > 16) throw new Error("vJoy devices are numbered 1 to 16");
+      }
+      s.vjoyMappings = structuredClone(mappings);
+      emit();
+    },
     async setControlValue(id, value) {
       const c = findControl(id);
       if (c.kind.type !== "counter" || !Number.isFinite(value)) throw new Error("this command does not apply to this kind of control");
@@ -835,11 +904,16 @@ export function createDemo(): Backend {
           emit();
         }, 800);
       }
+      const v = s.connectors.find((x) => x.id === "vjoy")!;
+      v.enabled = s.connections.vjoy.enabled;
+      Object.assign(v, v.enabled ? { status: { state: "connected" }, detail: "vJoy 2.2.2, 2 devices configured (demo)" } : { status: { state: "notConfigured" }, detail: null });
+      for (const d of v.vjoy!.devices) if (d.owner === "detent" || d.owner === "free") d.owner = v.enabled && (d.id === 1 || d.id === 2) ? "detent" : d.id <= 2 ? "free" : d.owner;
       discordStatus();
       emit();
     },
     async testConnection(id) {
       if (id === "soundpad") return `Connected, ${DEMO_SOUNDS.length} sounds (demo)`;
+      if (id === "vjoy") return "vJoy 2.2.2: device 1 (3 axes, 0 buttons, 0 POVs, free); device 2 (8 axes, 32 buttons, 1 POVs, free) (demo)";
       const creds = discordView().credentials!;
       if (!s.connections.discord.clientId || !creds.secretSaved) {
         discordStatus(null, true);
@@ -963,6 +1037,7 @@ export function createDemo(): Backend {
       const copy = { id: newProfileId(), name: name.trim() || `${source.name} copy`, executables: [] };
       s.profiles.push(copy);
       stash.set(copy.id, { controls, widgets });
+      stashedMappings.set(copy.id, structuredClone(id === s.activeProfile ? s.vjoyMappings : (stashedMappings.get(id) ?? [])));
       activate(copy.id);
       emit();
       return copy.id;

@@ -168,6 +168,10 @@ export interface EngineSnapshot {
   profileSwitching: ProfileSwitching;
   /** The program in the foreground (not Detent), as auto-switching sees it. */
   foreground: string | null;
+  /** The active profile's physical-to-vJoy mappings. */
+  vjoyMappings: VjoyMapping[];
+  /** What Detent wants on the vJoy devices now (empty while vJoy is disabled). */
+  vjoyOutput: VjoyStateView;
   /** The active profile's virtual controls. */
   virtualControls: VirtualControlView[];
   /** Null unless learn mode is on or just captured something. */
@@ -298,7 +302,8 @@ export type Action =
   | MouseMacro
   | { type: "soundpad"; command: SoundpadCommand }
   | { type: "discord"; command: DiscordCommand }
-  | { type: "switchProfile"; target: ProfileTarget };
+  | { type: "switchProfile"; target: ProfileTarget }
+  | { type: "vjoy"; command: VjoyCommand };
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
@@ -376,7 +381,7 @@ export interface VoiceState {
 
 // --- Connections (detent-core: connection.rs) -------------------------------------------------
 
-export type ConnectorId = "soundpad" | "discord";
+export type ConnectorId = "soundpad" | "discord" | "vjoy";
 
 export type ConnectorStatus =
   | { state: "notConfigured" }
@@ -408,6 +413,8 @@ export interface ConnectorView {
   credentials: CredentialState | null;
   /** The setup guide step that fixes the last problem (Discord), also while disabled. */
   guide: GuideStep | null;
+  /** Driver version and devices (vJoy). */
+  vjoy: VjoyInfo | null;
 }
 
 export interface SoundpadSettings {
@@ -430,6 +437,7 @@ export interface DiscordSettings {
 export interface Connections {
   soundpad: SoundpadSettings;
   discord: DiscordSettings;
+  vjoy: { enabled: boolean };
 }
 
 export interface RadioState {
@@ -438,6 +446,8 @@ export interface RadioState {
   select: Trigger[];
   onActivate: Action[];
   onDeactivate: Action[];
+  /** vJoy button held while this state is active (or pulsed on entering it). */
+  output: ButtonOutput | null;
 }
 
 export type Startup = "restoreLast" | "empty";
@@ -462,6 +472,8 @@ export interface Toggle {
   onOff: Action[];
   /** "empty": off at startup. */
   startup: Startup;
+  /** vJoy button held while on (or pulsed on switching on). */
+  output: ButtonOutput | null;
 }
 
 export interface Momentary {
@@ -471,6 +483,8 @@ export interface Momentary {
   onRelease: Action[];
   /** Active while nothing is held instead. */
   invert: boolean;
+  /** vJoy button held while active (or pulsed on activating). */
+  output: ButtonOutput | null;
 }
 
 export interface CounterControl {
@@ -482,6 +496,8 @@ export interface CounterControl {
   onChange: Action[];
   /** "empty": the initial value at startup. */
   startup: Startup;
+  /** vJoy axis set in proportion to the value between minimum and maximum. */
+  output: VjoyAxisRef | null;
 }
 
 export interface ModeState {
@@ -492,6 +508,8 @@ export interface ModeState {
   shift: Trigger[];
   onActivate: Action[];
   onDeactivate: Action[];
+  /** vJoy button held while this state is active (or pulsed on entering it). */
+  output: ButtonOutput | null;
 }
 
 export interface Mode {
@@ -548,7 +566,7 @@ export type ControlCommand = "increment" | "decrement" | "clear" | "toggleOff" |
 
 // --- Diagnostics event log (detent-core diagnostics::Entry) ------------------------------------
 
-export type DiagCategory = "input" | "trigger" | "control" | "action" | "connector" | "log";
+export type DiagCategory = "input" | "trigger" | "control" | "action" | "connector" | "output" | "log";
 export type DiagLevel = "info" | "warn" | "error";
 
 export interface DiagEntry {
@@ -617,4 +635,84 @@ export type ProfileTarget = { type: "profile"; profile: string } | { type: "next
 export interface ProcessWindow {
   exe: string;
   title: string;
+}
+
+// --- vJoy output (detent-core: vjoy.rs) -------------------------------------------------------
+
+export type VjoyAxis = "x" | "y" | "z" | "rx" | "ry" | "rz" | "slider0" | "slider1";
+
+/** Device 1–16, button 1–128, as vJoy counts. */
+export interface VjoyButton {
+  device: number;
+  button: number;
+}
+
+export interface VjoyAxisRef {
+  device: number;
+  axis: VjoyAxis;
+}
+
+/** POV 1–4. */
+export interface VjoyPov {
+  device: number;
+  pov: number;
+}
+
+/** Hold the button while the state is active; with pulseMs, press it briefly on entering. */
+export interface ButtonOutput {
+  button: VjoyButton;
+  pulseMs: number | null;
+}
+
+export type Curve = { type: "linear" } | { type: "expo"; factor: number };
+
+/** All amounts in percent. */
+export interface AxisCurve {
+  invert: boolean;
+  /** Of half the range, around the centre. */
+  deadzoneCenter: number;
+  /** Of the full range, at each end. */
+  deadzoneLow: number;
+  deadzoneHigh: number;
+  /** Largest output, 100 = full. */
+  saturation: number;
+  curve: Curve;
+}
+
+export type VjoyMapping =
+  | { type: "axis"; device: DeviceId; index: number; target: VjoyAxisRef; curve: AxisCurve }
+  | { type: "button"; device: DeviceId; index: number; target: VjoyButton }
+  | { type: "hat"; device: DeviceId; index: number; target: VjoyPov };
+
+export type ButtonOp = { type: "press" } | { type: "release" } | { type: "toggle" } | { type: "pulse"; ms: number };
+
+export type VjoyCommand =
+  | { type: "button"; button: VjoyButton; op: ButtonOp }
+  | { type: "axis"; axis: VjoyAxisRef; percent: number }
+  /** null centres the POV. */
+  | { type: "pov"; pov: VjoyPov; direction: HatDirection | null };
+
+export interface VjoyStateView {
+  devices: number[];
+  buttons: VjoyButton[];
+  /** value -1..1 across the axis. */
+  axes: { axis: VjoyAxisRef; value: number }[];
+  povs: { pov: VjoyPov; direction: HatDirection }[];
+}
+
+export type DeviceOwner = "free" | "detent" | "other" | "missing";
+
+export interface VjoyDeviceInfo {
+  id: number;
+  owner: DeviceOwner;
+  axes: VjoyAxis[];
+  buttons: number;
+  discretePovs: number;
+  continuousPovs: number;
+}
+
+export interface VjoyInfo {
+  /** null: driver not enabled. */
+  version: string | null;
+  devices: VjoyDeviceInfo[];
 }

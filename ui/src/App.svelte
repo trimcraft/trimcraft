@@ -15,6 +15,7 @@
   import SettingsView from "./components/settings/SettingsView.svelte";
   import ProfileSelector from "./components/ProfileSelector.svelte";
   import ProfilesPanel from "./components/ProfilesPanel.svelte";
+  import VjoyMappingsPanel from "./components/VjoyMappingsPanel.svelte";
   import { SECTIONS, nav, show } from "./lib/nav.svelte";
 
   let snapshot = $state<EngineSnapshot | null>(null);
@@ -108,6 +109,7 @@
       <div class="content">
         <ProfilesPanel {snapshot} />
         <VirtualControlsView {snapshot} />
+        <VjoyMappingsPanel {snapshot} />
         <RecorderSettings {snapshot} />
         <OverlayPanel {snapshot} />
       </div>

@@ -204,6 +204,43 @@ credentials** also deletes the secret. Discord lets only one app at a time chang
 settings and reverts that app's changes when it disconnects, so Detent stays connected while
 the connection is enabled (and reconnects when Discord restarts).
 
+### vJoy
+
+Detent can feed virtual joysticks from [vJoy](https://github.com/BrunnerInnovation/vJoy), which
+games see as ordinary controllers. vJoy must be installed; Detent loads its
+`vJoyInterface.dll` at run time. The vJoy card under **Connections** shows the driver version and
+the configured devices 1–16 with their axes, buttons and POVs and who owns each (free, Detent,
+another program). Axes, buttons and POVs are set up in **Configure vJoy** (vJoyConf), not in
+Detent; a fresh vJoy has one device with three axes and no buttons, so add buttons and POVs
+there before using button or POV outputs (Detent warns when an output needs more than a device
+has).
+
+While the connection is enabled, Detent acquires only the vJoy devices the active profile uses
+and gives them back when it is disabled, when the profile no longer uses them, and on exit;
+before giving a device back it releases its buttons and centres its POVs. Everything below is
+per profile:
+
+- **State outputs** (in the control editor, "vJoy"): radio and mode states, toggles and
+  momentary controls hold a vJoy button while active, or press it briefly ("pulsed on
+  entering", e.g. 100 ms) for games that want one press per state. A counter can drive a vJoy
+  axis: minimum at one end, maximum at the other.
+- **vJoy mappings** (Virtual Controls page): a physical axis to a vJoy axis with invert,
+  deadzones (centre and both ends), saturation (largest output) and a response curve (linear or
+  expo with a factor), with a live graph of the curve and the current position; physical
+  buttons and hats to vJoy buttons and POVs. Every input event is written as it happens.
+- **vJoy actions**: press (held), release, toggle or pulse a button; set an axis to a percentage;
+  point a POV or centre it. They take effect when the action fires, not after waits of earlier
+  macros, and hold until another action changes them, the profile changes or vJoy is disabled.
+
+On a profile switch everything the old profile held is released and the new profile's outputs
+apply at once (also at startup, with the restored states). vJoy devices never act as triggers
+or mapping sources, so Detent's own output cannot loop back. Output changes appear in the
+event log under *vJoy output* (axes at most 10 times per second each).
+
+To see the output: open **vJoy Monitor** (`JoyMonitor.exe` in the vJoy folder, or "Monitor
+vJoy" in the Start menu) and pick the device, or open Windows' game controller settings
+(`joy.cpl`), select "vJoy Device" and press *Properties*.
+
 ## Tray and settings
 
 Detent keeps a **tray icon** while it runs: a left click opens the main window; its menu has

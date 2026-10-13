@@ -26,18 +26,18 @@
     if (t) captured($state.snapshot(t));
   });
 
-  const states = (names: string[]) => names.map((name) => ({ id: "", name, select: [], onActivate: [], onDeactivate: [] }));
+  const states = (names: string[]) => names.map((name) => ({ id: "", name, select: [], onActivate: [], onDeactivate: [], output: null }));
 
   function blankKind(type: ControlType): VirtualControlKind {
     switch (type) {
       case "radio":
         return { type, states: states(["State 1", "State 2", "State 3"]), increment: [], decrement: [], clear: [], toggleOff: [], end: "wrap", toggleOnReselect: false, startup: "restoreLast" };
       case "toggle":
-        return { type, toggle: [], on: [], off: [], onOn: [], onOff: [], startup: "restoreLast" };
+        return { type, toggle: [], on: [], off: [], onOn: [], onOff: [], startup: "restoreLast", output: null };
       case "momentary":
-        return { type, triggers: [], onPress: [], onRelease: [], invert: false };
+        return { type, triggers: [], onPress: [], onRelease: [], invert: false, output: null };
       case "counter":
-        return { type, spec: { min: 1, max: 20, step: 1, initial: 1, end: "wrap", decimals: 0 }, increment: [], decrement: [], reset: [], onChange: [], startup: "restoreLast" };
+        return { type, spec: { min: 1, max: 20, step: 1, initial: 1, end: "wrap", decimals: 0 }, increment: [], decrement: [], reset: [], onChange: [], startup: "restoreLast", output: null };
       case "mode":
         return { type, states: states(["Mode 1", "Mode 2"]).map((s) => ({ ...s, shift: [] })), next: [], previous: [], end: "wrap", startup: "restoreLast" };
     }

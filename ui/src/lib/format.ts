@@ -19,6 +19,9 @@ import type {
   Condition,
   ControlType,
   VirtualControlKind,
+  VjoyAxis,
+  VjoyCommand,
+  AxisCurve,
 } from "./types";
 
 /** Buttons, axes and hats are 0-based internally and shown 1-based, like Windows does. */
@@ -246,7 +249,36 @@ export function profileTargetText(t: ProfileTarget, profiles: ProfileView[] = []
   }
 }
 
+/** vJoy axis names as the driver configuration shows them. */
+export const VJOY_AXES: [VjoyAxis, string][] = [
+  ["x", "X"],
+  ["y", "Y"],
+  ["z", "Z"],
+  ["rx", "Rx"],
+  ["ry", "Ry"],
+  ["rz", "Rz"],
+  ["slider0", "Slider 1"],
+  ["slider1", "Slider 2"],
+];
+
+export const vjoyAxisName = (a: VjoyAxis) => VJOY_AXES.find(([v]) => v === a)?.[1] ?? a;
+
+/** E.g. "pulse vJoy 1 button 3 (100 ms)", "vJoy 1 axis X to 50 %". */
+export function vjoyCommandText(c: VjoyCommand): string {
+  switch (c.type) {
+    case "button": {
+      const b = `vJoy ${c.button.device} button ${c.button.button}`;
+      return c.op.type === "pulse" ? `pulse ${b} (${c.op.ms} ms)` : `${c.op.type} ${b}`;
+    }
+    case "axis":
+      return `vJoy ${c.axis.device} axis ${vjoyAxisName(c.axis.axis)} to ${c.percent} %`;
+    case "pov":
+      return `vJoy ${c.pov.device} POV ${c.pov.pov} ${c.direction ? hatDirectionText(c.direction) : "centre"}`;
+  }
+}
+
 export function actionText(a: Action, profiles: ProfileView[] = []): string {
+  if (a.type === "vjoy") return `vJoy: ${vjoyCommandText(a.command)}`;
   if (a.type === "switchProfile") return `Switch profile: ${profileTargetText(a.target, profiles)}`;
   if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
   if (a.type === "discord") return `Discord: ${discordText(a.command)}`;
@@ -302,3 +334,21 @@ export function controlActions(kind: VirtualControlKind): Action[] {
       return kind.onChange;
   }
 }
+
+/** Same as detent-core's AxisCurve::apply: shapes an axis value (-1..1) on its way to vJoy. */
+export function applyCurve(c: AxisCurve, value: number): number {
+  let v = Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
+  if (c.invert) v = -v;
+  const lo = -1 + (2 * c.deadzoneLow) / 100;
+  const hi = 1 - (2 * c.deadzoneHigh) / 100;
+  if ((c.deadzoneLow > 0 || c.deadzoneHigh > 0) && hi > lo) v = Math.max(-1, Math.min(1, ((v - lo) / (hi - lo)) * 2 - 1));
+  const dc = Math.max(0, Math.min(0.99, c.deadzoneCenter / 100));
+  v = Math.abs(v) <= dc ? 0 : (Math.sign(v) * (Math.abs(v) - dc)) / (1 - dc);
+  if (c.curve.type === "expo") {
+    const k = Math.max(0, Math.min(1, c.curve.factor));
+    v = (1 - k) * v + k * v * v * v;
+  }
+  return Math.max(-1, Math.min(1, v * Math.max(0, Math.min(1, c.saturation / 100))));
+}
+
+export const defaultCurve = (): AxisCurve => ({ invert: false, deadzoneCenter: 0, deadzoneLow: 0, deadzoneHigh: 0, saturation: 100, curve: { type: "linear" } });

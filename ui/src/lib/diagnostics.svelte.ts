@@ -13,6 +13,7 @@ export const CATEGORIES: [DiagCategory, string][] = [
   ["control", "Controls"],
   ["action", "Actions"],
   ["connector", "Connectors"],
+  ["output", "vJoy output"],
   ["log", "Log"],
 ];
 

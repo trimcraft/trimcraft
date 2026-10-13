@@ -4,6 +4,7 @@
   import type { EngineSnapshot, KeyInfo, VirtualControlDef } from "../lib/types";
   import { CONTROL_TYPES, triggerLists } from "../lib/format";
   import ActionList from "./ActionList.svelte";
+  import VjoyOutput from "./VjoyOutput.svelte";
   import TriggerSlot, { type ModeOption } from "./TriggerSlot.svelte";
 
   let {
@@ -39,8 +40,8 @@
 
   function addState() {
     const k = draft.kind;
-    if (k.type === "radio") k.states.push({ id: "", name: `State ${k.states.length + 1}`, select: [], onActivate: [], onDeactivate: [] });
-    if (k.type === "mode") k.states.push({ id: "", name: `State ${k.states.length + 1}`, select: [], shift: [], onActivate: [], onDeactivate: [] });
+    if (k.type === "radio") k.states.push({ id: "", name: `State ${k.states.length + 1}`, select: [], onActivate: [], onDeactivate: [], output: null });
+    if (k.type === "mode") k.states.push({ id: "", name: `State ${k.states.length + 1}`, select: [], shift: [], onActivate: [], onDeactivate: [], output: null });
   }
 
   function moveState(i: number, by: number) {
@@ -108,6 +109,7 @@
     <h3>Actions</h3>
     <ActionList label="On switching on" bind:actions={k.onOn} {keys} {snapshot} />
     <ActionList label="On switching off" bind:actions={k.onOff} {keys} {snapshot} />
+    <VjoyOutput {snapshot} label="While on" bind:button={k.output} />
   {:else if draft.kind.type === "momentary"}
     {@const k = draft.kind}
     <h3>Behaviour</h3>
@@ -120,6 +122,7 @@
     <h3>Actions</h3>
     <ActionList label={k.invert ? "On release (on)" : "On press"} bind:actions={k.onPress} {keys} {snapshot} />
     <ActionList label={k.invert ? "On press (off)" : "On release"} bind:actions={k.onRelease} {keys} {snapshot} />
+    <VjoyOutput {snapshot} label="While active" bind:button={k.output} />
   {:else if draft.kind.type === "counter"}
     {@const k = draft.kind}
     <h3>Range</h3>
@@ -148,6 +151,7 @@
     <TriggerSlot {snapshot} {modes} {others} label="Reset" bind:triggers={k.reset} />
     <h3>Actions</h3>
     <ActionList label="On change" bind:actions={k.onChange} {keys} {snapshot} />
+    <VjoyOutput {snapshot} kind="axis" label="Value as axis" bind:axis={k.output} />
     <p class="hint muted">Actions that take text can use <span class="mono">{"{value}"}</span> for the new value.</p>
   {:else if draft.kind.type === "mode"}
     {@const k = draft.kind}
@@ -191,6 +195,7 @@
         {/if}
         <ActionList label="On activate" bind:actions={state.onActivate} {keys} {snapshot} />
         <ActionList label="On deactivate" bind:actions={state.onDeactivate} {keys} {snapshot} />
+        <VjoyOutput {snapshot} label="While active" bind:button={state.output} />
       </div>
     {/each}
     <div class="row">

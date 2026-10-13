@@ -9,6 +9,7 @@ use crate::encoder::{DetectorConfig, EncoderBinding};
 use crate::function::Function;
 use crate::overlay::OverlayConfig;
 use crate::recording::RecorderConfig;
+use crate::settings::AppSettings;
 use crate::virtual_control::VirtualControl;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -39,6 +40,9 @@ pub struct Setup {
     pub connections: Connections,
     /// Encoder suggestions the user rejected; not suggested again.
     pub dismissed_suggestions: Vec<ButtonPair>,
+    /// App-wide settings (Settings page), not part of a profile. Missing in files from before
+    /// the Settings page.
+    pub settings: AppSettings,
 }
 
 impl Default for Setup {
@@ -53,6 +57,7 @@ impl Default for Setup {
             recorder: RecorderConfig::default(),
             connections: Connections::default(),
             dismissed_suggestions: Vec::new(),
+            settings: AppSettings::default(),
         }
     }
 }
@@ -161,6 +166,22 @@ mod tests {
             Some(crate::connection::DiscordSettings::secret_ref());
         let out = s.to_json();
         assert!(out.contains("\"target\": \"detent/discord/client-secret\""));
+        assert_eq!(Setup::from_json(&out).unwrap(), s);
+    }
+
+    #[test]
+    fn file_from_before_settings_loads_with_default_settings() {
+        let json = r#"{
+            "schemaVersion": 1,
+            "connections": {"soundpad": {"enabled": false, "timeoutMs": 800, "listMaxAgeMs": 10000}}
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert_eq!(s.settings, AppSettings::default());
+        let mut s = s;
+        s.settings.start_with_windows = true;
+        s.settings.close_to_tray = false;
+        let out = s.to_json();
+        assert!(out.contains("\"startWithWindows\": true"));
         assert_eq!(Setup::from_json(&out).unwrap(), s);
     }
 

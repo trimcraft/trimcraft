@@ -16,6 +16,7 @@ pub mod overlay;
 pub mod path;
 pub mod recording;
 pub mod registry;
+pub mod settings;
 pub mod setup;
 pub mod soundpad;
 pub mod state;
@@ -38,6 +39,7 @@ pub use overlay::{
 };
 pub use path::Screens;
 pub use registry::DeviceRegistry;
+pub use settings::{AppSettings, AutostartKind, ShellStatus};
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};
 pub use state::{DeviceSnapshot, DeviceState, HatState, LiveState, Snapshot};

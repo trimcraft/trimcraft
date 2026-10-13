@@ -18,6 +18,7 @@ use crate::recording::{
     RecordKind, RecorderConfig, RecorderError, RecorderPhase, RecorderView, RecordingResult,
 };
 use crate::registry::DeviceRegistry;
+use crate::settings::{AppSettings, ShellStatus};
 use crate::setup::{ButtonPair, Setup};
 use crate::state::{ButtonEdge, HatEdge};
 use crate::state::{LiveState, Snapshot};
@@ -146,6 +147,9 @@ pub struct EngineSnapshot {
     pub connectors: Vec<ConnectorView>,
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
+    /// App-wide settings (Settings page).
+    pub settings: AppSettings,
+    pub shell: ShellStatus,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +175,8 @@ pub struct Engine {
     overlay_editing: bool,
     recorder: RecorderView,
     connector_states: HashMap<ConnectorId, ConnectorState>,
+    /// Elevation, autostart and foreground warning, as the app reports them.
+    shell: ShellStatus,
     dirty: Dirty,
 }
 
@@ -202,6 +208,7 @@ impl Engine {
             overlay_editing: false,
             recorder: RecorderView::default(),
             connector_states: HashMap::new(),
+            shell: ShellStatus::default(),
             dirty: Dirty::default(),
         }
     }
@@ -471,6 +478,8 @@ impl Engine {
                 .collect(),
             overlay: self.setup.overlay.clone(),
             detector: self.setup.detector,
+            settings: self.setup.settings.clone(),
+            shell: self.shell.clone(),
         }
     }
 
@@ -917,6 +926,38 @@ impl Engine {
     pub fn clear_recording(&mut self) {
         self.recorder.result = None;
         self.recorder.error = None;
+    }
+
+    /// Saves the Settings page. Whether the tray notice was shown is the app's to change, so it
+    /// is kept.
+    pub fn set_settings(&mut self, settings: AppSettings) {
+        self.setup.settings = AppSettings {
+            tray_notice_shown: self.setup.settings.tray_notice_shown,
+            ..settings
+        };
+        self.dirty.setup = true;
+    }
+
+    /// Remembers that the one-time "keeps running in the tray" notification was shown.
+    pub fn mark_tray_notice_shown(&mut self) {
+        if !self.setup.settings.tray_notice_shown {
+            self.setup.settings.tray_notice_shown = true;
+            self.dirty.setup = true;
+        }
+    }
+
+    pub fn shell_status(&self) -> &ShellStatus {
+        &self.shell
+    }
+
+    /// Stores what the app found out about elevation, autostart and the foreground program.
+    /// Returns whether anything changed.
+    pub fn set_shell_status(&mut self, status: ShellStatus) -> bool {
+        if self.shell == status {
+            return false;
+        }
+        self.shell = status;
+        true
     }
 
     pub fn set_recorder_config(&mut self, config: RecorderConfig) -> Result<(), EngineError> {
@@ -1796,5 +1837,48 @@ mod tests {
         assert!(engine.take_actions().is_empty());
         press(&mut engine, 5, 0);
         assert_eq!(active(&engine, &id).as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn settings_are_saved_but_the_tray_notice_flag_stays_the_apps() {
+        let mut engine = Engine::new(
+            DeviceRegistry::default(),
+            Setup::default(),
+            &BTreeMap::new(),
+        );
+        engine.mark_tray_notice_shown();
+        assert!(engine.take_dirty().setup);
+        engine.mark_tray_notice_shown();
+        assert!(!engine.take_dirty().setup);
+        engine.set_settings(AppSettings {
+            start_with_windows: true,
+            tray_notice_shown: false,
+            ..AppSettings::default()
+        });
+        assert!(engine.take_dirty().setup);
+        let snapshot = engine.snapshot();
+        assert!(snapshot.settings.start_with_windows);
+        assert!(snapshot.settings.tray_notice_shown);
+    }
+
+    #[test]
+    fn shell_status_reports_changes_only() {
+        let mut engine = Engine::new(
+            DeviceRegistry::default(),
+            Setup::default(),
+            &BTreeMap::new(),
+        );
+        let status = ShellStatus {
+            elevated: false,
+            elevated_foreground: Some("game.exe".into()),
+            ..ShellStatus::default()
+        };
+        assert!(engine.set_shell_status(status.clone()));
+        assert!(!engine.set_shell_status(status));
+        assert!(!engine.take_dirty().setup);
+        let json = serde_json::to_value(engine.snapshot()).unwrap();
+        assert_eq!(json["shell"]["elevatedForeground"], "game.exe");
+        assert_eq!(json["shell"]["autostart"], "off");
+        assert_eq!(json["settings"]["closeToTray"], true);
     }
 }

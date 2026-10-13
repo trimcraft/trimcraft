@@ -270,6 +270,11 @@ impl LiveState {
         self.devices.get(id).map(|d| &d.snapshot)
     }
 
+    /// The device a backend instance currently belongs to.
+    pub fn device_id(&self, instance: u32) -> Option<&DeviceId> {
+        self.instances.get(&instance)
+    }
+
     fn connected_ids(&self) -> HashSet<DeviceId> {
         self.instances.values().cloned().collect()
     }

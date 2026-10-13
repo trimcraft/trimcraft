@@ -8,6 +8,7 @@ use crate::action::{Action, Movement};
 use crate::connection::{ConnectionError, Connections, ConnectorId, ConnectorState, ConnectorView};
 use crate::device::DeviceId;
 use crate::device::DeviceKind;
+use crate::diagnostics::{self, AxisThrottle, Category, Diagnostics, Level, Record};
 use crate::encoder::{
     DetectorConfig, EncoderBinding, EncoderDetector, EncoderSuggestion, PulseStats,
 };
@@ -172,6 +173,9 @@ pub struct Engine {
     recorder: RecorderView,
     connector_states: HashMap<ConnectorId, ConnectorState>,
     dirty: Dirty,
+    /// Event log sink; without one nothing is recorded (tests, tools).
+    diagnostics: Option<Diagnostics>,
+    axis_throttle: AxisThrottle,
 }
 
 impl Engine {
@@ -203,6 +207,75 @@ impl Engine {
             recorder: RecorderView::default(),
             connector_states: HashMap::new(),
             dirty: Dirty::default(),
+            diagnostics: None,
+            axis_throttle: AxisThrottle::default(),
+        }
+    }
+
+    /// Reports input edges, trigger matches and state changes to the event log.
+    pub fn set_diagnostics(&mut self, diagnostics: Diagnostics) {
+        self.diagnostics = Some(diagnostics);
+    }
+
+    /// Logs the input behind `applied`: axis moves (throttled), button and hat edges.
+    fn log_input(
+        &mut self,
+        axis: Option<(DeviceId, u16, f32, u64)>,
+        applied: &crate::state::Applied,
+    ) {
+        let Some(log) = &self.diagnostics else { return };
+        if let Some((device, index, value, time_ns)) = axis
+            && let Some(previous) = self.axis_throttle.admit(&device.0, index, value, time_ns)
+        {
+            log.record(
+                with_device(
+                    &self.live,
+                    &device,
+                    Record::new(Category::Input, diagnostics::axis_text(index, value)),
+                )
+                .detail(diagnostics::axis_detail(value, previous)),
+            );
+        }
+        if let Some(edge) = &applied.button {
+            log.record(with_device(
+                &self.live,
+                &edge.device,
+                Record::new(
+                    Category::Input,
+                    diagnostics::button_text(edge.index, edge.pressed),
+                ),
+            ));
+        }
+        if let Some(edge) = &applied.hat {
+            log.record(with_device(
+                &self.live,
+                &edge.device,
+                Record::new(
+                    Category::Input,
+                    diagnostics::hat_text(edge.index, edge.previous, edge.state),
+                ),
+            ));
+        }
+    }
+
+    /// Logs the encoder detents among `fired`.
+    fn log_detents(&self, fired: &[Trigger], button: Option<&ButtonEdge>) {
+        let Some(log) = &self.diagnostics else { return };
+        for trigger in fired {
+            let Trigger::EncoderStep { encoder, direction } = trigger else {
+                continue;
+            };
+            let binding = self.setup.encoders.iter().find(|e| &e.id == encoder);
+            let name = binding.map_or(encoder.as_str(), |e| e.name.as_str());
+            let mut record = Record::new(
+                Category::Input,
+                diagnostics::encoder_text(name, *direction == StepDirection::Increment),
+            );
+            if let Some(edge) = button {
+                record = with_device(&self.live, &edge.device, record)
+                    .detail(format!("from button {} pressed", u32::from(edge.index) + 1));
+            }
+            log.record(record);
         }
     }
 
@@ -243,8 +316,21 @@ impl Engine {
     /// Triggers of virtual controls are evaluated right here, edge by edge; the actions they
     /// emit are queued in order and collected with [`Engine::take_actions`].
     pub fn apply(&mut self, event: BackendEvent) -> bool {
+        let axis = match &event {
+            BackendEvent::Axis {
+                instance,
+                index,
+                value,
+                time_ns,
+            } if self.diagnostics.is_some() => self
+                .live
+                .device_id(*instance)
+                .map(|d| (d.clone(), *index, *value, *time_ns)),
+            _ => None,
+        };
         let applied = self.live.apply(event, &mut self.registry);
         self.dirty.registry |= applied.devices_changed;
+        self.log_input(axis, &applied);
         let mut fired = Vec::new();
         if let Some(edge) = &applied.button {
             self.detector
@@ -258,9 +344,20 @@ impl Engine {
             fired.extend(self.hat_trigger(edge));
         }
         if !fired.is_empty() {
+            self.log_detents(&fired, applied.button.as_ref());
             if self.learn == Learn::Waiting {
                 // The first trigger wins: an encoder detent before the plain button press.
-                self.learn = Learn::Captured(fired.swap_remove(0));
+                let captured = fired.swap_remove(0);
+                if let Some(log) = &self.diagnostics {
+                    log.record(Record::new(
+                        Category::Trigger,
+                        format!(
+                            "Learn captured {}",
+                            trigger_text(&self.live, &self.setup, &captured)
+                        ),
+                    ));
+                }
+                self.learn = Learn::Captured(captured);
             } else {
                 for trigger in &fired {
                     self.fire(trigger);
@@ -300,10 +397,19 @@ impl Engine {
 
     /// Runs `trigger` through every virtual control, in setup order.
     fn fire(&mut self, trigger: &Trigger) {
+        let text = self
+            .diagnostics
+            .as_ref()
+            .map(|_| trigger_text(&self.live, &self.setup, trigger));
         for control in &self.setup.virtual_controls {
             for command in control.radio().commands_for(trigger) {
-                self.dirty.controls |=
-                    run_radio_command(control, command, &mut self.memory, &mut self.actions);
+                self.dirty.controls |= run_radio_command(
+                    control,
+                    command,
+                    &mut self.memory,
+                    &mut self.actions,
+                    self.diagnostics.as_ref().zip(text.as_deref()),
+                );
             }
         }
     }
@@ -796,8 +902,13 @@ impl Engine {
             .iter()
             .find(|c| c.id == id)
             .ok_or_else(|| EngineError::UnknownControl(id.into()))?;
-        self.dirty.controls |=
-            run_radio_command(control, command, &mut self.memory, &mut self.actions);
+        self.dirty.controls |= run_radio_command(
+            control,
+            command,
+            &mut self.memory,
+            &mut self.actions,
+            self.diagnostics.as_ref().zip(Some("manual command")),
+        );
         Ok(())
     }
 
@@ -834,6 +945,9 @@ impl Engine {
     pub fn set_connector_state(&mut self, id: ConnectorId, state: ConnectorState) -> bool {
         if self.connector_states.get(&id) == Some(&state) {
             return false;
+        }
+        if let Some(log) = &self.diagnostics {
+            log.record(connector_record(id, self.connector_states.get(&id), &state));
         }
         self.connector_states.insert(id, state);
         true
@@ -952,21 +1066,187 @@ impl Engine {
 }
 
 /// Applies `command` to a radio: updates its memory and queues the transition's actions.
-/// Returns whether the active state changed.
+/// Returns whether the active state changed. `log` is the event log with what caused the
+/// command (a trigger's text), if recording.
 fn run_radio_command(
     control: &VirtualControl,
     command: RadioCommand,
     memory: &mut HashMap<String, RadioMemory>,
     actions: &mut Vec<ActionRequest>,
+    log: Option<(&Diagnostics, &str)>,
 ) -> bool {
+    let radio = control.radio();
     let memory = memory.entry(control.id.clone()).or_default();
-    match control.radio().apply(&control.name, memory, command) {
+    let before = memory.active.clone();
+    let queued = actions.len();
+    let changed = match radio.apply(&control.name, memory, command) {
         Some(emitted) => {
             actions.extend(emitted);
             true
         }
         None => false,
+    };
+    if let Some((log, cause)) = log {
+        let state_name = |id: &Option<String>| {
+            id.as_ref().map(|id| {
+                radio
+                    .states
+                    .iter()
+                    .find(|s| &s.id == id)
+                    .map_or(id.as_str(), |s| s.name.as_str())
+                    .to_owned()
+            })
+        };
+        let role = match command {
+            RadioCommand::Increment => "next state".to_owned(),
+            RadioCommand::Decrement => "previous state".to_owned(),
+            RadioCommand::Select(i) => format!(
+                "select \"{}\"",
+                radio.states.get(i).map_or("?", |s| s.name.as_str())
+            ),
+            RadioCommand::Clear => "clear".to_owned(),
+            RadioCommand::ToggleOff => "toggle off".to_owned(),
+        };
+        log.record(
+            Record::new(
+                Category::Trigger,
+                format!("{cause} → {}: {role}", control.name),
+            )
+            .detail(if changed {
+                "state changed".to_owned()
+            } else {
+                "no change (already in that state or at the end)".to_owned()
+            }),
+        );
+        if changed {
+            let after = memory.active.clone();
+            log.record(
+                Record::new(
+                    Category::Control,
+                    diagnostics::state_change_text(
+                        &control.name,
+                        state_name(&before).as_deref(),
+                        state_name(&after).as_deref(),
+                    ),
+                )
+                .detail(format!(
+                    "{role}; {} action(s) queued",
+                    actions.len() - queued
+                )),
+            );
+        }
     }
+    changed
+}
+
+fn device_name(live: &LiveState, id: &DeviceId) -> String {
+    live.device(id).map_or_else(
+        || id.0.clone(),
+        |d| d.label.clone().unwrap_or_else(|| d.name.clone()),
+    )
+}
+
+fn with_device(live: &LiveState, id: &DeviceId, record: Record) -> Record {
+    record.device(id.0.clone(), device_name(live, id))
+}
+
+/// E.g. "Demo Stick · Button 4", "Radio knob +", "Demo Stick · Hat 1 up".
+fn trigger_text(live: &LiveState, setup: &Setup, trigger: &Trigger) -> String {
+    match trigger {
+        Trigger::Button { device, index } => format!(
+            "{} · Button {}",
+            device_name(live, device),
+            u32::from(*index) + 1
+        ),
+        Trigger::Hat {
+            device,
+            index,
+            direction,
+        } => format!(
+            "{} · Hat {} {}",
+            device_name(live, device),
+            u32::from(*index) + 1,
+            match direction {
+                HatDirection::Up => "up",
+                HatDirection::UpRight => "up-right",
+                HatDirection::Right => "right",
+                HatDirection::DownRight => "down-right",
+                HatDirection::Down => "down",
+                HatDirection::DownLeft => "down-left",
+                HatDirection::Left => "left",
+                HatDirection::UpLeft => "up-left",
+            }
+        ),
+        Trigger::EncoderStep { encoder, direction } => {
+            let name = setup
+                .encoders
+                .iter()
+                .find(|e| &e.id == encoder)
+                .map_or(encoder.as_str(), |e| e.name.as_str());
+            format!(
+                "{name} {}",
+                if *direction == StepDirection::Increment {
+                    "+"
+                } else {
+                    "−"
+                }
+            )
+        }
+    }
+}
+
+fn connector_record(
+    id: ConnectorId,
+    before: Option<&ConnectorState>,
+    now: &ConnectorState,
+) -> Record {
+    use crate::connection::ConnectorStatus as S;
+    let status = |s: &S| match s {
+        S::NotConfigured => "not configured".to_owned(),
+        S::Connecting => "connecting".to_owned(),
+        S::WaitingForApproval => "waiting for approval".to_owned(),
+        S::Connected => "connected".to_owned(),
+        S::Error { message } => format!("error: {message}"),
+    };
+    let name = id.name();
+    let mut record = if before.is_none_or(|b| b.status != now.status) {
+        let level = if matches!(now.status, S::Error { .. }) {
+            Level::Error
+        } else {
+            Level::Info
+        };
+        Record::new(
+            Category::Connector,
+            format!("{name}: {}", status(&now.status)),
+        )
+        .level(level)
+    } else if let Some(warning) = &now.warning
+        && before.is_none_or(|b| b.warning != now.warning)
+    {
+        Record::new(
+            Category::Connector,
+            format!("{name}: problem running an action"),
+        )
+        .level(Level::Warn)
+        .detail(warning.clone())
+    } else if before.is_some_and(|b| b.warning.is_some()) && now.warning.is_none() {
+        Record::new(Category::Connector, format!("{name}: problem resolved"))
+    } else {
+        Record::new(Category::Connector, format!("{name}: details changed"))
+    };
+    if record.detail.is_none() {
+        let mut parts = Vec::new();
+        if let Some(d) = &now.detail {
+            parts.push(d.clone());
+        }
+        if let Some(v) = &now.voice {
+            parts.push(v.describe());
+        }
+        if !parts.is_empty() {
+            record = record.detail(parts.join("; "));
+        }
+    }
+    record
 }
 
 fn next_id<'a>(prefix: &str, existing: impl Iterator<Item = &'a str>) -> String {
@@ -1786,6 +2066,143 @@ mod tests {
         engine.take_actions();
         press(&mut engine, 5, 200);
         assert_eq!(active(&engine, &id).as_deref(), Some("A"));
+    }
+
+    // --- Event log -------------------------------------------------------------------------
+
+    fn logged(engine: &mut Engine) -> Diagnostics {
+        let log = Diagnostics::new(100);
+        engine.set_diagnostics(log.clone());
+        log
+    }
+
+    fn texts(log: &Diagnostics) -> Vec<String> {
+        log.all().into_iter().map(|e| e.text).collect()
+    }
+
+    #[test]
+    fn button_press_matches_trigger_and_changes_state() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let log = logged(&mut engine);
+        press(&mut engine, 0, 0);
+        assert_eq!(
+            texts(&log),
+            [
+                "Button 1 pressed",
+                "Panel · Button 1 → Comms: select \"B\"",
+                "Comms: (none) → B",
+                "Button 1 released",
+            ]
+        );
+        let entries = log.all();
+        assert_eq!(entries[0].device_name.as_deref(), Some("Panel"));
+        assert_eq!(entries[0].category, Category::Input);
+        assert_eq!(entries[1].category, Category::Trigger);
+        assert_eq!(entries[2].category, Category::Control);
+        assert!(
+            entries[2]
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("1 action(s) queued")
+        );
+    }
+
+    #[test]
+    fn encoder_detents_are_logged_with_direction() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let log = logged(&mut engine);
+        pulse(&mut engine, 11, 0);
+        let t = texts(&log);
+        assert!(
+            t.contains(&"Encoder Radio knob: detent +".to_owned()),
+            "{t:?}"
+        );
+        assert!(
+            t.contains(&"Radio knob + → Comms: next state".to_owned()),
+            "{t:?}"
+        );
+        pulse(&mut engine, 10, 100);
+        assert!(texts(&log).contains(&"Encoder Radio knob: detent −".to_owned()));
+    }
+
+    #[test]
+    fn matching_trigger_without_change_is_still_logged() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        let log = logged(&mut engine);
+        press(&mut engine, 0, 100);
+        let t = texts(&log);
+        assert!(t.iter().any(|x| x.contains("select \"B\"")), "{t:?}");
+        assert!(!t.iter().any(|x| x.contains("→ B")), "{t:?}");
+    }
+
+    #[test]
+    fn hats_axes_and_learn_are_logged() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let log = logged(&mut engine);
+        engine.apply(BackendEvent::Hat {
+            instance: 1,
+            index: 0,
+            state: HatState(HatState::UP),
+            time_ns: 0,
+        });
+        engine.apply(BackendEvent::Axis {
+            instance: 1,
+            index: 2,
+            value: 0.5,
+            time_ns: 0,
+        });
+        // Below the throttle's change threshold: not logged.
+        engine.apply(BackendEvent::Axis {
+            instance: 1,
+            index: 2,
+            value: 0.51,
+            time_ns: 500 * MS,
+        });
+        let t = texts(&log);
+        assert!(t.contains(&"Hat 1: centered → up".to_owned()), "{t:?}");
+        assert_eq!(
+            t.iter().filter(|x| x.starts_with("Axis 3")).count(),
+            1,
+            "{t:?}"
+        );
+
+        engine.start_learn();
+        press(&mut engine, 7, 1000);
+        assert!(texts(&log).contains(&"Learn captured Panel · Button 8".to_owned()));
+    }
+
+    #[test]
+    fn connector_changes_are_logged_once() {
+        use crate::connection::ConnectorStatus;
+        let (mut engine, _) = engine_with_radio(|_| {});
+        let log = logged(&mut engine);
+        let state = |status| ConnectorState {
+            status,
+            ..Default::default()
+        };
+        engine.set_connector_state(ConnectorId::Soundpad, state(ConnectorStatus::Connected));
+        engine.set_connector_state(ConnectorId::Soundpad, state(ConnectorStatus::Connected));
+        engine.set_connector_state(
+            ConnectorId::Soundpad,
+            state(ConnectorStatus::Error {
+                message: "pipe closed".into(),
+            }),
+        );
+        let entries = log.all();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].category, Category::Connector);
+        assert_eq!(entries[1].level, Level::Error);
+        assert!(entries[1].text.contains("pipe closed"));
+    }
+
+    #[test]
+    fn nothing_is_recorded_without_a_sink() {
+        let (mut engine, _) = engine_with_radio(|_| {});
+        press(&mut engine, 0, 0);
+        // No panic and no sink: nothing to assert beyond the state change.
+        assert_eq!(engine.take_actions().len(), 1);
     }
 
     #[test]

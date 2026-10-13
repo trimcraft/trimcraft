@@ -47,7 +47,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `setup` (persisted config, schema-versioned, migrations), `profile` (per-game profiles,
   executable matching, auto-switch decisions), `settings` (app-wide settings outside the
   profiles, autostart mechanism choice, hidden start, elevation warning rules),
-  `virtual_control` (radios, triggers, transitions),
+  `trigger` (trigger inputs, press kinds and the deadline-based press tracker, modifiers,
+  conditions, axis zones), `virtual_control` (radio, toggle, momentary, counter, mode;
+  commands and transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),

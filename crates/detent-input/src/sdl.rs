@@ -23,6 +23,12 @@ impl InputBackend for SdlBackend {
         "sdl3"
     }
 
+    fn clock(&self) -> fn() -> u64 {
+        // SAFETY: SDL_GetTicksNS only reads the tick counter and may be called from any
+        // thread; event timestamps come from the same counter.
+        || unsafe { SDL_GetTicksNS() }
+    }
+
     fn run(self: Box<Self>, events: Sender<BackendEvent>, stop: Arc<AtomicBool>) {
         // SAFETY: SDL is initialised, used and shut down on this thread only.
         unsafe { run(events, stop) }

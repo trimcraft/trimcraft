@@ -172,7 +172,7 @@ fn set_overlay_layout(shared: State<'_, Arc<Shared>>, layout: Layout) -> Res<()>
         return Err("size must be between 25% and 400%".into());
     }
     with(&shared, |e| {
-        let mut overlay = e.setup().overlay.clone();
+        let mut overlay = e.overlay();
         overlay.anchor = layout.anchor;
         overlay.margin = layout.margin.min(10_000);
         overlay.scale = layout.scale;
@@ -204,7 +204,7 @@ fn set_hotkey(app: AppHandle, shared: State<'_, Arc<Shared>>, hotkey: String) ->
         return Err(e);
     }
     with(&shared, |e| {
-        let mut overlay = e.setup().overlay.clone();
+        let mut overlay = e.overlay();
         overlay.hotkey = hotkey;
         e.set_overlay(overlay);
         Ok(())

@@ -14,6 +14,7 @@ pub mod event;
 pub mod function;
 pub mod overlay;
 pub mod path;
+pub mod profile;
 pub mod recording;
 pub mod registry;
 pub mod setup;
@@ -34,9 +35,10 @@ pub use event::{BackendEvent, RawDevice};
 pub use function::{CounterInput, CounterSpec, EndBehavior, Function, FunctionKind};
 pub use overlay::{
     Anchor, ControlRef, MonitorRef, OverlayConfig, OverlayItem, OverlayWidget, RadioLayout,
-    WidgetPosition,
+    WidgetList, WidgetPosition,
 };
 pub use path::Screens;
+pub use profile::{NoMatch, Profile, ProfileSwitching, ProfileTarget};
 pub use registry::DeviceRegistry;
 pub use setup::{ButtonPair, Setup};
 pub use soundpad::{Sound, SoundOutput, SoundRef, SoundpadCommand};

@@ -36,7 +36,9 @@ impl ConnectorId {
         match action {
             Action::Soundpad { .. } => Some(ConnectorId::Soundpad),
             Action::Discord { .. } => Some(ConnectorId::Discord),
-            Action::KeyboardMacro { .. } | Action::MouseMacro { .. } => None,
+            Action::KeyboardMacro { .. }
+            | Action::MouseMacro { .. }
+            | Action::SwitchProfile { .. } => None,
         }
     }
 }

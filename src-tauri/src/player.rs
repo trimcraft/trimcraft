@@ -119,6 +119,9 @@ struct Inner {
     runs: Mutex<HashMap<u64, Arc<Run>>>,
     /// Every key and button any macro pressed and nothing released yet.
     held: Mutex<HeldInputs>,
+    /// The latest state of each control, from the engine. A "while active" macro whose state
+    /// ended before it started (a quick tap: the release overtook the queue) stops at once.
+    states: Mutex<HashMap<String, String>>,
 }
 
 /// What came of a start, for the action log.
@@ -147,6 +150,7 @@ impl Player {
                 registry: Mutex::new(Registry::default()),
                 runs: Mutex::new(HashMap::new()),
                 held: Mutex::new(HeldInputs::default()),
+                states: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -179,6 +183,14 @@ impl Player {
             changed: Condvar::new(),
         });
         lock(&self.inner.runs).insert(run_id, run.clone());
+        if run.while_active
+            && let Some(scope) = &run.scope
+            && lock(&self.inner.states)
+                .get(&scope.control)
+                .is_some_and(|now| *now != scope.state)
+        {
+            run.end_state();
+        }
         let screens = if request.action.needs_screens() {
             overlay::screens(&self.inner.app)
         } else {
@@ -357,6 +369,7 @@ impl Player {
         for signal in signals {
             match signal {
                 MacroSignal::State(now) => {
+                    lock(&self.inner.states).insert(now.control.clone(), now.state.clone());
                     for run in lock(&self.inner.runs).values() {
                         if run.while_active
                             && run

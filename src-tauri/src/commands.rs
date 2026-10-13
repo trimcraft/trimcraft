@@ -1,6 +1,6 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
-use crate::{Meta, Shared, foreground, overlay, secrets};
+use crate::{Meta, Shared, overlay, profile_watch, secrets};
 use detent_core::connection::{DiscordSettings, valid_client_id};
 use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
@@ -340,8 +340,8 @@ fn toggle_overlay_profile_name(shared: State<'_, Arc<Shared>>) -> Res<bool> {
 
 /// Programs with a window, for "Pick from running processes".
 #[tauri::command]
-fn list_process_windows() -> Vec<foreground::ProcessWindow> {
-    foreground::windows()
+fn list_process_windows() -> Vec<profile_watch::ProcessWindow> {
+    profile_watch::windows()
 }
 
 #[tauri::command]
@@ -767,7 +767,7 @@ mod tests {
             serde_json::from_str(r#"{"type":"profileName","position":{"x":0.5,"y":0.02}}"#)
                 .unwrap();
         // The picker reads these (ui/src/lib/types.ts: ProcessWindow).
-        let window = serde_json::to_value(foreground::ProcessWindow {
+        let window = serde_json::to_value(profile_watch::ProcessWindow {
             exe: "DCS.exe".into(),
             title: "DCS".into(),
         })

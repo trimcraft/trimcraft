@@ -63,7 +63,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
-  `foreground.rs` (foreground program watcher via `SetWinEventHook`, process window list),
+  `profile_watch.rs` (foreground program for profile switching via `SetWinEventHook`, process
+  window list),
   `commands.rs` (IPC; payload shapes are tested),
   `storage.rs` (atomic JSON files).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test), `Overlay.svelte`

@@ -3,8 +3,8 @@
 mod commands;
 mod discord;
 mod executor;
-mod foreground;
 mod overlay;
+mod profile_watch;
 mod recorder;
 mod secrets;
 mod soundpad;
@@ -285,7 +285,7 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
 /// Foreground changes go into the engine, which switches profiles as set.
 fn watch_foreground(shared: &Arc<Shared>) {
     let weak = Arc::downgrade(shared);
-    foreground::watch(move |exe| {
+    profile_watch::watch(move |exe| {
         let Some(shared) = weak.upgrade() else { return };
         let mut engine = shared.engine();
         if engine.foreground_changed(exe.as_deref()) {

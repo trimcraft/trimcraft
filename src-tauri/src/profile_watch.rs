@@ -55,7 +55,7 @@ mod platform {
 
     pub fn watch(on_change: Callback) {
         let spawned = std::thread::Builder::new()
-            .name("detent-foreground".into())
+            .name("detent-profile-watch".into())
             .spawn(move || {
                 // SAFETY: out-of-context hook without a module; the callback is a plain
                 // function and runs on this thread, inside GetMessageW below.

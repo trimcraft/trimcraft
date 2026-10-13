@@ -283,19 +283,39 @@ export interface Playback {
   endpointOnly: boolean;
 }
 
-export type KeyboardMacro = { type: "keyboardMacro"; steps: KeyStep[]; playback: Playback };
-export type MouseMacro = {
-  type: "mouseMacro";
-  steps: MouseStep[];
+/** A keyboard or a mouse step; a wait ("delay") has the same shape in both. */
+export type MacroStep = KeyStep | MouseStep;
+
+/** Once, n times, or as long as the control state that started it stays active. */
+export type Repeat = { type: "once" } | { type: "times"; count: number } | { type: "whileActive" };
+/** What a "while active" macro does when its state ends. */
+export type OnEnd = "stopImmediately" | "finishRun";
+/** What a trigger does while the same macro still runs. */
+export type Retrigger = "ignore" | "restart";
+
+/** Keyboard and mouse steps in any order (keyboardMacro/mouseMacro of schema 3 load as this). */
+export interface InputMacro {
+  type: "inputMacro";
+  /** Assigned when the control is saved; "Stop macros" refers to it. */
+  id: string;
+  steps: MacroStep[];
   playback: Playback;
+  /** How the recorder captures mouse movement. */
   movement: Movement;
   /** Monitor absolute positions refer to; null = primary. */
   monitor: MonitorRef | null;
-};
+  repeat: Repeat;
+  onEnd: OnEnd;
+  /** Pause between runs, ms. */
+  pauseMs: number;
+  retrigger: Retrigger;
+}
+
+export type MacroTarget = { type: "all" } | { type: "macro"; id: string };
 
 export type Action =
-  | KeyboardMacro
-  | MouseMacro
+  | InputMacro
+  | { type: "stopMacros"; target: MacroTarget }
   | { type: "soundpad"; command: SoundpadCommand }
   | { type: "discord"; command: DiscordCommand }
   | { type: "switchProfile"; target: ProfileTarget }
@@ -402,7 +422,11 @@ export interface HttpAction {
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
-export type RecordKind = "keyboard" | "mouse";
+/** What a recording takes. */
+export interface RecordKind {
+  keys: boolean;
+  mouse: boolean;
+}
 
 export interface RecorderConfig {
   stopHotkey: string;
@@ -413,7 +437,7 @@ export interface RecorderConfig {
 
 export interface RecordingResult {
   session: number;
-  action: KeyboardMacro | MouseMacro;
+  action: InputMacro;
   notes: string[];
 }
 
@@ -684,6 +708,8 @@ export interface AppSettings {
   runAsAdmin: boolean;
   /** Set by the app; ignored when saving. */
   trayNoticeShown: boolean;
+  /** Stops all macros and releases every input they hold. */
+  panicHotkey: string;
 }
 
 /** How Detent is started at logon: Run registry value or elevated Task Scheduler task. */

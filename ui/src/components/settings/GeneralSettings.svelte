@@ -90,6 +90,22 @@
     {/if}
   </div>
 
+  <div class="group">
+    <h3>Macros</h3>
+    <label class="check">Panic hotkey
+      <input
+        class="mono"
+        value={settings.panicHotkey}
+        placeholder="Ctrl+Shift+F12"
+        onchange={(e) => change({ panicHotkey: e.currentTarget.value.trim() || "Ctrl+Shift+F12" })}
+      />
+    </label>
+    <p class="hint muted">
+      Stops every running macro and releases all keys and mouse buttons macros still hold, also while a game has the
+      focus. Modifiers and one key, e.g. Ctrl+Shift+F12.
+    </p>
+  </div>
+
   {#if error}<p class="error small">{error}</p>{/if}
 </section>
 

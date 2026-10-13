@@ -1,5 +1,7 @@
 import type {
   DiagEntry,
+  MacroStep,
+  Repeat,
   LaunchTarget,
   MediaKey,
   VmCommand,
@@ -347,9 +349,47 @@ export function actionText(a: Action, profiles: ProfileView[] = []): string {
     case "http":
       return `HTTP: ${a.method} ${shortUrl(a.url) || "(no address)"}${wait(a.wait)}`;
   }
-  const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
-  const speed = a.playback.speedPercent === 100 ? "" : ` (${a.playback.speedPercent}%)`;
-  return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}${speed}: ${steps.join(", ") || "no steps"}`;
+  if (a.type === "stopMacros") return `Stop macros: ${a.target.type === "all" ? "all" : a.target.id}`;
+  const keys = a.steps.some(isKeyStep);
+  const mouse = a.steps.some(isMouseStep);
+  const kind = keys && mouse ? "Keys + mouse" : mouse ? "Mouse" : "Keys";
+  const steps = a.steps.map((st) => (isMouseStep(st) ? mouseStepText(st as MouseStep) : keyStepText(st as KeyStep)));
+  const speed = a.playback.speedPercent === 100 ? "" : ` ${a.playback.speedPercent}%`;
+  const repeat = repeatText(a.repeat);
+  const extra = [speed.trim(), repeat].filter(Boolean).join(", ");
+  return `${kind}${extra ? ` (${extra})` : ""}: ${steps.join(", ") || "no steps"}`;
+}
+
+export function repeatText(r: Repeat): string {
+  switch (r.type) {
+    case "once":
+      return "";
+    case "times":
+      return `${r.count}×`;
+    case "whileActive":
+      return "while active";
+  }
+}
+
+/** A keyboard step (a wait counts as neither kind). */
+export function isKeyStep(s: MacroStep): boolean {
+  return s.type === "keyDown" || s.type === "keyUp" || s.type === "keyTap";
+}
+
+/** A mouse step (a wait counts as neither kind). */
+export function isMouseStep(s: MacroStep): boolean {
+  return s.type !== "delay" && !isKeyStep(s);
+}
+
+/** Macros of the active profile, for "Stop macros": id and where it is. */
+export function macroChoices(snapshot: EngineSnapshot): { id: string; label: string }[] {
+  const out: { id: string; label: string }[] = [];
+  for (const view of snapshot.virtualControls) {
+    for (const a of controlActions(view.kind)) {
+      if (a.type === "inputMacro" && a.id) out.push({ id: a.id, label: `${view.name} › ${actionText(a)}` });
+    }
+  }
+  return out;
 }
 
 // --- Event log ---------------------------------------------------------------------------------

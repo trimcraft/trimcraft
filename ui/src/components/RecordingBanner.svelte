@@ -15,7 +15,7 @@
     {#if phase === "countdown"}
       ● Recording starts in {starting.left}…
     {:else}
-      ● REC {snapshot.recorder.kind === "mouse" ? "mouse" : "keys"} — {snapshot.recorderConfig.stopHotkey} stops, Esc cancels
+      ● REC {snapshot.recorder.kind?.keys && snapshot.recorder.kind?.mouse ? "keys + mouse" : snapshot.recorder.kind?.mouse ? "mouse" : "keys"} — {snapshot.recorderConfig.stopHotkey} stops, Esc cancels
     {/if}
     <button class="small" onclick={async () => (await backend()).stopRecording()}>Stop</button>
     <button class="small" onclick={async () => (await backend()).cancelRecording()}>Cancel</button>

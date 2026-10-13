@@ -2,7 +2,7 @@
   // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad, Discord and
   // Voicemeeter commands, profile switches, speech, sound files, volume, media keys, launch and
   // HTTP requests (editors in ./actions).
-  import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
+  import type { Action, ConnectorId, EngineSnapshot, InputMacro, KeyInfo, Playback } from "../lib/types";
   import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
   import MacroEditor from "./MacroEditor.svelte";
@@ -15,7 +15,7 @@
   import VoicemeeterEditor from "./actions/VoicemeeterEditor.svelte";
   import LaunchEditor from "./actions/LaunchEditor.svelte";
   import HttpEditor from "./actions/HttpEditor.svelte";
-  import { MEDIA_KEYS } from "../lib/format";
+  import { MEDIA_KEYS, macroChoices } from "../lib/format";
 
   let {
     label,
@@ -35,7 +35,7 @@
   /** What "Add action" offers, in groups. */
   let addable = $derived.by(() => {
     const groups: [string, [Action["type"], string][]][] = [
-      ["Input", [["keyboardMacro", "Keyboard macro"], ["mouseMacro", "Mouse macro"], ["mediaKey", "Media key"]]],
+      ["Input", [["inputMacro", "Input macro (keys and mouse)"], ["mediaKey", "Media key"], ["stopMacros", "Stop macros"]]],
       ["Sound", [["speak", "Speak text"], ["playSound", "Play sound file"], ["volume", "Audio volume"]]],
       ["Programs", [["launch", "Launch program / open"], ["http", "HTTP request (webhook)"], ["switchProfile", "Switch profile"]]],
     ];
@@ -55,10 +55,21 @@
 
   function newAction(type: Action["type"]): Action {
     switch (type) {
-      case "keyboardMacro":
-        return { type, steps: [{ type: "keyTap", key: "F1", holdMs: null }], playback: playback() };
-      case "mouseMacro":
-        return { type, steps: [{ type: "click", button: "left", holdMs: null }], playback: playback(), movement: "absolute", monitor: null };
+      case "inputMacro":
+        return {
+          type,
+          id: "",
+          steps: [{ type: "keyTap", key: "F1", holdMs: null }],
+          playback: playback(),
+          movement: "absolute",
+          monitor: null,
+          repeat: { type: "once" },
+          onEnd: "stopImmediately",
+          pauseMs: 0,
+          retrigger: "ignore",
+        };
+      case "stopMacros":
+        return { type, target: { type: "all" } };
       case "soundpad":
         return { type, command: { type: "play", sound: { title: "", path: "" }, output: "both" } };
       case "discord":
@@ -129,6 +140,24 @@
               <VolumeEditor bind:target={action.target} bind:command={action.command} />
             {:else if action.type === "voicemeeter"}
               <VoicemeeterEditor bind:target={action.target} bind:command={action.command} connector={connectorView("voicemeeter")} />
+            {:else if action.type === "stopMacros"}
+              {@const choices = macroChoices(snapshot)}
+              <div class="row">
+                <select
+                  value={action.target.type === "all" ? "" : action.target.id}
+                  onchange={(e) => {
+                    const id = e.currentTarget.value;
+                    if (action.type === "stopMacros") action.target = id ? { type: "macro", id } : { type: "all" };
+                  }}
+                >
+                  <option value="">All running macros</option>
+                  {#each choices as c (c.id)}<option value={c.id}>{c.label}</option>{/each}
+                  {#if action.target.type === "macro" && !choices.some((c) => action.type === "stopMacros" && action.target.type === "macro" && c.id === action.target.id)}
+                    <option value={action.target.id}>{action.target.id} (saved macro of this profile)</option>
+                  {/if}
+                </select>
+              </div>
+              <p class="muted small">Stops the macro and releases the keys and mouse buttons it holds. Macros are listed once their control is saved.</p>
             {:else if action.type === "mediaKey"}
               <div class="row">
                 <select bind:value={action.key}>
@@ -141,7 +170,7 @@
             {:else if action.type === "http"}
               <HttpEditor bind:action={actions[ai] as typeof action} />
             {:else}
-              <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
+              <MacroEditor bind:action={() => action as InputMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
           </div>
         {/if}

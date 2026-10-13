@@ -47,7 +47,7 @@ A virtual control is built from physical inputs and can run actions. The first k
   none was active yet); this also works after a restart.
 - Each state has actions on activate and on deactivate. Switching from A to B runs A's
   deactivate actions, then B's activate actions.
-- Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
+- Actions are input macros: keyboard steps (key down, key up, tap with hold time, wait) and mouse steps
   (button down, up, click, wheel, relative move, move to a position, recorded paths, wait),
   Soundpad commands, Discord mute/deafen, switching the profile (see Profiles), and the actions
   below. Keys are sent as scan codes so games that read DirectInput or RawInput see them. Every
@@ -131,7 +131,9 @@ one is due instead of polling.
 
 ### Recording macros
 
-Every keyboard and mouse macro has a **● Record** button. After a 3-second countdown (switch
+An **input macro** has keyboard and mouse steps in any order, e.g. Ctrl down, click, Ctrl up
+(the keyboard and mouse macros of earlier versions load as input macros with all their
+settings). Every input macro has a **● Record** button. After a 3-second countdown (switch
 to the game now) Detent records into that macro until you press the stop hotkey (default
 `Ctrl+Shift+F9`, configurable under *Macro recorder*) or **Stop**; **Esc** cancels. While
 recording, the main window shows a red banner and the overlay a red **REC** badge. The recording
@@ -139,8 +141,10 @@ is appended to the steps or replaces them, as chosen next to the button. The sto
 and the click on Stop are not recorded; Detent's own playback never is (injected input is
 ignored). Esc cannot be recorded; add it by hand if a macro needs it.
 
-- A keyboard macro records keys (as scan codes, like playback); a mouse macro records buttons,
-  wheel and movement. Gaps become waits, and press-wait-release becomes a tap or click.
+- Tick what to record: **keys** (as scan codes, like playback), **mouse** (buttons, wheel and
+  movement), or both (the default). Gaps become waits, and press-wait-release becomes a tap or
+  click. Recording both puts keys and mouse on one timeline; a mouse path during which a key
+  goes down or up is split there, so a key held while moving the mouse stays in time.
 - Mouse movement is **absolute** (cursor positions, stored relative to the monitor the
   recording started on, like overlay positions; for menus and maps) or **relative** (raw mouse
   deltas via Raw Input; for mouse-look, where the game keeps the cursor centred). Set it per
@@ -151,10 +155,31 @@ ignored). Esc cannot be recorded; add it by hand if a macro needs it.
 - Playback options per macro: speed (original, 0.25× to 4×; scales waits and paths, not hold
   times), skipping waits shorter than a threshold, and for absolute paths "endpoint only",
   which jumps straight to where each path ends.
-- The editor has a step list (select several to delete, drag ⋮⋮ to reorder, + inserts a step,
-  everything editable in place) and, for mouse macros, a preview of the movement on the
-  monitor outline where waypoints can be dragged. **▶ Test play** plays the macro as edited
-  after the same countdown.
+- The editor has a step list (⌨ keyboard, 🖱 mouse, ⏱ wait; select several to delete, drag ⋮⋮
+  to reorder, + inserts a step, everything editable in place, a step can change between key
+  and mouse) and, when the macro moves the mouse, a preview of the movement on the monitor
+  outline where waypoints can be dragged. **▶ Test play** plays the macro as edited after the
+  same countdown ("while active" plays once there).
+
+### Repeating and stopping macros
+
+- **Repeat**: once (default), **n times**, or **while active**: as long as the control state
+  that started the macro stays active (a momentary control held, a toggle on, a radio or mode
+  state active; for a long-press trigger on a momentary control, while the button is held). A
+  **pause** between runs can be set. For a "while active" macro, when the state ends it stops
+  immediately (default) or finishes the run in progress.
+- A macro that runs once plays in order with the other actions, as before. A repeating macro
+  runs in the background; the next actions do not wait for it.
+- The same macro never runs twice at once: a new trigger while it runs is **ignored**
+  (default) or **restarts** it.
+- Stopping a macro releases every key and mouse button it pressed and has not released, so
+  nothing stays stuck. Macros stop when their state ends, with the **Stop macros** action (all,
+  or one macro of the profile), with the **panic hotkey** (Settings, General; default
+  `Ctrl+Shift+F12`, works while a game has the focus), when another profile becomes active and
+  when Detent quits. The panic hotkey, a profile switch and quitting also release what macros
+  that already finished left pressed (e.g. a "Ctrl down" waiting for its "Ctrl up").
+- The event log shows a background macro's start, and for every stop the reason, the number of
+  runs and the keys released.
 
 Relative moves are sent as relative mouse input: games that read raw input see exactly the
 recorded deltas, while the Windows desktop applies its pointer speed and acceleration to them.

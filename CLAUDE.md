@@ -52,7 +52,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   commands and transitions),
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
-  `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
+  `action` (actions, key table with scan codes, expansion to input ops), `macros` (input macros:
+  mixed steps, repetition, retrigger), `macro_run` (macro player decisions: repetition state,
+  held-input bookkeeping, registry),
   `audio` (speech, sound file, volume and media key actions), `voicemeeter` (parameters,
   gain math), `launch` (launch targets, URL check), `webhook` (HTTP requests, secret header
   references, URL redaction), `placeholder` (`{control}` and friends in action texts),
@@ -61,11 +63,13 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `diagnostics` (event log: ring buffer, axis throttle, entry formatting),
-  `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
+  `recording` (recorder events to macro steps, key/mouse timeline merge, stop trimming, hotkey
+  parsing), `engine`
   (ties it together, UI commands, queues action requests).
 - `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
-- `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
+- `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread), `player.rs` (input macro
+  player: repetition, stop, release of held inputs, panic), `input.rs` (`SendInput`),
   `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
   `voicemeeter.rs` (Voicemeeter connector: VoicemeeterRemote64.dll loaded at runtime),
   `speech.rs` (SAPI thread), `sound.rs` (rodio thread), `volume.rs` (Core Audio),

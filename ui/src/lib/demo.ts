@@ -13,9 +13,9 @@ import type {
   FunctionView,
   HatDirection,
   KeyInfo,
-  KeyboardMacro,
   MonitorInfo,
-  MouseMacro,
+  InputMacro,
+  MacroStep,
   MouseStep,
   Movement,
   OverlayItem,
@@ -62,23 +62,29 @@ const DEMO_SOUNDS: Sound[] = ["Siren", "Dog barking", "Duck quack", "Applause", 
 );
 
 /** What the demo "records": a few keys, or a click-drag along a curve (absolute) or a turn (relative). */
-function demoRecording(kind: RecordKind, movement: Movement): KeyboardMacro | MouseMacro {
-  const playback = { speedPercent: 100, minDelayMs: 0, endpointOnly: false };
-  if (kind === "keyboard") {
-    return {
-      type: "keyboardMacro",
-      playback,
-      steps: [
-        { type: "keyTap", key: "W", holdMs: 640 },
-        { type: "delay", ms: 210 },
-        { type: "keyDown", key: "LeftShift" },
-        { type: "delay", ms: 90 },
-        { type: "keyTap", key: "E", holdMs: 70 },
-        { type: "delay", ms: 40 },
-        { type: "keyUp", key: "LeftShift" },
-      ],
-    };
-  }
+function demoRecording(kind: RecordKind, movement: Movement): InputMacro {
+  const macro = (steps: MacroStep[]): InputMacro => ({
+    type: "inputMacro",
+    id: "",
+    playback: { speedPercent: 100, minDelayMs: 0, endpointOnly: false },
+    movement,
+    monitor: null,
+    repeat: { type: "once" },
+    onEnd: "stopImmediately",
+    pauseMs: 0,
+    retrigger: "ignore",
+    steps,
+  });
+  const keySteps: MacroStep[] = [
+    { type: "keyTap", key: "W", holdMs: 640 },
+    { type: "delay", ms: 210 },
+    { type: "keyDown", key: "LeftShift" },
+    { type: "delay", ms: 90 },
+    { type: "keyTap", key: "E", holdMs: 70 },
+    { type: "delay", ms: 40 },
+    { type: "keyUp", key: "LeftShift" },
+  ];
+  if (!kind.mouse) return macro(keySteps);
   const n = 14;
   const steps: MouseStep[] =
     movement === "absolute"
@@ -110,7 +116,8 @@ function demoRecording(kind: RecordKind, movement: Movement): KeyboardMacro | Mo
           { type: "delay", ms: 120 },
           { type: "click", button: "left", holdMs: 60 },
         ];
-  return { type: "mouseMacro", playback, movement, monitor: null, steps };
+  // Both: Ctrl held around the mouse part, as a mixed recording looks.
+  return macro(kind.keys ? [{ type: "keyDown", key: "LeftCtrl" }, { type: "delay", ms: 120 }, ...steps, { type: "delay", ms: 80 }, { type: "keyUp", key: "LeftCtrl" }] : steps);
 }
 
 function device(id: string, name: string, vid: number, pid: number, axes: number, buttons: number, hats: number, virt = false): DeviceSnapshot {
@@ -171,7 +178,7 @@ export function createDemo(): Backend {
     ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
-    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false },
+    settings: { closeToTray: true, startWithWindows: false, startMinimized: true, runAsAdmin: false, trayNoticeShown: false, panicHotkey: "Ctrl+Shift+F12" },
     // Fake elevation: not elevated, and an elevated game in the foreground, so the warning
     // banner shows. "Restart as administrator" clears both.
     shell: { elevated: false, autostart: "off", autostartNote: null, elevatedForeground: "DemoGame.exe" },
@@ -712,7 +719,9 @@ export function createDemo(): Backend {
       if (k.type === "counter" && !(k.spec.step > 0)) throw new Error("step must be greater than zero");
       if (k.type === "counter" && !(k.spec.max > k.spec.min)) throw new Error("maximum must be greater than minimum");
       const actions = controlActions(k);
-      for (const step of actions.flatMap((a) => (a.type === "keyboardMacro" ? a.steps : []))) {
+      let nextMacro = 1 + Math.max(0, ...actions.flatMap((a) => (a.type === "inputMacro" ? [Number(a.id.replace("mac-", "")) || 0] : [])));
+      for (const a of actions) if (a.type === "inputMacro" && !a.id) a.id = `mac-${nextMacro++}`;
+      for (const step of actions.flatMap((a) => (a.type === "inputMacro" ? a.steps : []))) {
         if ("key" in step) {
           const known = KEY_NAMES.find((n) => n.toLowerCase() === step.key.trim().toLowerCase());
           if (!known) throw new Error(`unknown key "${step.key}"`);
@@ -1019,7 +1028,7 @@ export function createDemo(): Backend {
     },
     listProcessWindows: async () => structuredClone(DEMO_WINDOWS),
     async testAction(action) {
-      const macro = action.type === "keyboardMacro" || action.type === "mouseMacro";
+      const macro = action.type === "inputMacro";
       setTimeout(() => console.info("[demo] test play:", actionText(action)), macro ? 3000 : 0);
     },
     listVoices: async () => [

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import type { Anchor, EngineSnapshot, MonitorInfo, MonitorRef, OverlayItem, RadioLayout } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
-  import { controlName, findDevice } from "../lib/format";
+  import { CONTROL_TYPES, controlName, findDevice } from "../lib/format";
   import OverlayWidgets from "./OverlayWidgets.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
@@ -74,7 +74,11 @@
       case "function":
         return snapshot.functions.find((f) => f.id === w.function)?.name ?? w.function;
       case "radio":
-        return `Radio: ${snapshot.virtualControls.find((c) => c.id === w.control)?.name ?? w.control}`;
+      {
+        const c = snapshot.virtualControls.find((c) => c.id === w.control);
+        const type = CONTROL_TYPES.find(([t]) => t === c?.kind.type)?.[1] ?? "Control";
+        return `${type}: ${c?.name ?? w.control}`;
+      }
       case "control": {
         if (w.label) return w.label;
         const d = findDevice(snapshot, w.device);
@@ -95,6 +99,8 @@
     update(index, { position: { ...pos, [axis]: v } });
   }
 
+  /** Radios and modes show their states, vertically or horizontally. */
+  const hasStates = (id: string) => ["radio", "mode"].includes(snapshot.virtualControls.find((c) => c.id === id)?.kind.type ?? "");
   const pct = (v: number) => Math.round(v * 1000) / 10;
   const hasProfileName = $derived(snapshot.overlay.widgets.some((w) => w.type === "profileName"));
   const profileName = $derived(snapshot.profiles.find((p) => p.id === snapshot.activeProfile)?.name ?? "");
@@ -160,7 +166,7 @@
               <td colspan="2" class="muted small">in the corner stack <button class="small" onclick={() => update(i, { position: { x: 0.05, y: 0.05 } })}>Place freely</button></td>
             {/if}
             <td>
-              {#if w.type === "radio"}
+              {#if w.type === "radio" && hasStates(w.control)}
                 <select value={w.layout} onchange={(e) => update(i, { layout: e.currentTarget.value as RadioLayout })}>
                   <option value="vertical">vertical</option>
                   <option value="horizontal">horizontal</option>

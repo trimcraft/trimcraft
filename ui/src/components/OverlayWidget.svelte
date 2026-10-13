@@ -21,8 +21,12 @@
   {#if f}<div class="fn"><span class="fname">{f.name}</span> <span class="fvalue">{f.display}</span></div>{/if}
 {:else if w.type === "radio"}
   {@const c = snapshot.virtualControls.find((c) => c.id === w.control)}
-  {#if c}
-    <div class="radio" class:horizontal={w.layout === "horizontal"}>
+  {#if c && (c.kind.type === "toggle" || c.kind.type === "momentary")}
+    <div class="switch"><span class="lamp" class:on={c.on}></span><span class="rname">{c.name}</span><span class="onoff" class:on={c.on}>{c.on ? "ON" : "OFF"}</span></div>
+  {:else if c && c.kind.type === "counter"}
+    <div class="fn"><span class="fname">{c.name}</span> <span class="fvalue">{c.display}</span></div>
+  {:else if c && (c.kind.type === "radio" || c.kind.type === "mode")}
+    <div class="radio" class:horizontal={w.layout === "horizontal"} class:shifted={c.shifted}>
       <span class="rname">{c.name}</span>
       <ul>
         {#each c.kind.states as s (s.id)}
@@ -59,6 +63,10 @@
   .clabel { font-size: 12px; color: var(--muted); }
   .lamp { width: 14px; height: 14px; border-radius: 50%; background: var(--lamp-off); }
   .lamp.on { background: var(--lamp-on); box-shadow: 0 0 8px var(--lamp-on); }
+  .switch { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+  .onoff { font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .onoff.on { color: var(--accent); }
+  .radio.shifted li.on { outline: 2px dashed #111; outline-offset: -4px; }
   .radio { display: flex; flex-direction: column; gap: 4px; }
   .radio.horizontal { flex-direction: row; align-items: center; gap: 10px; }
   .rname { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }

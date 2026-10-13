@@ -202,10 +202,38 @@ export type HatDirection = "up" | "upRight" | "right" | "downRight" | "down" | "
 
 export type StepDirection = "decrement" | "increment";
 
-export type Trigger =
+/** What a trigger listens to (detent-core trigger.rs). */
+export type TriggerInput =
   | { type: "button"; device: DeviceId; index: number }
+  /** Pressed while the hat points that way. */
   | { type: "hat"; device: DeviceId; index: number; direction: HatDirection }
-  | { type: "encoderStep"; encoder: string; direction: StepDirection };
+  | { type: "encoderStep"; encoder: string; direction: StepDirection }
+  /** A range of an axis in percent (0..100); "pressed" while inside. */
+  | { type: "axisZone"; device: DeviceId; index: number; min: number; max: number };
+
+/** Press: on press (a short press on release if the input also has long or double triggers).
+ *  For axis zones press = entering, release = leaving; encoder detents only press. */
+export type PressKind = { kind: "press" } | { kind: "release" } | { kind: "long"; ms: number } | { kind: "double"; ms: number };
+
+/** A button that must be held as a modifier. */
+export interface ButtonRef {
+  device: DeviceId;
+  index: number;
+}
+
+/** Only when mode `mode` is in state `state` (ids). */
+export interface Condition {
+  mode: string;
+  state: string;
+}
+
+export type Trigger = TriggerInput & {
+  press: PressKind;
+  /** All must be held; the most specific trigger on an input wins. */
+  modifiers: ButtonRef[];
+  /** All must hold. */
+  conditions: Condition[];
+};
 
 export type KeyStep =
   | { type: "keyDown"; key: string }
@@ -426,17 +454,83 @@ export interface Radio {
   startup: Startup;
 }
 
-export interface VirtualControlDef {
-  id: string;
-  name: string;
-  kind: { type: "radio" } & Radio;
+export interface Toggle {
+  toggle: Trigger[];
+  on: Trigger[];
+  off: Trigger[];
+  onOn: Action[];
+  onOff: Action[];
+  /** "empty": off at startup. */
+  startup: Startup;
 }
 
-export interface VirtualControlView extends VirtualControlDef {
-  /** Id of the active state. */
+export interface Momentary {
+  /** Active while any of them is held. */
+  triggers: Trigger[];
+  onPress: Action[];
+  onRelease: Action[];
+  /** Active while nothing is held instead. */
+  invert: boolean;
+}
+
+export interface CounterControl {
+  spec: CounterSpec;
+  increment: Trigger[];
+  decrement: Trigger[];
+  reset: Trigger[];
+  /** Actions can use the new value as {value}. */
+  onChange: Action[];
+  /** "empty": the initial value at startup. */
+  startup: Startup;
+}
+
+export interface ModeState {
+  id: string;
+  name: string;
+  select: Trigger[];
+  /** Active while held; back to the previous state on release. */
+  shift: Trigger[];
+  onActivate: Action[];
+  onDeactivate: Action[];
+}
+
+export interface Mode {
+  /** Exactly one is active; the first by default. */
+  states: ModeState[];
+  next: Trigger[];
+  previous: Trigger[];
+  end: EndBehavior;
+  /** "empty": the first state at startup. */
+  startup: Startup;
+}
+
+export type VirtualControlKind =
+  | ({ type: "radio" } & Radio)
+  | ({ type: "toggle" } & Toggle)
+  | ({ type: "momentary" } & Momentary)
+  | ({ type: "counter" } & CounterControl)
+  | ({ type: "mode" } & Mode);
+
+export type ControlType = VirtualControlKind["type"];
+
+export interface VirtualControlDef<K extends VirtualControlKind = VirtualControlKind> {
+  id: string;
+  name: string;
+  kind: K;
+}
+
+export type VirtualControlView = VirtualControlDef & {
+  /** Id of the active state (radio, mode; "on" for a toggle that is on). */
   active: string | null;
   activeName: string | null;
-}
+  /** Lit: a radio state active, a toggle or momentary control on; always for a mode. */
+  on: boolean;
+  /** A counter's value, and formatted. */
+  value: number | null;
+  display: string | null;
+  /** A mode held in a state by a shift trigger. */
+  shifted: boolean;
+};
 
 export interface LearnView {
   captured: Trigger | null;
@@ -448,8 +542,9 @@ export interface KeyInfo {
   extended: boolean;
 }
 
-/** Radio commands the UI can run; they fire actions like a trigger would. */
-export type RadioCommand = "increment" | "decrement" | "clear" | "toggleOff";
+/** Commands the UI can run on a control; they fire actions like a trigger would. Next/previous
+ *  (radio, mode, counter), clear and toggle off (radio), toggle/on/off (toggle), reset (counter). */
+export type ControlCommand = "increment" | "decrement" | "clear" | "toggleOff" | "toggle" | "on" | "off" | "reset";
 
 // --- Diagnostics event log (detent-core diagnostics::Entry) ------------------------------------
 

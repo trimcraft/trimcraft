@@ -14,6 +14,11 @@ import type {
   SoundOutput,
   SoundpadCommand,
   Trigger,
+  TriggerInput,
+  ButtonRef,
+  Condition,
+  ControlType,
+  VirtualControlKind,
 } from "./types";
 
 /** Buttons, axes and hats are 0-based internally and shown 1-based, like Windows does. */
@@ -79,16 +84,75 @@ export const HAT_DIRECTIONS: [HatDirection, string][] = [
 
 const hatDirectionText = (d: HatDirection) => HAT_DIRECTIONS.find(([v]) => v === d)?.[1] ?? d;
 
-/** E.g. "Demo Stick · Button 4", "Radio knob +", "Demo Stick · Hat 1 ↑ up". */
-export function triggerText(s: EngineSnapshot, t: Trigger): string {
+/** E.g. "Demo Stick · Button 4", "Radio knob +", "Demo Stick · Hat 1 ↑ up", "Demo Throttle · Axis 3 80–100 %". */
+export function inputText(s: EngineSnapshot, t: TriggerInput): string {
   if (t.type === "encoderStep") {
     const e = s.encoders.find((e) => e.id === t.encoder);
     return `${e?.name ?? `Missing encoder ${t.encoder}`} ${t.direction === "increment" ? "+" : "−"}`;
   }
   const device = deviceTitle(findDevice(s, t.device), t.device);
   if (t.type === "button") return `${device} · ${controlName({ type: "button", index: t.index })}`;
+  if (t.type === "axisZone") return `${device} · ${controlName({ type: "axis", index: t.index })} ${t.min}–${t.max} %`;
   return `${device} · ${controlName({ type: "hat", index: t.index })} ${hatDirectionText(t.direction)}`;
 }
+
+export function buttonRefText(s: EngineSnapshot, b: ButtonRef): string {
+  return `${deviceTitle(findDevice(s, b.device), b.device)} · ${controlName({ type: "button", index: b.index })}`;
+}
+
+/** E.g. " (long 500 ms)"; nothing for a plain press. */
+export function pressText(t: Trigger): string {
+  const zone = t.type === "axisZone";
+  switch (t.press.kind) {
+    case "press":
+      return "";
+    case "release":
+      return zone ? " (leaving)" : " (release)";
+    case "long":
+      return ` (long ${t.press.ms} ms)`;
+    case "double":
+      return ` (double ${t.press.ms} ms)`;
+  }
+}
+
+/** "Layer = Combat"; a mode or state that is gone says so. */
+export function conditionText(s: EngineSnapshot, c: Condition): string {
+  const mode = s.virtualControls.find((v) => v.id === c.mode);
+  if (!mode || mode.kind.type !== "mode") return "missing mode";
+  const state = mode.kind.states.find((st) => st.id === c.state);
+  return `${mode.name} = ${state?.name ?? "missing state"}`;
+}
+
+/** Input, press kind, modifiers and conditions, e.g. "Stick · Button 2 + Stick · Button 4 (long 500 ms) · when Layer = Combat". */
+export function triggerText(s: EngineSnapshot, t: Trigger): string {
+  const mods = t.modifiers.map((m) => `${buttonRefText(s, m)} + `).join("");
+  const conds = t.conditions.length ? ` · when ${t.conditions.map((c) => conditionText(s, c)).join(" and ")}` : "";
+  return `${mods}${inputText(s, t)}${pressText(t)}${conds}`;
+}
+
+/** A trigger with defaults: plain press, no modifiers, no conditions. */
+export function newTrigger(input: TriggerInput): Trigger {
+  return { ...input, press: { kind: "press" }, modifiers: [], conditions: [] };
+}
+
+/** Whether the trigger's input is a button or hat direction (it has press kinds). */
+export const isDigital = (t: TriggerInput) => t.type === "button" || t.type === "hat";
+
+/** Same button or hat direction. */
+export function sameInput(a: TriggerInput, b: TriggerInput): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === "button" && b.type === "button") return a.device === b.device && a.index === b.index;
+  if (a.type === "hat" && b.type === "hat") return a.device === b.device && a.index === b.index && a.direction === b.direction;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export const CONTROL_TYPES: [ControlType, string, string][] = [
+  ["radio", "Radio", "several states, at most one active"],
+  ["toggle", "Toggle", "on or off"],
+  ["momentary", "Momentary", "on while held"],
+  ["counter", "Counter", "a value with range and step"],
+  ["mode", "Mode", "a layer: exactly one state; triggers can depend on it"],
+];
 
 export function sameTrigger(a: Trigger, b: Trigger): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
@@ -206,4 +270,35 @@ export function diagLine(e: DiagEntry): string {
   const level = e.level === "info" ? "" : ` ${e.level.toUpperCase()}`;
   const detail = e.detail ? `  (${e.detail})` : "";
   return `${diagTime(e.timeMs)} [${e.category}]${level}${device} ${e.text}${detail}`;
+}
+
+/** All trigger lists of a control. */
+export function triggerLists(kind: VirtualControlKind): Trigger[][] {
+  switch (kind.type) {
+    case "radio":
+      return [kind.increment, kind.decrement, kind.clear, kind.toggleOff, ...kind.states.map((s) => s.select)];
+    case "toggle":
+      return [kind.toggle, kind.on, kind.off];
+    case "momentary":
+      return [kind.triggers];
+    case "counter":
+      return [kind.increment, kind.decrement, kind.reset];
+    case "mode":
+      return [kind.next, kind.previous, ...kind.states.flatMap((s) => [s.select, s.shift])];
+  }
+}
+
+/** All actions of a control. */
+export function controlActions(kind: VirtualControlKind): Action[] {
+  switch (kind.type) {
+    case "radio":
+    case "mode":
+      return kind.states.flatMap((s) => [...s.onActivate, ...s.onDeactivate]);
+    case "toggle":
+      return [...kind.onOn, ...kind.onOff];
+    case "momentary":
+      return [...kind.onPress, ...kind.onRelease];
+    case "counter":
+      return kind.onChange;
+  }
 }

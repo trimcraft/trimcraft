@@ -65,6 +65,44 @@ A virtual control is built from physical inputs and can run actions. The first k
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
   active state highlighted.
 
+### More control kinds
+
+**New …** offers five kinds; each lives in a profile, can go on the overlay and keeps its state
+across restarts (unless set to start empty).
+
+- **Toggle**: on or off. Triggers toggle, switch on, switch off; actions on switching on and off.
+  Overlay: name and an ON/OFF lamp.
+- **Momentary**: on only while a trigger is held (a button, hat direction or axis zone); off when
+  the last one is released, even if the profile changed meanwhile. Actions on press and on
+  release; **invert** makes it on while nothing is held.
+- **Counter**: a value with minimum, maximum, step, wrap or stop and decimals (like the Hardware
+  Test counters, which stay as they are). Triggers increment, decrement and reset (encoders,
+  buttons, hats, zones); actions on every change can use the new value as `{value}`.
+- **Mode** (layer): like a radio with exactly one state active, the first by default, no "all
+  off". States are selected latching (select, next, previous) or as a **shift**: while a
+  trigger is held the mode is in that state, on release it goes back. A latching change while
+  shifted ends the shift.
+
+### Triggers
+
+Click a trigger in the editor to set more than the input:
+
+- **Press kind** (buttons and hat directions): press (default), release, **long press** (held at
+  least 500 ms, configurable) or **double press** (second press within 300 ms, configurable). If a
+  button has a long or double press trigger in the active profile, its plain presses fire on
+  release instead (a "short press"; with a double press, once the window has passed), so a long
+  press does not also fire the short one. The editor marks such triggers *short*. Momentary
+  controls and shifts always react to the press itself.
+- **Modifiers**: buttons (any device) that must be held. The most specific trigger wins: with
+  `Shift + Button 4` assigned, Button 4 alone does not fire while Shift is held.
+- **Only when**: one or more conditions "Mode X is in state S" (all must hold).
+- **Axis zones**: assign by moving an axis (a quarter of its range); the zone (0–100 %) is set on
+  a live axis bar. It fires on entering, optionally on leaving, with 2 % hysteresis so jitter at
+  the edge does not fire again. Where the axis is at startup counts as the start.
+
+Long and double presses are timed from the input's own timestamps; Detent wakes up exactly when
+one is due instead of polling.
+
 ### Recording macros
 
 Every keyboard and mouse macro has a **● Record** button. After a 3-second countdown (switch

@@ -23,7 +23,7 @@ import type {
   OverlayItem,
   ProcessWindow,
   ProfileSwitching,
-  RadioCommand,
+  ControlCommand,
   RecordKind,
   RecorderConfig,
   Sound,
@@ -53,10 +53,12 @@ export interface Backend {
   keys(): Promise<KeyInfo[]>;
   saveVirtualControl(control: VirtualControlDef): Promise<string>;
   removeVirtualControl(id: string): Promise<void>;
-  /** Sets the active state without running actions. */
+  /** Sets the state without running actions: radio/mode state, toggle on ("on") or off (null). */
   setRadioActive(id: string, state: string | null): Promise<void>;
   /** Runs a command like a trigger would, including actions. */
-  commandRadio(id: string, command: RadioCommand): Promise<void>;
+  commandRadio(id: string, command: ControlCommand): Promise<void>;
+  /** Sets a counter control's value without running actions. */
+  setControlValue(id: string, value: number): Promise<void>;
   toggleOverlayVirtualControl(id: string): Promise<boolean>;
   startLearn(): Promise<void>;
   stopLearn(): Promise<void>;
@@ -149,6 +151,7 @@ async function tauriBackend(): Promise<Backend> {
     removeVirtualControl: (id) => invoke("remove_virtual_control", { id }),
     setRadioActive: (id, state) => invoke("set_radio_active", { id, state }),
     commandRadio: (id, command) => invoke("command_radio", { id, command }),
+    setControlValue: (id, value) => invoke("set_control_value", { id, value }),
     toggleOverlayVirtualControl: (id) => invoke("toggle_overlay_virtual_control", { id }),
     startLearn: () => invoke("start_learn"),
     stopLearn: () => invoke("stop_learn"),

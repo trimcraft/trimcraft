@@ -13,6 +13,15 @@ expect rough edges, and back up your configuration before updating.
   (applied for), what is signed, who approves, and every way Trimcraft uses the network. The
   release workflow is prepared to sign the program and installer once the project is approved.
 
+### Fixed
+
+- **New installations**: the main window no longer stays on "Starting…", and Virtual Controls and
+  Hardware Test open again. Without any overlay widget (as on every new installation) the overlay
+  settings reached the window without their widget list, and both pages failed to render.
+- A page that fails to render now shows the error with a "Try again" button instead of breaking
+  the navigation, and a start that takes longer than usual says so instead of showing
+  "Starting…" forever.
+
 ## [0.1.0] - 2026-10-13
 
 The first public release (early access), for Windows 10/11.

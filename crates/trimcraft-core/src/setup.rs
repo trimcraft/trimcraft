@@ -33,6 +33,19 @@ use thiserror::Error;
 /// backups and imports point at the migrated Credential Manager entries.
 pub const SETUP_SCHEMA_VERSION: u32 = 5;
 
+/// Writes the overlay settings without the `widgets` key; the profiles hold the widgets.
+fn overlay_without_widgets<S: serde::Serializer>(
+    overlay: &OverlayConfig,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::Error;
+    let mut value = serde_json::to_value(overlay).map_err(S::Error::custom)?;
+    if let Value::Object(map) = &mut value {
+        map.remove("widgets");
+    }
+    value.serialize(serializer)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ButtonPair {
@@ -53,7 +66,8 @@ pub struct Setup {
     pub active_profile: String,
     pub profile_switching: ProfileSwitching,
     /// Global overlay settings. The widgets are stored per profile, so `overlay.widgets` is
-    /// always empty here.
+    /// always empty here and left out of the file.
+    #[serde(serialize_with = "overlay_without_widgets")]
     pub overlay: OverlayConfig,
     pub detector: DetectorConfig,
     /// Macro recorder settings. Missing in files from before the recorder.
@@ -423,6 +437,15 @@ mod tests {
         assert_eq!(v["activeProfile"], DEFAULT_PROFILE_ID);
         assert_eq!(v["profileSwitching"]["noMatch"], "keepCurrent");
         assert_eq!(Setup::from_json(&out).unwrap(), s);
+    }
+
+    #[test]
+    fn a_new_setup_file_leaves_the_overlay_widgets_out() {
+        let out = Setup::default().to_json();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v["overlay"].get("widgets").is_none());
+        assert_eq!(v["overlay"]["hotkey"], "Ctrl+Shift+F10");
+        assert_eq!(Setup::from_json(&out).unwrap(), Setup::default());
     }
 
     #[test]

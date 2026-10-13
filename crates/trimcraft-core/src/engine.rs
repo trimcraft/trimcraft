@@ -3456,6 +3456,19 @@ mod tests {
         assert_eq!(json["recorderConfig"]["stopHotkey"], "Ctrl+Shift+F9");
     }
 
+    /// A fresh installation has no overlay widgets; the UI still reads the list (v0.1.0 left
+    /// it out and the Virtual Controls and Hardware Test pages failed to render).
+    #[test]
+    fn snapshot_json_of_a_new_setup_has_an_empty_widget_list() {
+        let engine = Engine::new(
+            DeviceRegistry::default(),
+            Setup::default(),
+            &BTreeMap::new(),
+        );
+        let json = serde_json::to_value(engine.snapshot()).unwrap();
+        assert_eq!(json["overlay"]["widgets"], serde_json::json!([]));
+    }
+
     #[test]
     fn connectors_gate_actions_and_show_their_status() {
         use crate::connection::ConnectorStatus;

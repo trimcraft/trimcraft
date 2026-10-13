@@ -7,7 +7,7 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-13
 
 The first public release (early access). Windows 10/11 only.
 

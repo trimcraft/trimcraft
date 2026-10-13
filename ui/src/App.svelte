@@ -47,7 +47,7 @@
   {#if snapshot}<ProfileSelector {snapshot} />{/if}
   {#if meta}
     {#if !isTauri}<span class="badge warn">browser demo, not connected to devices</span>{/if}
-    <span class="version muted mono" title="Detent {meta.version} · input backend: {meta.backend} · running as administrator: {elevated ? 'yes' : 'no'}">v{meta.version}</span>
+    <span class="version muted mono" title="Trimcraft {meta.version} · input backend: {meta.backend} · running as administrator: {elevated ? 'yes' : 'no'}">v{meta.version}</span>
   {/if}
   <button class="gear" class:current={nav.section === "settings"} title="Settings" aria-label="Settings" onclick={() => show("settings")}>⚙</button>
 </header>
@@ -56,7 +56,7 @@
   {#if snapshot.backendError}<p class="error banner">Input backend failed: {snapshot.backendError}</p>{/if}
   {#if snapshot.shell.elevatedForeground}
     <p class="warn banner">
-      {snapshot.shell.elevatedForeground} runs as administrator; Detent's keys and mouse will not reach it.
+      {snapshot.shell.elevatedForeground} runs as administrator; Trimcraft's keys and mouse will not reach it.
       <button class="link" onclick={() => show("settings")}>Settings</button>
     </p>
   {/if}

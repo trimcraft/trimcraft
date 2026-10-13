@@ -21,12 +21,12 @@ use crate::soundpad::Soundpad;
 use crate::speech::{Speech, Utterance};
 use crate::voicemeeter::Voicemeeter;
 use crate::{input, launch, volume, webhook};
-use detent_core::diagnostics::action_record;
-use detent_core::{Action, ActionEvent, ActionRequest, Diagnostics, InputOp, Phase};
 use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use trimcraft_core::diagnostics::action_record;
+use trimcraft_core::{Action, ActionEvent, ActionRequest, Diagnostics, InputOp, Phase};
 
 /// Called once with the outcome of a long-running action ("Spoken", "HTTP 204", ...).
 pub type Done = Box<dyn FnOnce(Result<String, String>) + Send>;
@@ -55,7 +55,7 @@ impl Executor {
         let log = diagnostics.clone();
         let (queue, requests) = channel::<ActionRequest>();
         std::thread::Builder::new()
-            .name("detent-actions".into())
+            .name("trimcraft-actions".into())
             .spawn(move || {
                 for request in requests {
                     run(&app, &request, &services, &log);
@@ -178,13 +178,13 @@ fn run(app: &AppHandle, request: &ActionRequest, services: &Services, diagnostic
         Action::Launch(l) => {
             let (target, wait) = (l.target.clone(), l.wait);
             long_running(&record, wait, move |done| {
-                in_background("detent-launch", done, move || launch::run(&target, wait));
+                in_background("trimcraft-launch", done, move || launch::run(&target, wait));
             });
         }
         Action::Http(r) => {
             let prepared = r.prepare(&request.placeholders());
             long_running(&record, r.wait, move |done| {
-                in_background("detent-http", done, move || webhook::send(&prepared));
+                in_background("trimcraft-http", done, move || webhook::send(&prepared));
             });
         }
         Action::InputMacro(_) => match services.player.play(request) {

@@ -3,7 +3,7 @@
 
 import type { MonitorRef, MacroStep } from "./types";
 
-/** Same as detent-core's recording::COUNTDOWN_MS. */
+/** Same as trimcraft-core's recording::COUNTDOWN_MS. */
 export const COUNTDOWN_MS = 3000;
 
 export type RecordMode = "append" | "replace";

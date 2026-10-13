@@ -138,7 +138,7 @@ export interface Backend {
   testToast(): Promise<void>;
   /** Saves the Settings page and registers or removes autostart to match. */
   setSettings(settings: AppSettings): Promise<void>;
-  /** Starts Detent as administrator (UAC prompt) and quits this instance. */
+  /** Starts Trimcraft as administrator (UAC prompt) and quits this instance. */
   restartElevated(): Promise<void>;
   /** Makes a profile active (no actions run). */
   selectProfile(id: string): Promise<void>;
@@ -166,7 +166,7 @@ async function tauriBackend(): Promise<Backend> {
   return {
     meta: () => invoke("get_meta"),
     async subscribe(onSnapshot) {
-      const unlisten = await listen<EngineSnapshot>("detent://snapshot", (e) => onSnapshot(e.payload));
+      const unlisten = await listen<EngineSnapshot>("trimcraft://snapshot", (e) => onSnapshot(e.payload));
       onSnapshot(await invoke<EngineSnapshot>("get_snapshot"));
       return unlisten;
     },
@@ -221,7 +221,7 @@ async function tauriBackend(): Promise<Backend> {
     storeHttpSecret: (value) => invoke("store_http_secret", { value }),
     async subscribeDiagnostics(onBatch) {
       // Listen first, then fetch the buffer: nothing is missed, a few entries may arrive twice.
-      const unlisten = await listen<DiagEntry[]>("detent://diagnostics", (e) => onBatch(e.payload));
+      const unlisten = await listen<DiagEntry[]>("trimcraft://diagnostics", (e) => onBatch(e.payload));
       onBatch(await invoke<DiagEntry[]>("get_diagnostics"));
       return unlisten;
     },
@@ -239,7 +239,7 @@ async function tauriBackend(): Promise<Backend> {
     setToastSettings: (settings) => invoke("set_toast_settings", { settings }),
     setToastPosition: (position) => invoke("set_toast_position", { position }),
     async subscribeToasts(onToasts) {
-      const unlisten = await listen<Toast[]>("detent://toasts", (e) => onToasts(e.payload));
+      const unlisten = await listen<Toast[]>("trimcraft://toasts", (e) => onToasts(e.payload));
       onToasts(await invoke<Toast[]>("get_toasts"));
       return unlisten;
     },

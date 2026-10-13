@@ -1,4 +1,4 @@
-//! Detent desktop app: wires the engine to the input backend, the windows and the disk.
+//! Trimcraft desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod autostart;
 mod backups;
@@ -9,6 +9,7 @@ mod executor;
 mod foreground;
 mod input;
 mod launch;
+mod migration;
 mod overlay;
 mod player;
 mod profile_watch;
@@ -26,11 +27,6 @@ mod voicemeeter;
 mod volume;
 mod webhook;
 
-use detent_core::diagnostics::action_record;
-use detent_core::settings::{self, AUTOSTART_ARG};
-use detent_core::{
-    ActionEvent, Category, DeviceRegistry, Diagnostics, Engine, Level, Record, Setup, ShellStatus,
-};
 use discord::Discord;
 use executor::Executor;
 use serde::Serialize;
@@ -41,6 +37,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use storage::Storage;
 use tauri::{AppHandle, Emitter, Manager};
+use trimcraft_core::diagnostics::action_record;
+use trimcraft_core::settings::{self, AUTOSTART_ARG};
+use trimcraft_core::{
+    ActionEvent, Category, DeviceRegistry, Diagnostics, Engine, Level, Record, Setup, ShellStatus,
+};
 
 const DEVICES_FILE: &str = "devices.json";
 const SETUP_FILE: &str = "setup.json";
@@ -61,7 +62,7 @@ pub struct Meta {
     data_dir: String,
     log_dir: String,
     platform: String,
-    /// Detent runs as administrator.
+    /// Trimcraft runs as administrator.
     elevated: bool,
 }
 
@@ -84,13 +85,13 @@ pub struct Shared {
     /// The profile last reported in the log.
     logged_profile: Mutex<String>,
     /// The vJoy output last handed to the vJoy thread.
-    vjoy_sent: Mutex<detent_core::vjoy::VjoyState>,
+    vjoy_sent: Mutex<trimcraft_core::vjoy::VjoyState>,
     /// The input backend's clock (event timestamps), for timed outputs started by commands.
     clock: fn() -> u64,
     backups: Arc<backups::Backups>,
     toasts: Arc<toasts::Toasts>,
     /// An import file the user picked and has not applied yet.
-    pending_import: Mutex<Option<detent_core::transfer::ImportFile>>,
+    pending_import: Mutex<Option<trimcraft_core::transfer::ImportFile>>,
 }
 
 impl Shared {
@@ -222,6 +223,8 @@ pub fn run() {
     if elevation::forward_to_elevated_instance(&identifier) {
         return;
     }
+    // Before the log plugin creates the new folders and before the setup loads.
+    let migrated = migration::folders(&identifier);
     tauri::Builder::default()
         // First, so a second launch ends before anything else starts.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -234,7 +237,7 @@ pub fn run() {
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("detent".into()),
+                        file_name: Some("trimcraft".into()),
                     }),
                     // Warnings and errors also go to the event log.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(
@@ -267,7 +270,7 @@ pub fn run() {
                         let shared = Arc::clone(&shared);
                         // Stopping waits for the macro threads; not on the event loop.
                         let _ = std::thread::Builder::new()
-                            .name("detent-panic".into())
+                            .name("trimcraft-panic".into())
                             .spawn(move || {
                                 shared.player.panic();
                                 // Then vJoy: buttons released, POVs centred (axes stay).
@@ -282,6 +285,9 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
+            migrated.log(&diagnostics);
+            // Before the connectors start and look for their secrets.
+            migration::credentials(&diagnostics);
             let handle = app.handle().clone();
             let storage = Storage::new(handle.path().app_config_dir()?)?;
             let (setup, first_run) = load_setup(&storage);
@@ -297,7 +303,7 @@ pub fn run() {
                 elevation::allow_forwarding(&identifier);
             }
             let hidden = !show && settings::start_hidden(&setup.settings, autostarted, first_run);
-            let backend = detent_input::default_backend();
+            let backend = trimcraft_input::default_backend();
             let shared = Arc::new(load(
                 &handle,
                 backend.name(),
@@ -309,6 +315,7 @@ pub fn run() {
             )?);
             app.manage(shared.clone());
             report_connectors(&shared);
+            migrate_autostart(&shared);
             sync_autostart(&shared);
             tray::create(&handle, shared.engine().setup().overlay.visible)?;
             overlay::create(&handle, &shared)?;
@@ -337,12 +344,12 @@ pub fn run() {
         })
         .invoke_handler(commands::handler())
         .build(context)
-        .expect("error while building Detent")
+        .expect("error while building Trimcraft")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event
                 && let Some(shared) = app.try_state::<Arc<Shared>>()
             {
-                // Nothing stays pressed after Detent is gone: macros stop and release their
+                // Nothing stays pressed after Trimcraft is gone: macros stop and release their
                 // keys first, then vJoy releases its buttons and gives the devices back.
                 shared.player.shutdown();
                 shared.vjoy.shutdown();
@@ -373,7 +380,7 @@ fn close_main(window: &tauri::Window, api: &tauri::CloseRequestApi) {
         let shown = app
             .notification()
             .builder()
-            .title("Detent keeps running in the tray")
+            .title("Trimcraft keeps running in the tray")
             .body("Inputs, actions and the overlay stay active. Quit from the tray icon's menu.")
             .show();
         if let Err(e) = shown {
@@ -382,12 +389,24 @@ fn close_main(window: &tauri::Window, api: &tauri::CloseRequestApi) {
     }
 }
 
+/// Removes Detent's autostart (Trimcraft's former name), in the background (schtasks). Touches
+/// none of Trimcraft's own entries, so it can run alongside [`sync_autostart`].
+fn migrate_autostart(shared: &Arc<Shared>) {
+    let (elevated, diagnostics) = (shared.meta.elevated, shared.diagnostics.clone());
+    let spawned = std::thread::Builder::new()
+        .name("trimcraft-migration".into())
+        .spawn(move || migration::autostart(elevated, &diagnostics));
+    if let Err(e) = spawned {
+        log::error!("could not start the autostart migration: {e}");
+    }
+}
+
 /// Registers or removes autostart to match the settings, in the background (schtasks takes a
 /// moment), and reports the result to the Settings page.
 pub fn sync_autostart(shared: &Arc<Shared>) {
     let shared = Arc::clone(shared);
     let spawned = std::thread::Builder::new()
-        .name("detent-autostart".into())
+        .name("trimcraft-autostart".into())
         .spawn(move || {
             let settings = shared.engine().setup().settings.clone();
             let (autostart, note) = autostart::sync(&settings, shared.meta.elevated);
@@ -428,7 +447,7 @@ fn load(
 ) -> Result<Shared, Box<dyn std::error::Error>> {
     let registry: DeviceRegistry = storage.load_json(DEVICES_FILE).unwrap_or_default();
     let values: BTreeMap<String, f64> = storage.load_json(VALUES_FILE).unwrap_or_default();
-    let control_states: BTreeMap<String, detent_core::RadioMemory> =
+    let control_states: BTreeMap<String, trimcraft_core::RadioMemory> =
         storage.load_json(CONTROL_STATES_FILE).unwrap_or_default();
     let meta = Meta {
         version: app.package_info().version.to_string(),
@@ -443,7 +462,7 @@ fn load(
         elevated,
     };
     log::info!(
-        "Detent {} on {}, input backend {}, administrator: {}",
+        "Trimcraft {} on {}, input backend {}, administrator: {}",
         meta.version,
         meta.platform,
         meta.backend,
@@ -491,7 +510,7 @@ fn load(
         player,
         meta,
         logged_profile: Mutex::new(String::new()),
-        vjoy_sent: Mutex::new(detent_core::vjoy::VjoyState::default()),
+        vjoy_sent: Mutex::new(trimcraft_core::vjoy::VjoyState::default()),
         clock,
         backups,
         toasts: toasts::Toasts::spawn(app.clone()),
@@ -501,11 +520,15 @@ fn load(
 
 /// Input thread: applies every backend event to the engine as it arrives, emits snapshots to
 /// the windows at most once per frame, and saves changes.
-fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_input::InputBackend>) {
+fn start_input(
+    app: AppHandle,
+    shared: Arc<Shared>,
+    backend: Box<dyn trimcraft_input::InputBackend>,
+) {
     std::thread::Builder::new()
-        .name("detent-engine".into())
+        .name("trimcraft-engine".into())
         .spawn(move || {
-            let backend = detent_input::spawn(backend);
+            let backend = trimcraft_input::spawn(backend);
             let mut backend_alive = true;
             let mut last_emit = Instant::now();
             let mut last_values_save = Instant::now();
@@ -559,7 +582,7 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
                 if last_emit.elapsed() >= FRAME && shared.changed.swap(false, Ordering::Relaxed) {
                     last_emit = Instant::now();
                     let snapshot = shared.engine().snapshot();
-                    if let Err(e) = app.emit("detent://snapshot", &snapshot) {
+                    if let Err(e) = app.emit("trimcraft://snapshot", &snapshot) {
                         log::warn!("could not send snapshot: {e}");
                     }
                 }
@@ -570,7 +593,7 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
 }
 
 /// One foreground watcher for both consumers: the engine switches profiles as set, and the
-/// main window warns when the foreground program runs as administrator and Detent does not.
+/// main window warns when the foreground program runs as administrator and Trimcraft does not.
 fn watch_foreground(shared: &Arc<Shared>) {
     let weak = Arc::downgrade(shared);
     foreground::watch(move |fg| {
@@ -582,7 +605,7 @@ fn watch_foreground(shared: &Arc<Shared>) {
 
 /// Connector status changes go into the engine, so both windows see them.
 fn report_connectors(shared: &Arc<Shared>) {
-    use detent_core::ConnectorId;
+    use trimcraft_core::ConnectorId;
     let reporter = |id: ConnectorId| {
         let weak = Arc::downgrade(shared);
         move |state| {
@@ -628,7 +651,7 @@ const DIAGNOSTICS_BATCH: Duration = Duration::from_millis(100);
 /// Sends entries recorded since the last batch to the windows as one event.
 fn start_diagnostics(app: AppHandle, diagnostics: Diagnostics) {
     std::thread::Builder::new()
-        .name("detent-diagnostics".into())
+        .name("trimcraft-diagnostics".into())
         .spawn(move || {
             let mut cursor = diagnostics.all().last().map_or(0, |e| e.seq);
             loop {
@@ -636,7 +659,7 @@ fn start_diagnostics(app: AppHandle, diagnostics: Diagnostics) {
                 let batch = diagnostics.since(cursor);
                 let Some(last) = batch.last() else { continue };
                 cursor = last.seq;
-                if let Err(e) = app.emit("detent://diagnostics", &batch) {
+                if let Err(e) = app.emit("trimcraft://diagnostics", &batch) {
                     // Not logged as a warning: that would itself become an entry.
                     log::debug!("could not send diagnostics: {e}");
                 }

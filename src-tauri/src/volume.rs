@@ -5,7 +5,7 @@
 //! The calls are quick and run on the calling thread (the action thread).
 
 use crate::elevation;
-use detent_core::audio::{VolumeCommand, VolumeTarget};
+use trimcraft_core::audio::{VolumeCommand, VolumeTarget};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
     DEVICE_STATE_ACTIVE, IAudioSessionControl2, IAudioSessionManager2, IMMDevice,
@@ -106,7 +106,7 @@ pub fn apply(target: &VolumeTarget, command: VolumeCommand) -> Result<String, St
     }
 }
 
-fn result_text(who: &str, change: detent_core::audio::VolumeChange) -> String {
+fn result_text(who: &str, change: trimcraft_core::audio::VolumeChange) -> String {
     match (change.level, change.mute) {
         (Some(level), _) => format!("{who} at {:.0}%", level * 100.0),
         (None, Some(true)) => format!("{who} muted"),

@@ -7,9 +7,9 @@
 //! Voices: the classic SAPI voices and the newer OneCore voices Windows installs per language.
 
 use crate::executor::Done;
-use detent_core::audio::VoiceRef;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::Duration;
+use trimcraft_core::audio::VoiceRef;
 
 /// How often a running speech is checked for having finished.
 const POLL: Duration = Duration::from_millis(50);
@@ -35,7 +35,7 @@ impl Speech {
     pub fn spawn() -> Self {
         let (queue, jobs) = channel();
         std::thread::Builder::new()
-            .name("detent-speech".into())
+            .name("trimcraft-speech".into())
             .spawn(move || platform::run(jobs))
             .expect("spawn speech thread");
         Self { queue }

@@ -1,4 +1,4 @@
-// Mirrors the serialised Rust types in detent-core (camelCase JSON).
+// Mirrors the serialised Rust types in trimcraft-core (camelCase JSON).
 
 export type DeviceId = string;
 
@@ -150,7 +150,7 @@ export interface ToastSettings {
   profileToast: boolean;
 }
 
-/** A toast on the overlay (detent-core toast::Toast). A title ending in ":" is followed by a space, any other by " · ". */
+/** A toast on the overlay (trimcraft-core toast::Toast). A title ending in ":" is followed by a space, any other by " · ". */
 export interface Toast {
   id: number;
   key: string;
@@ -211,11 +211,11 @@ export interface EngineSnapshot {
   profiles: ProfileView[];
   activeProfile: string;
   profileSwitching: ProfileSwitching;
-  /** The program in the foreground (not Detent), as auto-switching sees it. */
+  /** The program in the foreground (not Trimcraft), as auto-switching sees it. */
   foreground: string | null;
   /** The active profile's physical-to-vJoy mappings. */
   vjoyMappings: VjoyMapping[];
-  /** What Detent wants on the vJoy devices now (empty while vJoy is disabled). */
+  /** What Trimcraft wants on the vJoy devices now (empty while vJoy is disabled). */
   vjoyOutput: VjoyStateView;
   /** The active profile's virtual controls. */
   virtualControls: VirtualControlView[];
@@ -243,17 +243,17 @@ export interface AppMeta {
   dataDir: string;
   logDir: string;
   platform: string;
-  /** Detent runs as administrator. */
+  /** Trimcraft runs as administrator. */
   elevated: boolean;
 }
 
-// --- Virtual controls (detent-core: virtual_control.rs, action.rs) ---------------------------
+// --- Virtual controls (trimcraft-core: virtual_control.rs, action.rs) ------------------------
 
 export type HatDirection = "up" | "upRight" | "right" | "downRight" | "down" | "downLeft" | "left" | "upLeft";
 
 export type StepDirection = "decrement" | "increment";
 
-/** What a trigger listens to (detent-core trigger.rs). */
+/** What a trigger listens to (trimcraft-core trigger.rs). */
 export type TriggerInput =
   | { type: "button"; device: DeviceId; index: number }
   /** Pressed while the hat points that way. */
@@ -263,7 +263,7 @@ export type TriggerInput =
   | { type: "axisZone"; device: DeviceId; index: number; min: number; max: number };
 
 /** Press: on press (a short press on release if the input also has long or double triggers).
- *  For axis zones press = entering, release = leaving; encoder detents only press. */
+ *  For axis zones press = entering, release = leaving; encoder notches only press. */
 export type PressKind = { kind: "press" } | { kind: "release" } | { kind: "long"; ms: number } | { kind: "double"; ms: number };
 
 /** A button that must be held as a modifier. */
@@ -379,7 +379,7 @@ export type Action =
   | LaunchAction
   | HttpAction;
 
-// --- More actions (detent-core: audio.rs, voicemeeter.rs, launch.rs, webhook.rs) -------------
+// --- More actions (trimcraft-core: audio.rs, voicemeeter.rs, launch.rs, webhook.rs) ----------
 
 /** An installed Windows voice; looked up by id. */
 export interface VoiceRef {
@@ -472,7 +472,7 @@ export interface HttpAction {
   wait: boolean;
 }
 
-// --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
+// --- Macro recorder (trimcraft-core: recording.rs) -------------------------------------------
 
 /** What a recording takes. */
 export interface RecordKind {
@@ -502,7 +502,7 @@ export interface RecorderView {
   error: string | null;
 }
 
-// --- Soundpad (detent-core: soundpad.rs) ------------------------------------------------------
+// --- Soundpad (trimcraft-core: soundpad.rs) ---------------------------------------------------
 
 /** A sound as stored in actions: by title and path, never by index (indices shift). */
 export interface SoundRef {
@@ -529,7 +529,7 @@ export interface Sound {
   duration: string;
 }
 
-// --- Discord (detent-core: discord.rs) --------------------------------------------------------
+// --- Discord (trimcraft-core: discord.rs) -----------------------------------------------------
 
 /** Mute/deafen set the state (skipped when it already holds); toggles use the live state. */
 export type DiscordCommand = "mute" | "unmute" | "deafen" | "undeafen" | "toggleMute" | "toggleDeafen";
@@ -550,7 +550,7 @@ export interface VoiceState {
   deaf: boolean;
 }
 
-// --- Connections (detent-core: connection.rs) -------------------------------------------------
+// --- Connections (trimcraft-core: connection.rs) ----------------------------------------------
 
 export type ConnectorId = "soundpad" | "discord" | "voicemeeter" | "vjoy";
 
@@ -744,7 +744,7 @@ export interface KeyInfo {
  *  (radio, mode, counter), clear and toggle off (radio), toggle/on/off (toggle), reset (counter). */
 export type ControlCommand = "increment" | "decrement" | "clear" | "toggleOff" | "toggle" | "on" | "off" | "reset";
 
-// --- Diagnostics event log (detent-core diagnostics::Entry) ------------------------------------
+// --- Diagnostics event log (trimcraft-core diagnostics::Entry) ---------------------------------
 
 export type DiagCategory = "input" | "trigger" | "control" | "action" | "connector" | "output" | "log";
 export type DiagLevel = "info" | "warn" | "error";
@@ -763,10 +763,10 @@ export interface DiagEntry {
   detail: string | null;
 }
 
-// --- Settings page (detent-core: settings.rs) ------------------------------------------------
+// --- Settings page (trimcraft-core: settings.rs) ---------------------------------------------
 
 export interface AppSettings {
-  /** The close button hides the window; Detent keeps running in the tray. */
+  /** The close button hides the window; Trimcraft keeps running in the tray. */
   closeToTray: boolean;
   startWithWindows: boolean;
   /** Start in the tray, also when started by hand (a start by Windows always does). */
@@ -779,7 +779,7 @@ export interface AppSettings {
   panicHotkey: string;
 }
 
-/** How Detent is started at logon: Run registry value or elevated Task Scheduler task. */
+/** How Trimcraft is started at logon: Run registry value or elevated Task Scheduler task. */
 export type AutostartKind = "off" | "runKey" | "task";
 
 export interface ShellStatus {
@@ -788,11 +788,11 @@ export interface ShellStatus {
   autostart: AutostartKind;
   /** Why autostart differs from the settings, or why changing it failed. */
   autostartNote: string | null;
-  /** The foreground program runs as administrator and Detent does not: its name. */
+  /** The foreground program runs as administrator and Trimcraft does not: its name. */
   elevatedForeground: string | null;
 }
 
-// --- Profiles (detent-core: profile.rs) -------------------------------------------------------
+// --- Profiles (trimcraft-core: profile.rs) ----------------------------------------------------
 
 /** A profile without its controls and widgets (the snapshot carries the active profile's). */
 export interface ProfileView {
@@ -819,7 +819,7 @@ export interface ProcessWindow {
   title: string;
 }
 
-// --- vJoy output (detent-core: vjoy.rs) -------------------------------------------------------
+// --- vJoy output (trimcraft-core: vjoy.rs) ----------------------------------------------------
 
 export type VjoyAxis = "x" | "y" | "z" | "rx" | "ry" | "rz" | "slider0" | "slider1";
 
@@ -882,7 +882,7 @@ export interface VjoyStateView {
   povs: { pov: VjoyPov; direction: HatDirection }[];
 }
 
-export type DeviceOwner = "free" | "detent" | "other" | "missing";
+export type DeviceOwner = "free" | "trimcraft" | "other" | "missing";
 
 export interface VjoyDeviceInfo {
   id: number;
@@ -899,7 +899,7 @@ export interface VjoyInfo {
   devices: VjoyDeviceInfo[];
 }
 
-// --- Backup and transfer (detent-core: backup.rs, transfer.rs) --------------------------------
+// --- Backup and transfer (trimcraft-core: backup.rs, transfer.rs) -----------------------------
 
 export interface BackupInfo {
   /** File name; the id for restoring. */
@@ -924,7 +924,7 @@ export interface ImportProfileSummary {
 export interface ImportSummary {
   kind: ExportKind;
   exportedAt: string | null;
-  detentVersion: string | null;
+  trimcraftVersion: string | null;
   schemaVersion: number;
   profiles: ImportProfileSummary[];
   /** Fields left out when exporting (credentials); they have to be entered again. */

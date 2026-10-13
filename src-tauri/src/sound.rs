@@ -37,7 +37,7 @@ impl Sound {
     pub fn spawn() -> Self {
         let (queue, jobs) = channel();
         std::thread::Builder::new()
-            .name("detent-sound".into())
+            .name("trimcraft-sound".into())
             .spawn(move || run(jobs))
             .expect("spawn sound thread");
         Self { queue }

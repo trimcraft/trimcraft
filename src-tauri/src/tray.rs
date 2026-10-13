@@ -1,4 +1,4 @@
-//! The tray icon: always present while Detent runs. Left click shows the main window; the
+//! The tray icon: always present while Trimcraft runs. Left click shows the main window; the
 //! menu has Show window, Overlay visible (kept in sync with the hotkey) and Quit.
 
 use crate::overlay;
@@ -28,8 +28,8 @@ pub fn create(app: &AppHandle, overlay_visible: bool) -> tauri::Result<()> {
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &overlay, &separator, &quit])?;
-    let mut builder = TrayIconBuilder::with_id("detent")
-        .tooltip("Detent")
+    let mut builder = TrayIconBuilder::with_id("trimcraft")
+        .tooltip("Trimcraft")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {

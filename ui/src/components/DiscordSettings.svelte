@@ -119,7 +119,7 @@
 </script>
 
 <p class="muted small">
-  Mutes and deafens you in Discord through the Discord desktop app's local interface. Detent uses a Discord application that
+  Mutes and deafens you in Discord through the Discord desktop app's local interface. Trimcraft uses a Discord application that
   you create yourself (free, takes about two minutes); its Client ID and Client Secret go into the fields below.
 </p>
 
@@ -138,7 +138,7 @@
         your Discord account.
       </li>
       <li>
-        Click <b>New Application</b> (top right). Enter a name, e.g. <i>Detent</i>, tick the box to accept the Developer
+        Click <b>New Application</b> (top right). Enter a name, e.g. <i>Trimcraft</i>, tick the box to accept the Developer
         Terms of Service and Developer Policy, and click <b>Create</b>. Your application's <i>General Information</i> page
         opens.
       </li>
@@ -149,7 +149,7 @@
       <li class:marked={hint === 4}>
         On the same page, under <i>Client Secret</i>, click <b>Reset Secret</b> and confirm. Copy the secret and paste it into
         <b>Client Secret</b> below. Discord shows it only once; if you lose it, reset it again (and paste the new one here).
-        Detent needs it to turn your approval into a login; it is stored in the Windows Credential Manager, not in a file.
+        Trimcraft needs it to turn your approval into a login; it is stored in the Windows Credential Manager, not in a file.
       </li>
       <li class:marked={hint === 5}>
         Still on the OAuth2 page, under <i>Redirects</i>, click <b>Add Redirect</b> and enter
@@ -167,10 +167,10 @@
         app change voice settings at a time.
       </li>
       <li class:marked={hint === 8}>
-        Here in Detent: click <b>Save</b> below, tick the box next to <b>Discord</b> at the top of this card to enable it, and
+        Here in Trimcraft: click <b>Save</b> below, tick the box next to <b>Discord</b> at the top of this card to enable it, and
         click <b>Test connection</b>. Discord shows a window asking whether your application may access your account; click
         <b>Authorize</b>. Success: the status turns <span class="ok">● connected</span> and the test shows
-        <i>Connected as &lt;your name&gt;, mic muted: …, deafened: …</i>. You approve only once; Detent reconnects on its
+        <i>Connected as &lt;your name&gt;, mic muted: …, deafened: …</i>. You approve only once; Trimcraft reconnects on its
         own after restarts.
       </li>
       <li class:marked={hint === 9}>
@@ -180,7 +180,7 @@
       </li>
     </ol>
     {#if setup}
-      <p class="muted small">Detent asks Discord for: <span class="mono">{setup.scopes.join(", ")}</span> (read and change your mute and deafen state).</p>
+      <p class="muted small">Trimcraft asks Discord for: <span class="mono">{setup.scopes.join(", ")}</span> (read and change your mute and deafen state).</p>
     {/if}
   {/if}
 </div>

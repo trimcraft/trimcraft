@@ -5,13 +5,13 @@
 //! (http and https only, checked when the action is saved) and files are opened with
 //! `ShellExecuteW`, like a double click.
 //!
-//! A program started from an elevated Detent runs elevated too.
+//! A program started from an elevated Trimcraft runs elevated too.
 
 use crate::elevation::wide;
-use detent_core::launch::{LaunchTarget, exe_name};
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+use trimcraft_core::launch::{LaunchTarget, exe_name};
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -126,7 +126,7 @@ mod tests {
         let name = me.file_name().unwrap().to_string_lossy().into_owned();
         assert!(running(&name));
         assert!(running(&name.to_uppercase()));
-        assert!(!running("no-such-program-detent.exe"));
+        assert!(!running("no-such-program-trimcraft.exe"));
     }
 
     #[test]

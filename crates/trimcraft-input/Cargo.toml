@@ -1,0 +1,26 @@
+[package]
+name = "trimcraft-input"
+description = "Input backends for Trimcraft: SDL3 on Windows, plus a mock for development"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["sdl"]
+sdl = ["dep:sdl3-sys"]
+
+[dependencies]
+trimcraft-core.workspace = true
+log.workspace = true
+sdl3-sys = { version = "0.7", optional = true, default-features = false, features = [
+    "build-from-source-static",
+    "no-default-subsystems",
+    "sdl-joystick",
+    "sdl-hidapi",
+] }
+
+[lints]
+workspace = true

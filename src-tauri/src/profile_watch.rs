@@ -15,7 +15,7 @@ pub struct ProcessWindow {
     pub title: String,
 }
 
-/// A foreground change: the engine switches profiles as set. Detent's own windows count as
+/// A foreground change: the engine switches profiles as set. Trimcraft's own windows count as
 /// no program, so they never switch profiles.
 pub fn on_foreground(shared: &Shared, fg: &Foreground) {
     let mut engine = shared.engine();
@@ -24,7 +24,7 @@ pub fn on_foreground(shared: &Shared, fg: &Foreground) {
     }
 }
 
-/// Programs with a visible top-level window and a title, without Detent itself, sorted by
+/// Programs with a visible top-level window and a title, without Trimcraft itself, sorted by
 /// executable name.
 pub fn windows() -> Vec<ProcessWindow> {
     platform::windows()
@@ -40,7 +40,7 @@ mod platform {
     };
     use windows_sys::core::BOOL;
 
-    /// Executable file name of the program owning `hwnd`; `None` for Detent's own windows and
+    /// Executable file name of the program owning `hwnd`; `None` for Trimcraft's own windows and
     /// processes that cannot be opened.
     fn exe_of(hwnd: HWND) -> Option<String> {
         let mut pid = 0;

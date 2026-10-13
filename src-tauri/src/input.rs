@@ -1,7 +1,7 @@
 //! Synthesised keyboard and mouse input (`SendInput`), shared by the action executor and the
 //! macro player. Keys go out as scan codes, so games reading DirectInput or RawInput see them.
 
-use detent_core::{InputOp, MouseButton};
+use trimcraft_core::{InputOp, MouseButton};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
@@ -13,7 +13,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 const XBUTTON1: u32 = 1;
 const XBUTTON2: u32 = 2;
 const WHEEL_DELTA: i32 = 120;
-/// Marks input Detent synthesised ("DTNT"), so it can be told apart later.
+/// Marks input Trimcraft synthesised ("DTNT"), so it can be told apart later.
 const EXTRA_INFO: usize = 0x4454_4E54;
 
 fn keyboard(scan: u16, extended: bool, down: bool) -> INPUT {

@@ -1,5 +1,5 @@
 //! The Voicemeeter connector: gain and mute of strips and buses through the VoicemeeterRemote
-//! API (see `detent_core::voicemeeter`).
+//! API (see `trimcraft_core::voicemeeter`).
 //!
 //! The API's DLL (`VoicemeeterRemote64.dll`) is loaded dynamically from the Voicemeeter
 //! installation, found through its uninstall entry (or the default folder). Without an
@@ -10,19 +10,19 @@
 //! waits for Voicemeeter.
 
 use crate::elevation::wide;
-use detent_core::connection::{ConnectorState, ConnectorStatus, VoicemeeterSettings};
-use detent_core::voicemeeter::{self, VmCommand, VmTarget};
 use std::collections::HashMap;
 use std::ffi::{CString, c_char};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use trimcraft_core::connection::{ConnectorState, ConnectorStatus, VoicemeeterSettings};
+use trimcraft_core::voicemeeter::{self, VmCommand, VmTarget};
 
 const POLL: Duration = Duration::from_secs(5);
 const DLL: &str = "VoicemeeterRemote64.dll";
 const UNINSTALL_KEY: &str = r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\VB:Voicemeeter {17359A74-1236-5467}";
 const DEFAULT_DIR: &str = r"C:\Program Files (x86)\VB\Voicemeeter";
-/// A value Detent set is used instead of reading it back for this long: Voicemeeter applies
+/// A value Trimcraft set is used instead of reading it back for this long: Voicemeeter applies
 /// parameters asynchronously, so a quick second toggle would read the old value.
 const OWN_VALUE_FRESH: Duration = Duration::from_millis(500);
 
@@ -123,7 +123,7 @@ struct State {
     status: Mutex<ConnectorState>,
     /// Logged in to the API (and the API mutex: one call at a time).
     session: Mutex<bool>,
-    /// Values Detent set, with when.
+    /// Values Trimcraft set, with when.
     own: Mutex<HashMap<String, (f32, Instant)>>,
     wake: Mutex<bool>,
     woken: Condvar,
@@ -146,7 +146,7 @@ impl Voicemeeter {
         *lock(&state.settings) = settings;
         let worker = state.clone();
         std::thread::Builder::new()
-            .name("detent-voicemeeter".into())
+            .name("trimcraft-voicemeeter".into())
             .spawn(move || {
                 for (target, command) in commands {
                     if let Err(e) = worker.run(target, command) {
@@ -157,7 +157,7 @@ impl Voicemeeter {
             .expect("spawn voicemeeter thread");
         let monitor = state.clone();
         std::thread::Builder::new()
-            .name("detent-voicemeeter-monitor".into())
+            .name("trimcraft-voicemeeter-monitor".into())
             .spawn(move || monitor.monitor())
             .expect("spawn voicemeeter monitor");
         Self { queue, state }
@@ -370,7 +370,7 @@ impl State {
 mod tests {
     use super::*;
 
-    /// Needs Voicemeeter installed and running: `cargo test -p detent -- --ignored voicemeeter`.
+    /// Needs Voicemeeter installed and running: `cargo test -p trimcraft -- --ignored voicemeeter`.
     /// Changes nothing.
     #[test]
     #[ignore = "needs a running Voicemeeter"]

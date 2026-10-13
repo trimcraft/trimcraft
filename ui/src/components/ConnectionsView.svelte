@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Connections: external programs Detent talks to. Each connector can be enabled, has its
+  // Connections: external programs Trimcraft talks to. Each connector can be enabled, has its
   // own settings, a live status and a "Test connection" button. Its actions are offered in
   // the action editor only while it is enabled.
   import type { Connections, ConnectorId, ConnectorView, EngineSnapshot } from "../lib/types";
@@ -40,7 +40,7 @@
 <section class="panel">
   <h2>Connections</h2>
   <p class="muted small">
-    Programs and drivers Detent can control. Enable a connection to use its actions in Virtual Controls; actions of a disabled
+    Programs and drivers Trimcraft can control. Enable a connection to use its actions in Virtual Controls; actions of a disabled
     connection stay saved but do not run.
   </p>
   {#if error}<p class="error">{error}</p>{/if}
@@ -73,7 +73,7 @@
       {#if c.id === "soundpad"}
         <p class="muted small">
           Plays sounds through Soundpad's remote control (named pipe <span class="mono">\\.\pipe\sp_remote_control</span>).
-          Needs the full version of Soundpad running. While enabled, Detent reconnects on its own.
+          Needs the full version of Soundpad running. While enabled, Trimcraft reconnects on its own.
         </p>
         <div class="row settings">
           <label>Timeout per request
@@ -94,9 +94,9 @@
       {:else if c.id === "vjoy"}
         <p class="muted small">
           Feeds virtual joysticks (vJoy devices 1–16) that games see as controllers: state outputs of virtual controls,
-          vJoy mappings and vJoy actions. While enabled, Detent owns the devices the active profile uses and gives them back
+          vJoy mappings and vJoy actions. While enabled, Trimcraft owns the devices the active profile uses and gives them back
           when disabled or on exit. Axes, buttons and POVs of a device are set in <b>Configure vJoy</b> (vJoyConf, in the
-          Start menu); Detent cannot change them. Check the output with <b>vJoy Monitor</b> or Windows' <span class="mono">joy.cpl</span>.
+          Start menu); Trimcraft cannot change them. Check the output with <b>vJoy Monitor</b> or Windows' <span class="mono">joy.cpl</span>.
         </p>
         {#if c.vjoy?.version}
           <table class="devices">
@@ -108,8 +108,8 @@
                   <td>{d.axes.map(vjoyAxisName).join(", ") || "none"}</td>
                   <td class:warning={d.buttons === 0}>{d.buttons}</td>
                   <td>{d.continuousPovs ? `${d.continuousPovs} (8-way)` : d.discretePovs ? `${d.discretePovs} (4-way)` : "0"}</td>
-                  <td class:ok={d.owner === "detent"} class:warning={d.owner === "other"}>
-                    {d.owner === "detent" ? "owned by Detent" : d.owner === "other" ? "used by another program" : "free"}
+                  <td class:ok={d.owner === "trimcraft"} class:warning={d.owner === "other"}>
+                    {d.owner === "trimcraft" ? "owned by Trimcraft" : d.owner === "other" ? "used by another program" : "free"}
                   </td>
                 </tr>
               {:else}
@@ -127,7 +127,7 @@
         {/if}
         <p class="muted small">
           Sets gain and mute of Voicemeeter's strips and buses through its remote API (<span class="mono">VoicemeeterRemote64.dll</span>
-          from the installation folder). Voicemeeter must be running. While enabled, Detent checks it every few seconds.
+          from the installation folder). Voicemeeter must be running. While enabled, Trimcraft checks it every few seconds.
         </p>
       {/if}
     </div>

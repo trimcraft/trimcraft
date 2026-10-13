@@ -60,8 +60,8 @@
 <section class="panel">
   <h2>Rotary encoders</h2>
   <p class="muted small">
-    An encoder sends one short button pulse per detent: one button when turned left, another when turned right.
-    Turn a knob a few detents each way and Detent suggests it here.
+    An encoder sends one short button pulse per notch: one button when turned left, another when turned right.
+    Turn a knob a few notches each way and Trimcraft suggests it here.
   </p>
   {#if error}<p class="error">{error}</p>{/if}
 

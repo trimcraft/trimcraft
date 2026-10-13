@@ -83,7 +83,7 @@
         {:else}
           <input class="mono value" bind:value={header.value} placeholder="value" />
         {/if}
-        <label class="check" title="Secret values are kept in the Windows Credential Manager, never in Detent's settings or logs">
+        <label class="check" title="Secret values are kept in the Windows Credential Manager, never in Trimcraft's settings or logs">
           <input type="checkbox" checked={!!header.secret || !!replacing[i]} onchange={(e) => (e.currentTarget.checked ? makeSecret(i) : makePlain(i))} /> secret
         </label>
         <button class="small" title="Remove header" onclick={() => removeHeader(i)}>×</button>

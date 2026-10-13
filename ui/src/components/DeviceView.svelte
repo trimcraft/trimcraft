@@ -51,7 +51,7 @@
     {/if}
   </div>
   <dl class="facts">
-    <dt>Detent id</dt><dd class="mono">{device.id}</dd>
+    <dt>Trimcraft id</dt><dd class="mono">{device.id}</dd>
     <dt>Reported name</dt><dd>{device.name}</dd>
     <dt>Vendor : product</dt><dd class="mono">{hex4(device.fingerprint.vendorId)}:{hex4(device.fingerprint.productId)}</dd>
     <dt>Serial number</dt><dd class="mono">{device.fingerprint.serial ?? "none reported"}</dd>

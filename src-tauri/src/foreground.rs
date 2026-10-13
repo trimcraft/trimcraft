@@ -8,8 +8,8 @@
 //! and token.
 
 use crate::elevation;
-use detent_core::settings::ProcessElevation;
 use std::cell::RefCell;
+use trimcraft_core::settings::ProcessElevation;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -20,18 +20,18 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// The program that just came to the front.
 #[derive(Debug, Clone)]
 pub struct Foreground {
-    /// It is Detent itself (one of its windows).
+    /// It is Trimcraft itself (one of its windows).
     pub is_self: bool,
     /// Executable file name, e.g. `DCS.exe`; `None` if it cannot be read.
     pub exe: Option<String>,
     /// Window title, as a fallback name.
     pub title: Option<String>,
-    /// Not checked (`NotElevated`) for Detent itself.
+    /// Not checked (`NotElevated`) for Trimcraft itself.
     pub elevation: ProcessElevation,
 }
 
 impl Foreground {
-    /// For the profile switch: `None` for Detent itself, so its windows never switch profiles.
+    /// For the profile switch: `None` for Trimcraft itself, so its windows never switch profiles.
     pub fn program(&self) -> Option<&str> {
         if self.is_self {
             None
@@ -61,7 +61,7 @@ thread_local! {
 pub fn watch(on_change: impl Fn(&Foreground) + Send + 'static) {
     let on_change: Callback = Box::new(on_change);
     let spawned = std::thread::Builder::new()
-        .name("detent-foreground".into())
+        .name("trimcraft-foreground".into())
         .spawn(move || {
             // SAFETY: out-of-context hook without a module; the callback is a plain function
             // and runs on this thread, inside GetMessageW below.

@@ -121,7 +121,7 @@
         <span class="spacer"></span>
         {#if !active}<button class="small" onclick={() => run(async () => (await b()).selectProfile(p.id))}>Activate</button>{/if}
         {#if renaming?.id !== p.id}<button class="small" onclick={() => (renaming = { id: p.id, name: p.name })}>Rename</button>{/if}
-        <button class="small" title="Save this profile to a .detent.json file (without credentials)" onclick={exportProfile(p)}>Export</button>
+        <button class="small" title="Save this profile to a .trimcraft.json file (without credentials)" onclick={exportProfile(p)}>Export</button>
         <button class="small" title="Copy with all radios, widgets and states (without its programs)" onclick={() => run(async () => (await b()).duplicateProfile(p.id, ""))}>Duplicate</button>
         {#if i > 0}<button class="small" onclick={() => run(async () => (await b()).makeDefaultProfile(p.id))}>Make default</button>{/if}
         {#if confirmDelete === p.id}

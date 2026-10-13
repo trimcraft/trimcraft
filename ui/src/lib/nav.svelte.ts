@@ -10,7 +10,7 @@ export const SECTIONS: [Section, string][] = [
   ["hardware", "Hardware Test"],
 ];
 
-const KEY = "detent.section";
+const KEY = "trimcraft.section";
 const DEFAULT: Section = "controls";
 
 function load(): Section {

@@ -435,7 +435,7 @@
         {#if isKeyStep(step)}
           {@const ks = step as KeyStep}
           {#if ks.type !== "delay"}
-            <input class="key mono" class:bad={!knownKey(ks.key)} list="detent-keys" bind:value={ks.key} placeholder="key" />
+            <input class="key mono" class:bad={!knownKey(ks.key)} list="trimcraft-keys" bind:value={ks.key} placeholder="key" />
             {#if ks.type === "keyTap"}
               <label class="muted">hold <input type="number" min="0" max="60000" placeholder="50" value={holdValue(ks.holdMs)} onchange={(e) => (ks.holdMs = parseHold(e.currentTarget.value))} /> ms</label>
             {/if}
@@ -445,7 +445,7 @@
           {#if ms.type === "delay"}
             <input type="number" min="0" max="60000" value={ms.ms} onchange={(e) => (ms.ms = Math.max(0, int(e.currentTarget.value)))} /> ms
           {:else if ms.type === "wheel"}
-            <input type="number" value={ms.delta} onchange={(e) => (ms.delta = int(e.currentTarget.value))} /> <span class="muted">detents (+ up, − down)</span>
+            <input type="number" value={ms.delta} onchange={(e) => (ms.delta = int(e.currentTarget.value))} /> <span class="muted">notches (+ up, − down)</span>
           {:else if ms.type === "moveRelative"}
             <label class="muted">dx <input type="number" value={ms.dx} onchange={(e) => (ms.dx = int(e.currentTarget.value))} /></label>
             <label class="muted">dy <input type="number" value={ms.dy} onchange={(e) => (ms.dy = int(e.currentTarget.value))} /></label>

@@ -2,19 +2,19 @@
 
 use crate::{Meta, Shared, elevation, overlay, profile_watch, secrets};
 use crate::{volume, webhook};
-use detent_core::audio::VoiceRef;
-use detent_core::connection::{DiscordSettings, SecretRef, valid_client_id};
-use detent_core::discord;
-use detent_core::recording::{RecordKind, RecorderConfig};
-use detent_core::vjoy::VjoyMapping;
-use detent_core::{
+use serde::Deserialize;
+use std::sync::Arc;
+use tauri::{AppHandle, State};
+use trimcraft_core::audio::VoiceRef;
+use trimcraft_core::connection::{DiscordSettings, SecretRef, valid_client_id};
+use trimcraft_core::discord;
+use trimcraft_core::recording::{RecordKind, RecorderConfig};
+use trimcraft_core::vjoy::VjoyMapping;
+use trimcraft_core::{
     Action, ActionRequest, Anchor, AppSettings, ButtonPair, Connections, ConnectorId, ControlRef,
     DetectorConfig, DeviceId, EngineSnapshot, Function, KeyInfo, ManualCommand, MonitorRef,
     Movement, OverlayItem, Phase, ProfileSwitching, Sound, VirtualControl, WidgetPosition,
 };
-use serde::Deserialize;
-use std::sync::Arc;
-use tauri::{AppHandle, State};
 
 type Res<T> = Result<T, String>;
 
@@ -104,7 +104,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
 /// Runs `f` on the engine, then saves and redraws.
 fn with<T>(
     shared: &Shared,
-    f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
+    f: impl FnOnce(&mut trimcraft_core::Engine) -> Result<T, trimcraft_core::EngineError>,
 ) -> Res<T> {
     let mut engine = shared.engine();
     // Timed outputs a command starts (vJoy pulses) count from now.
@@ -267,7 +267,7 @@ fn set_detector_config(shared: State<'_, Arc<Shared>>, config: DetectorConfig) -
 
 #[tauri::command]
 fn get_keys() -> &'static [KeyInfo] {
-    detent_core::action::KEYS
+    trimcraft_core::action::KEYS
 }
 
 #[tauri::command]
@@ -284,7 +284,7 @@ fn remove_virtual_control(shared: State<'_, Arc<Shared>>, id: String) -> Res<()>
 /// uses any more are deleted from the credential store.
 fn with_secrets<T>(
     shared: &Shared,
-    f: impl FnOnce(&mut detent_core::Engine) -> Result<T, detent_core::EngineError>,
+    f: impl FnOnce(&mut trimcraft_core::Engine) -> Result<T, trimcraft_core::EngineError>,
 ) -> Res<T> {
     let before = shared.engine().setup().secret_refs();
     let result = with(shared, f)?;
@@ -641,19 +641,19 @@ fn test_action(shared: State<'_, Arc<Shared>>, mut action: Action) -> Res<()> {
     if let Action::InputMacro(m) = &mut action {
         // Not guarded against the saved macro: a test may run while it does.
         m.id.clear();
-        if m.repeat == detent_core::macros::Repeat::WhileActive {
-            m.repeat = detent_core::macros::Repeat::Once;
+        if m.repeat == trimcraft_core::macros::Repeat::WhileActive {
+            m.repeat = trimcraft_core::macros::Repeat::Once;
         }
     }
     let mut request = ActionRequest::new("Test play", "editor", Phase::Activate, &action);
     request.profile = shared.engine().setup().profile().name.clone();
     let shared = Arc::clone(&shared);
     std::thread::Builder::new()
-        .name("detent-test-play".into())
+        .name("trimcraft-test-play".into())
         .spawn(move || {
             if countdown {
                 std::thread::sleep(std::time::Duration::from_millis(
-                    detent_core::recording::COUNTDOWN_MS,
+                    trimcraft_core::recording::COUNTDOWN_MS,
                 ));
             }
             if let Action::Vjoy { command } = &request.action {
@@ -702,10 +702,10 @@ fn store_http_secret(value: String) -> Res<SecretRef> {
     webhook::store_secret(&value)
 }
 
-/// The event log held by the app, oldest first. New entries arrive as `detent://diagnostics`
+/// The event log held by the app, oldest first. New entries arrive as `trimcraft://diagnostics`
 /// events; entries are numbered, so the UI can drop ones it already has.
 #[tauri::command]
-fn get_diagnostics(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Entry> {
+fn get_diagnostics(shared: State<'_, Arc<Shared>>) -> Vec<trimcraft_core::Entry> {
     shared.diagnostics.all()
 }
 
@@ -758,7 +758,7 @@ fn set_settings(
     Ok(())
 }
 
-/// "Restart as administrator": starts an elevated Detent (UAC prompt) with its window shown,
+/// "Restart as administrator": starts an elevated Trimcraft (UAC prompt) with its window shown,
 /// and quits this one. Async: the prompt must not block the UI thread.
 #[tauri::command]
 async fn restart_elevated(app: AppHandle) -> Res<()> {
@@ -774,7 +774,7 @@ async fn restart_elevated(app: AppHandle) -> Res<()> {
 #[tauri::command]
 fn set_overlay_appearance(
     shared: State<'_, Arc<Shared>>,
-    appearance: detent_core::Appearance,
+    appearance: trimcraft_core::Appearance,
 ) -> Res<()> {
     with(&shared, |e| {
         e.set_overlay_appearance(appearance);
@@ -786,7 +786,7 @@ fn set_overlay_appearance(
 #[tauri::command]
 fn set_toast_settings(
     shared: State<'_, Arc<Shared>>,
-    settings: detent_core::overlay::ToastSettings,
+    settings: trimcraft_core::overlay::ToastSettings,
 ) -> Res<()> {
     with(&shared, |e| {
         e.set_toast_settings(settings);
@@ -803,9 +803,9 @@ fn set_toast_position(shared: State<'_, Arc<Shared>>, position: Option<WidgetPos
     })
 }
 
-/// The toasts on screen now; later changes arrive as `detent://toasts` events.
+/// The toasts on screen now; later changes arrive as `trimcraft://toasts` events.
 #[tauri::command]
-fn get_toasts(shared: State<'_, Arc<Shared>>) -> Vec<detent_core::Toast> {
+fn get_toasts(shared: State<'_, Arc<Shared>>) -> Vec<trimcraft_core::Toast> {
     shared.toasts.list()
 }
 
@@ -819,7 +819,7 @@ fn test_toast(shared: State<'_, Arc<Shared>>) {
     };
     if visible || settings.while_hidden || editing {
         shared.toasts.push(
-            vec![detent_core::ToastRequest {
+            vec![trimcraft_core::ToastRequest {
                 key: "test".into(),
                 title: "Test toast".into(),
                 text: "It works".into(),
@@ -879,7 +879,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.radio().unwrap().states[0].on_activate.len(), 1);
-        assert_eq!(c.radio().unwrap().startup, detent_core::Startup::Empty);
+        assert_eq!(c.radio().unwrap().startup, trimcraft_core::Startup::Empty);
         let item: OverlayItem = serde_json::from_str(
             r#"{"type":"radio","control":"vc-1","layout":"horizontal","position":{"x":0.25,"y":0.5}}"#,
         )
@@ -928,7 +928,7 @@ mod tests {
         let connections: Connections = serde_json::from_str(
             r#"{"soundpad":{"enabled":false,"timeoutMs":500,"listMaxAgeMs":10000},
                 "discord":{"enabled":true,"clientId":"1234567890123456789",
-                  "clientSecret":{"store":"windowsCredentialManager","target":"detent/discord/client-secret"}}}"#,
+                  "clientSecret":{"store":"windowsCredentialManager","target":"trimcraft/discord/client-secret"}}}"#,
         )
         .unwrap();
         assert!(connections.validate().is_ok() && connections.discord.enabled);
@@ -969,7 +969,7 @@ mod tests {
               {"type":"launch","target":{"type":"program","path":"C:/a.exe","arguments":"","workingDir":"","onlyIfNotRunning":true},"wait":false},
               {"type":"launch","target":{"type":"url","url":"https://example.com"},"wait":false},
               {"type":"http","method":"POST","url":"https://x.test","headers":[
-                {"name":"Authorization","value":"","secret":{"store":"windowsCredentialManager","target":"detent/http/1"}}],
+                {"name":"Authorization","value":"","secret":{"store":"windowsCredentialManager","target":"trimcraft/http/1"}}],
                "body":"","timeoutMs":5000,"wait":false}
             ]"#,
         )
@@ -998,14 +998,14 @@ mod tests {
             (Some("a"), Some("b"))
         );
         let secret = serde_json::to_value(SecretRef::WindowsCredentialManager {
-            target: "detent/http/1".into(),
+            target: "trimcraft/http/1".into(),
         })
         .unwrap();
         assert_eq!(secret["store"], "windowsCredentialManager");
-        let view = serde_json::to_value(detent_core::connection::ConnectorView::new(
+        let view = serde_json::to_value(trimcraft_core::connection::ConnectorView::new(
             ConnectorId::Voicemeeter,
             false,
-            Some(&detent_core::ConnectorState {
+            Some(&trimcraft_core::ConnectorState {
                 missing: Some("Voicemeeter is not installed".into()),
                 ..Default::default()
             }),
@@ -1042,15 +1042,15 @@ mod tests {
             serde_json::from_str(r#"{"panicHotkey":"Ctrl+Alt+P"}"#).unwrap();
         assert_eq!(settings.panic_hotkey, "Ctrl+Alt+P");
         assert!(
-            detent_core::settings::DEFAULT_PANIC_HOTKEY
+            trimcraft_core::settings::DEFAULT_PANIC_HOTKEY
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
                 .is_ok()
         );
         // The default panic hotkey differs from the default overlay hotkey, also when spelled
         // differently.
         assert!(!overlay::same_hotkey(
-            detent_core::settings::DEFAULT_PANIC_HOTKEY,
-            &detent_core::OverlayConfig::default().hotkey
+            trimcraft_core::settings::DEFAULT_PANIC_HOTKEY,
+            &trimcraft_core::OverlayConfig::default().hotkey
         ));
         assert!(overlay::same_hotkey("Ctrl+Shift+F12", "shift+ctrl+F12"));
         let _: Movement = serde_json::from_str(r#""absolute""#).unwrap();
@@ -1080,7 +1080,7 @@ mod tests {
         // Profiles.
         let switching: ProfileSwitching =
             serde_json::from_str(r#"{"autoSwitch":false,"noMatch":"switchToDefault"}"#).unwrap();
-        assert_eq!(switching.no_match, detent_core::NoMatch::SwitchToDefault);
+        assert_eq!(switching.no_match, trimcraft_core::NoMatch::SwitchToDefault);
         let _: ProfileSwitching =
             serde_json::from_str(r#"{"autoSwitch":true,"noMatch":"keepCurrent"}"#).unwrap();
         let _: Vec<String> = serde_json::from_str(r#"["DCS.exe","C:\\Games\\x.exe"]"#).unwrap();
@@ -1141,7 +1141,7 @@ mod tests {
                 serde_json::from_str(&format!(r#"{{"id":"","name":"X","kind":{kind}}}"#)).unwrap();
             c.normalize().unwrap();
         }
-        let t: detent_core::Trigger = serde_json::from_str(
+        let t: trimcraft_core::Trigger = serde_json::from_str(
             r#"{"type":"axisZone","device":"d","index":2,"min":80,"max":100,
                 "press":{"kind":"release"},
                 "modifiers":[{"device":"d","index":7}],
@@ -1154,7 +1154,7 @@ mod tests {
             r#"{"kind":"double","ms":300}"#,
             r#"{"kind":"release"}"#,
         ] {
-            let _: detent_core::PressKind = serde_json::from_str(press).unwrap();
+            let _: trimcraft_core::PressKind = serde_json::from_str(press).unwrap();
         }
 
         // vJoy (ui/src/lib/types.ts: VjoyMapping, VjoyCommand, ButtonOutput).
@@ -1197,7 +1197,7 @@ mod tests {
 
     #[test]
     fn key_list_serialises_for_the_ui() {
-        let json = serde_json::to_value(detent_core::action::KEYS).unwrap();
+        let json = serde_json::to_value(trimcraft_core::action::KEYS).unwrap();
         assert_eq!(json[0]["name"], "A");
         assert_eq!(json[0]["scan"], 0x1E);
         assert_eq!(json[0]["extended"], false);
@@ -1205,7 +1205,7 @@ mod tests {
 
     #[test]
     fn default_hotkey_parses() {
-        let hotkey = detent_core::OverlayConfig::default().hotkey;
+        let hotkey = trimcraft_core::OverlayConfig::default().hotkey;
         assert!(
             hotkey
                 .parse::<tauri_plugin_global_shortcut::Shortcut>()
@@ -1215,12 +1215,12 @@ mod tests {
 
     #[test]
     fn appearance_and_toast_payloads_deserialise() {
-        let appearance: detent_core::Appearance = serde_json::from_str(
+        let appearance: trimcraft_core::Appearance = serde_json::from_str(
             r##"{"theme":"hudGreen","accent":"#39ff6a","backgroundOpacity":60,"textScale":1.25,"cornerRadius":4}"##,
         )
         .unwrap();
-        assert_eq!(appearance.theme, detent_core::overlay::Theme::HudGreen);
-        let settings: detent_core::overlay::ToastSettings =
+        assert_eq!(appearance.theme, trimcraft_core::overlay::Theme::HudGreen);
+        let settings: trimcraft_core::overlay::ToastSettings =
             serde_json::from_str(r#"{"durationMs":3000,"whileHidden":false,"profileToast":true}"#)
                 .unwrap();
         assert_eq!(settings.duration_ms, 3000);

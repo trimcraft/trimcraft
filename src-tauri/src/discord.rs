@@ -1,5 +1,5 @@
 //! The Discord connector: keeps one connection to the Discord client's local RPC server (see
-//! `detent_core::discord` for the protocol and the login flow).
+//! `trimcraft_core::discord` for the protocol and the login flow).
 //!
 //! One worker thread owns the connection and does everything in order: connecting and
 //! reconnecting with a growing pause (backoff), the login, mute/deafen actions, "Test
@@ -14,11 +14,6 @@
 //! an app changed when that app disconnects.
 
 use crate::secrets;
-use detent_core::connection::{ConnectorState, ConnectorStatus, CredentialState, DiscordSettings};
-use detent_core::discord::{
-    self, Client, Credentials, DiscordCommand, DiscordError, Opcode, Outcome, Secret,
-    TokenEndpoint, Tokens, Transport,
-};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -26,6 +21,13 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use trimcraft_core::connection::{
+    ConnectorState, ConnectorStatus, CredentialState, DiscordSettings,
+};
+use trimcraft_core::discord::{
+    self, Client, Credentials, DiscordCommand, DiscordError, Opcode, Outcome, Secret,
+    TokenEndpoint, Tokens, Transport,
+};
 
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -68,7 +70,7 @@ impl Discord {
         let last: Arc<Mutex<ConnectorState>> = Arc::default();
         let (tx, worker_reporter, worker_last) = (inbox.clone(), reporter.clone(), last.clone());
         std::thread::Builder::new()
-            .name("detent-discord".into())
+            .name("trimcraft-discord".into())
             .spawn(move || {
                 Worker {
                     inbox: Rc::new(Inbox {
@@ -387,7 +389,7 @@ impl Worker {
         let tx = self.inbox.tx.clone();
         let reader_shutdown = shutdown.clone();
         std::thread::Builder::new()
-            .name("detent-discord-reader".into())
+            .name("trimcraft-discord-reader".into())
             .spawn(move || read_frames(id, reader, &tx, &*reader_shutdown))
             .map_err(|e| DiscordError::Disconnected(e.to_string()))?;
         let pipe = Pipe {
@@ -657,11 +659,11 @@ mod ipc {
     //! Named pipe opened for overlapped I/O, so the reader thread can wait for data while the
     //! worker writes (on a handle opened for synchronous I/O, Windows serialises the two).
     use super::Endpoint;
-    use detent_core::discord::{DiscordError, PIPE_COUNT, pipe_name};
     use std::io::{Read, Write};
     use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::{AsRawHandle, OwnedHandle};
     use std::sync::Arc;
+    use trimcraft_core::discord::{DiscordError, PIPE_COUNT, pipe_name};
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_PIPE_BUSY, GetLastError,
     };
@@ -773,13 +775,13 @@ mod tests {
     use super::*;
 
     /// Needs a running Discord and saved, authorized credentials:
-    /// `cargo test -p detent -- --ignored discord`. Changes nothing.
+    /// `cargo test -p trimcraft -- --ignored discord`. Changes nothing.
     #[test]
-    #[ignore = "needs a running Discord and an authorized Detent"]
+    #[ignore = "needs a running Discord and an authorized Trimcraft"]
     fn live_discord_answers() {
         let settings = DiscordSettings {
             enabled: true,
-            client_id: std::env::var("DETENT_DISCORD_CLIENT_ID").unwrap_or_default(),
+            client_id: std::env::var("TRIMCRAFT_DISCORD_CLIENT_ID").unwrap_or_default(),
             client_secret: Some(DiscordSettings::secret_ref()),
         };
         let discord = Discord::spawn(settings);

@@ -1,6 +1,7 @@
 {
-  "name": "detent",
+  "name": "trimcraft",
   "private": true,
+  "repository": "github:trimcraft/trimcraft",
   "version": "0.1.0",
   "type": "module",
   "scripts": {

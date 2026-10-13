@@ -55,7 +55,7 @@
       <input type="checkbox" checked={settings.startMinimized} onchange={(e) => change({ startMinimized: e.currentTarget.checked })} />
       Start minimized to the tray
     </label>
-    <p class="hint muted">Also when you start Detent yourself. A start with Windows always goes to the tray.</p>
+    <p class="hint muted">Also when you start Trimcraft yourself. A start with Windows always goes to the tray.</p>
   </div>
 
   <div class="group">
@@ -71,7 +71,7 @@
   <div class="group">
     <h3>Administrator rights</h3>
     <p class="state">
-      Detent runs as administrator:
+      Trimcraft runs as administrator:
       <b class:yes={shell.elevated}>{shell.elevated ? "yes" : "no"}</b>
     </p>
     <label class="check">
@@ -79,8 +79,8 @@
       Always run as administrator
     </label>
     <p class="hint muted">
-      Windows does not let Detent's keys and mouse reach a program that runs as administrator (some games and anti-cheat
-      launchers do) unless Detent runs as administrator too. Detent then asks for permission (UAC) when it starts; with
+      Windows does not let Trimcraft's keys and mouse reach a program that runs as administrator (some games and anti-cheat
+      launchers do) unless Trimcraft runs as administrator too. Trimcraft then asks for permission (UAC) when it starts; with
       Start with Windows it starts through the Task Scheduler without asking.
     </p>
     {#if !shell.elevated}

@@ -45,7 +45,7 @@ const HAT_MASKS: Record<number, HatDirection> = {
   1: "up", 3: "upRight", 2: "right", 6: "downRight", 4: "down", 12: "downLeft", 8: "left", 9: "upLeft",
 };
 
-// Names of detent-core's action::KEYS (the real app gets them, with scan codes, from Rust).
+// Names of trimcraft-core's action::KEYS (the real app gets them, with scan codes, from Rust).
 const KEY_NAMES = [
   ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890",
   ...Array.from({ length: 24 }, (_, i) => `F${i + 1}`),
@@ -303,7 +303,7 @@ export function createDemo(): Backend {
     if (a.type === "switchProfile") pendingSwitches.push(a.target);
   };
 
-  // Virtual controls: the semantics of detent-core's virtual_control.rs, simplified: triggers
+  // Virtual controls: the semantics of trimcraft-core's virtual_control.rs, simplified: triggers
   // match plain presses and releases (long and double presses, modifiers and axis zones are
   // not simulated); mode conditions are checked. Actions are only logged to the console.
   /** Most recently active state per radio, for toggle off. */
@@ -566,7 +566,7 @@ export function createDemo(): Backend {
     ["profile-2", [{ type: "axis", device: "f00d:0001#1", index: 1, target: { device: 1, axis: "y" }, curve: { ...defaultCurve(), curve: { type: "expo", factor: 0.4 } } }]],
   ]);
 
-  /** What Detent would write to vJoy, like detent-core's Engine::vjoy_state (without pulses). */
+  /** What Trimcraft would write to vJoy, like trimcraft-core's Engine::vjoy_state (without pulses). */
   function vjoyOutput(): VjoyStateView {
     const out: VjoyStateView = { devices: [], buttons: [], axes: [], povs: [] };
     if (!s.connections.vjoy.enabled) return out;
@@ -655,7 +655,7 @@ export function createDemo(): Backend {
       if (HAT_MASKS[hat]) edges.push([newTrigger({ type: "hat", device: stick!.id, index: 0, direction: HAT_MASKS[hat]! }), true]);
     }
     stick!.state.hats[0] = hat;
-    // Encoder: a run of 5 detents every 4 s, alternating direction.
+    // Encoder: a run of 5 notches every 4 s, alternating direction.
     const phase = tick % 120;
     const pulse = phase < 15 && phase % 3 === 0;
     const up = Math.floor(tick / 120) % 2 === 0;
@@ -709,7 +709,7 @@ export function createDemo(): Backend {
       pushDiag({ category: "input", ...PANEL, text: `Button ${n} released` }, out);
     } else if (r < 0.72) {
       const up = Math.random() < 0.5;
-      pushDiag({ category: "input", ...PANEL, text: `Encoder Radio knob: detent ${up ? "+" : "−"}`, detail: `from button ${up ? 12 : 11} pressed` }, out);
+      pushDiag({ category: "input", ...PANEL, text: `Encoder Radio knob: notch ${up ? "+" : "−"}`, detail: `from button ${up ? 12 : 11} pressed` }, out);
       pushDiag({ category: "trigger", text: `Radio knob ${up ? "+" : "−"} → Comms: ${up ? "next state" : "previous state"}`, detail: "no change (already in that state or at the end)" }, out);
     } else if (r < 0.82) {
       pushDiag({ category: "input", ...STICK, text: "Hat 1: centered → up-right" }, out);
@@ -722,7 +722,7 @@ export function createDemo(): Backend {
       pushDiag({ category: "connector", text: "Discord: connected", detail: "Connected as Sam" }, out);
       pushDiag({ category: "connector", text: "Soundpad: error: pipe closed", level: "error" }, out);
     } else {
-      pushDiag({ category: "log", text: "could not read Soundpad's sound list: timed out", level: "warn", detail: "log target: detent_app::soundpad" }, out);
+      pushDiag({ category: "log", text: "could not read Soundpad's sound list: timed out", level: "warn", detail: "log target: trimcraft_app::soundpad" }, out);
     }
   }
   for (let i = 0; i < 12; i++) diagScene([]);
@@ -1008,7 +1008,7 @@ export function createDemo(): Backend {
       const v = s.connectors.find((x) => x.id === "vjoy")!;
       v.enabled = s.connections.vjoy.enabled;
       Object.assign(v, v.enabled ? { status: { state: "connected" }, detail: "vJoy 2.2.2, 2 devices configured (demo)" } : { status: { state: "notConfigured" }, detail: null });
-      for (const d of v.vjoy!.devices) if (d.owner === "detent" || d.owner === "free") d.owner = v.enabled && (d.id === 1 || d.id === 2) ? "detent" : d.id <= 2 ? "free" : d.owner;
+      for (const d of v.vjoy!.devices) if (d.owner === "trimcraft" || d.owner === "free") d.owner = v.enabled && (d.id === 1 || d.id === 2) ? "trimcraft" : d.id <= 2 ? "free" : d.owner;
       // Voicemeeter: "installed" and running in the demo.
       const vm = s.connectors.find((x) => x.id === "voicemeeter")!;
       vm.enabled = connections.voicemeeter.enabled;
@@ -1053,7 +1053,7 @@ export function createDemo(): Backend {
       if (clientId.trim() !== s.connections.discord.clientId) creds.authorized = false;
       if (clientSecret?.trim()) demoSecretWrong = clientSecret.trim() === "wrong";
       creds.secretSaved = true;
-      s.connections.discord = { ...s.connections.discord, clientId: clientId.trim(), clientSecret: { store: "windowsCredentialManager", target: "detent/discord/client-secret" } };
+      s.connections.discord = { ...s.connections.discord, clientId: clientId.trim(), clientSecret: { store: "windowsCredentialManager", target: "trimcraft/discord/client-secret" } };
       discordStatus();
       emit();
     },
@@ -1098,13 +1098,13 @@ export function createDemo(): Backend {
     },
     async setSettings(settings) {
       s.settings = { ...structuredClone(settings), trayNoticeShown: s.settings.trayNoticeShown };
-      // Like detent-core's plan_autostart: the task needs administrator rights.
+      // Like trimcraft-core's plan_autostart: the task needs administrator rights.
       const { startWithWindows, runAsAdmin } = s.settings;
       const elevated = s.shell.elevated;
       s.shell.autostart = !startWithWindows ? "off" : runAsAdmin && elevated ? "task" : "runKey";
       s.shell.autostartNote =
         startWithWindows && runAsAdmin && !elevated
-          ? "Registered without administrator rights for now (UAC prompt at logon); Detent switches to a Task Scheduler task at the next start as administrator."
+          ? "Registered without administrator rights for now (UAC prompt at logon); Trimcraft switches to a Task Scheduler task at the next start as administrator."
           : null;
       await ok();
     },
@@ -1205,7 +1205,7 @@ export function createDemo(): Backend {
     async storeHttpSecret(value) {
       if (!value) throw new Error("enter the secret value");
       // The demo keeps no secrets; only the reference comes back.
-      return { store: "windowsCredentialManager", target: `detent/http/demo-${Date.now().toString(16)}` };
+      return { store: "windowsCredentialManager", target: `trimcraft/http/demo-${Date.now().toString(16)}` };
     },
     // --- Backup and transfer: files go through the browser (download / file picker) ----------
     async exportSetup(ids) {
@@ -1216,11 +1216,11 @@ export function createDemo(): Backend {
         return { id: p.id, name: p.name, executables: p.executables, virtualControls: data.controls, overlayWidgets: data.widgets };
       });
       const file = {
-        format: "detent-export", formatVersion: 1, schemaVersion: 2, exportedAt: new Date().toISOString(), detentVersion: "0.1.0-demo",
+        format: "trimcraft-export", formatVersion: 1, schemaVersion: 2, exportedAt: new Date().toISOString(), trimcraftVersion: "0.1.0-demo",
         kind: ids ? "profiles" : "all", credentialsRemoved: true, strippedFields: ["connections.discord.clientSecret"],
         note: "Credentials are never exported.", setup: { schemaVersion: 2, profiles, activeProfile: chosen[0]!.id },
       };
-      const name = ids?.length === 1 ? `${chosen[0]!.name}.detent.json` : "detent-demo.detent.json";
+      const name = ids?.length === 1 ? `${chosen[0]!.name}.trimcraft.json` : "trimcraft-demo.trimcraft.json";
       const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
       const a = Object.assign(document.createElement("a"), { href: url, download: name });
       a.click();
@@ -1239,14 +1239,14 @@ export function createDemo(): Backend {
       try {
         file = JSON.parse(text);
       } catch {
-        throw new Error("this is not a Detent export file: not valid JSON");
+        throw new Error("this is not a Trimcraft export file: not valid JSON");
       }
-      if (file.format !== "detent-export" || !file.setup?.profiles) throw new Error("this is not a Detent export file");
-      if ((file.formatVersion ?? 1) > 1) throw new Error("this file was exported by a newer Detent; update Detent to import it");
-      if ((file.setup.schemaVersion ?? 1) > 2) throw new Error("this file was written by a newer Detent (configuration schema); update Detent to import it");
+      if (file.format !== "trimcraft-export" || !file.setup?.profiles) throw new Error("this is not a Trimcraft export file");
+      if ((file.formatVersion ?? 1) > 1) throw new Error("this file was exported by a newer Trimcraft; update Trimcraft to import it");
+      if ((file.setup.schemaVersion ?? 1) > 2) throw new Error("this file was written by a newer Trimcraft (configuration schema); update Trimcraft to import it");
       pendingImport = file.setup.profiles;
       return {
-        kind: file.kind ?? "all", exportedAt: file.exportedAt ?? null, detentVersion: null, schemaVersion: file.setup.schemaVersion ?? 1,
+        kind: file.kind ?? "all", exportedAt: file.exportedAt ?? null, trimcraftVersion: null, schemaVersion: file.setup.schemaVersion ?? 1,
         profiles: pendingImport.map((p) => ({ id: p.id, name: p.name, controls: p.virtualControls?.length ?? 0, executables: p.executables ?? [] })),
         strippedFields: ["connections.discord.clientSecret"],
       };

@@ -1,8 +1,8 @@
 //! Plays input macros: once in the ordered action queue, or repeated on a thread of their own
-//! so the queue goes on (see `detent_core::macro_run` for the decisions).
+//! so the queue goes on (see `trimcraft_core::macro_run` for the decisions).
 //!
 //! Every run can be stopped: by its control state ending ("while active"), a "Stop macros"
-//! action, the panic hotkey, a profile switch or Detent quitting. Stopping releases every key
+//! action, the panic hotkey, a profile switch or Trimcraft quitting. Stopping releases every key
 //! and mouse button the macro pressed and has not released. The panic hotkey, a profile switch
 //! and quitting also release what finished macros left pressed (e.g. a "Ctrl down" macro
 //! waiting for its "Ctrl up").
@@ -11,17 +11,17 @@
 //! interruptible, so stopping takes effect within a few milliseconds.
 
 use crate::{input, overlay};
-use detent_core::action::MacroTarget;
-use detent_core::diagnostics::{Category, Level, Record};
-use detent_core::macro_run::{
-    HeldInputs, Next, Registry, Repetition, Scope, Start, StopReason, stop_text,
-};
-use detent_core::macros::{InputMacro, Repeat};
-use detent_core::{Action, ActionRequest, Diagnostics, InputOp, MacroSignal};
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use trimcraft_core::action::MacroTarget;
+use trimcraft_core::diagnostics::{Category, Level, Record};
+use trimcraft_core::macro_run::{
+    HeldInputs, Next, Registry, Repetition, Scope, Start, StopReason, stop_text,
+};
+use trimcraft_core::macros::{InputMacro, Repeat};
+use trimcraft_core::{Action, ActionRequest, Diagnostics, InputOp, MacroSignal};
 
 /// How long a restart or quit waits for a stopped run to release its inputs.
 const STOP_WAIT: Duration = Duration::from_secs(1);
@@ -221,7 +221,7 @@ impl Player {
         );
         let player = self.clone();
         let spawned = std::thread::Builder::new()
-            .name("detent-macro".into())
+            .name("trimcraft-macro".into())
             .spawn(move || {
                 player.run(&run, run_id, ops, repetition, &description, true);
             });
@@ -385,7 +385,7 @@ impl Player {
                 MacroSignal::ProfileSwitched => {
                     let player = self.clone();
                     let _ = std::thread::Builder::new()
-                        .name("detent-macro-stop".into())
+                        .name("trimcraft-macro-stop".into())
                         .spawn(move || player.stop_all(StopReason::ProfileSwitch));
                 }
             }
@@ -427,7 +427,7 @@ impl Player {
         // vJoy is released right after, by the panic hotkey handler (lib.rs), through the engine.
     }
 
-    /// Detent quits: stops everything and waits a moment for the releases.
+    /// Trimcraft quits: stops everything and waits a moment for the releases.
     pub fn shutdown(&self) {
         self.stop_all(StopReason::AppExit);
     }

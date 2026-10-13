@@ -1,14 +1,14 @@
-//! Administrator rights: whether Detent or another process runs elevated, relaunching Detent
+//! Administrator rights: whether Trimcraft or another process runs elevated, relaunching Trimcraft
 //! elevated (UAC prompt), and the single-instance handshake across elevation levels.
 //!
-//! Windows blocks `SendInput` from a normal process into an elevated one (UIPI), so Detent's
-//! keys and mouse do not reach a game that runs as administrator unless Detent does too.
+//! Windows blocks `SendInput` from a normal process into an elevated one (UIPI), so Trimcraft's
+//! keys and mouse do not reach a game that runs as administrator unless Trimcraft does too.
 
 use crate::Shared;
 use crate::foreground::Foreground;
-use detent_core::settings::{AUTOSTART_ARG, ProcessElevation, foreground_warning};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use trimcraft_core::settings::{AUTOSTART_ARG, ProcessElevation, foreground_warning};
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, GetLastError, HANDLE, HWND, WAIT_OBJECT_0,
 };
@@ -33,7 +33,7 @@ pub const RELAUNCH_ARG: &str = "--elevated-relaunch=";
 /// Start with the window shown, whatever "Start minimized" says.
 pub const SHOW_ARG: &str = "--show";
 
-/// Whether Detent itself runs elevated.
+/// Whether Trimcraft itself runs elevated.
 pub fn is_elevated() -> bool {
     // SAFETY: the pseudo handle of the current process needs no closing.
     token_elevation(unsafe { GetCurrentProcess() }) == ProcessElevation::Elevated
@@ -67,7 +67,7 @@ pub fn exe_name(pid: u32) -> Option<String> {
 }
 
 /// A foreground change, for the warning: the foreground program runs as administrator and
-/// Detent does not, so Windows drops Detent's keys and mouse (UIPI). Switching to Detent
+/// Trimcraft does not, so Windows drops Trimcraft's keys and mouse (UIPI). Switching to Trimcraft
 /// itself keeps the warning so it can be read.
 pub fn check_foreground(shared: &Shared, fg: &Foreground) {
     let mut engine = shared.engine();
@@ -84,7 +84,7 @@ pub fn check_foreground(shared: &Shared, fg: &Foreground) {
     }
     match &warning {
         Some(name) => log::warn!(
-            "{name} runs as administrator; Detent's keys and mouse will not reach it ({:?})",
+            "{name} runs as administrator; Trimcraft's keys and mouse will not reach it ({:?})",
             fg.elevation
         ),
         None => log::info!("the foreground program no longer runs as administrator"),
@@ -148,7 +148,7 @@ fn image_name(process: HANDLE) -> Option<String> {
     path.rsplit('\\').next().map(str::to_owned)
 }
 
-/// Starts Detent again with administrator rights (UAC prompt), with the same arguments.
+/// Starts Trimcraft again with administrator rights (UAC prompt), with the same arguments.
 /// `show`: the new instance shows its window even if it would start in the tray (restart
 /// from the Settings page). Returns once the user answered the prompt; the caller exits on
 /// success.
@@ -187,7 +187,7 @@ pub fn relaunch(show: bool) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "Windows did not start Detent as administrator (code {}; was the prompt declined?)",
+            "Windows did not start Trimcraft as administrator (code {}; was the prompt declined?)",
             result as usize
         ))
     }
@@ -209,7 +209,7 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) {
     // SAFETY: valid handle.
     let waited = unsafe { WaitForSingleObject(process, timeout.as_millis() as u32) };
     if waited != WAIT_OBJECT_0 {
-        log::warn!("the previous Detent process {pid} did not exit in time");
+        log::warn!("the previous Trimcraft process {pid} did not exit in time");
     }
     // SAFETY: opened above.
     unsafe { CloseHandle(process) };

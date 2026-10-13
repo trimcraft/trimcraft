@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Detent supports Windows 10/11 only.
+  # Trimcraft supports Windows 10/11 only.
   windows:
     name: windows
     runs-on: windows-latest
@@ -30,7 +30,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       # Same gate as scripts/check.sh: npm ci, svelte-check, frontend build, cargo fmt,
-      # clippy -D warnings and tests for the whole workspace (detent-core included).
+      # clippy -D warnings and tests for the whole workspace (trimcraft-core included).
       - name: Checks
         shell: bash
         run: ./scripts/check.sh
@@ -42,8 +42,8 @@ jobs:
       - name: Upload Windows installer
         uses: actions/upload-artifact@v7
         with:
-          name: detent-windows
+          name: trimcraft-windows
           path: |
             target/release/bundle/nsis/*.exe
-            target/release/detent.exe
+            target/release/trimcraft.exe
           if-no-files-found: error

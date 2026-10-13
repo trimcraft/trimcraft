@@ -1,16 +1,17 @@
-# Detent
+# Trimcraft
 
 Configuration tool for HOTAS controllers (stick, throttle, pedals, button boxes) on Windows,
 with an in-game overlay.
 
-> A *detent* is the tactile notch on a throttle lever where it clicks into place.
+> Trimcraft was formerly called Detent. An existing Detent installation is taken over on the
+> first start; see [Upgrading from Detent](#upgrading-from-detent).
 
 ## What it does (stage 1)
 
 - Detects every connected game controller and shows all axes, buttons and hats live.
 - Gives each device a **stable identity** across restarts and re-plugging, including two units
   of the same model, and marks virtual devices (vJoy) so they are never mistaken for input.
-- Recognises **rotary encoders** (two buttons that pulse once per detent) by their behaviour, or
+- Recognises **rotary encoders** (two buttons that pulse once per notch) by their behaviour, or
   lets you mark a button pair by hand, and shows measured pulse lengths.
 - **Counters** with range, step and wrap-around or stop, driven by an encoder, e.g. a radio
   channel.
@@ -30,17 +31,17 @@ Widgets that were never placed stay stacked in the chosen corner, as in earlier 
 The main window has three sections: **Virtual Controls** (opened by default), **Connections** and
 **Hardware Test** (everything above).
 
-Hardware Test has two tabs. **Devices** is the live view of all controls. **Event log** records what Detent
+Hardware Test has two tabs. **Devices** is the live view of all controls. **Event log** records what Trimcraft
 sees and does, newest at the bottom: button, hat and encoder input (axes only when they moved at least
 2 %, at most 10 entries per second per axis), trigger matches, state changes of virtual controls,
 actions (queued, executed with duration, skipped, failed), connector status changes, and warnings and
 errors from the app log. The last 5000 entries are kept in memory. Filter by category, device or text,
 pause the view while recording continues, copy what is visible, or open the log folder. The file log
-(`%LOCALAPPDATA%oud.breu.detentogsdetent.log`) is unchanged.
+(`%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`) is unchanged.
 A virtual control is built from physical inputs and can run actions. The first kind is the
 **radio**: several states of which at most one is active, like the preset buttons of a car radio.
 
-- Triggers: a button press, a hat direction being entered, or one encoder detent. Next state,
+- Triggers: a button press, a hat direction being entered, or one encoder notch. Next state,
   previous state, "all off", "toggle off" and "select this state" each take any number of
   triggers. Assign them by pressing the control ("learn") or pick them from a list. Toggle off
   turns the active state off, or brings back the most recently active one (the first state if
@@ -75,7 +76,7 @@ A virtual control is built from physical inputs and can run actions. The first k
   Programs are started directly, never through a command prompt.
 - **HTTP request** (webhook): method, address, headers and body, timeout (default 5 s). Header
   values can be stored as **secret**: they go to the Windows Credential Manager
-  (`detent/http/…`) and never into `setup.json` or the log. The status and duration go to the
+  (`trimcraft/http/…`) and never into `setup.json` or the log. The status and duration go to the
   event log.
 - **Voicemeeter** (a connection, see below): set or change the gain of a strip or bus, mute,
   unmute or toggle it.
@@ -126,7 +127,7 @@ Click a trigger in the editor to set more than the input:
   a live axis bar. It fires on entering, optionally on leaving, with 2 % hysteresis so jitter at
   the edge does not fire again. Where the axis is at startup counts as the start.
 
-Long and double presses are timed from the input's own timestamps; Detent wakes up exactly when
+Long and double presses are timed from the input's own timestamps; Trimcraft wakes up exactly when
 one is due instead of polling.
 
 ### Recording macros
@@ -134,11 +135,11 @@ one is due instead of polling.
 An **input macro** has keyboard and mouse steps in any order, e.g. Ctrl down, click, Ctrl up
 (the keyboard and mouse macros of earlier versions load as input macros with all their
 settings). Every input macro has a **● Record** button. After a 3-second countdown (switch
-to the game now) Detent records into that macro until you press the stop hotkey (default
+to the game now) Trimcraft records into that macro until you press the stop hotkey (default
 `Ctrl+Shift+F9`, configurable under *Macro recorder*) or **Stop**; **Esc** cancels. While
 recording, the main window shows a red banner and the overlay a red **REC** badge. The recording
 is appended to the steps or replaces them, as chosen next to the button. The stop hotkey's keys
-and the click on Stop are not recorded; Detent's own playback never is (injected input is
+and the click on Stop are not recorded; Trimcraft's own playback never is (injected input is
 ignored). Esc cannot be recorded; add it by hand if a macro needs it.
 
 - Tick what to record: **keys** (as scan codes, like playback), **mouse** (buttons, wheel and
@@ -176,7 +177,7 @@ ignored). Esc cannot be recorded; add it by hand if a macro needs it.
   nothing stays stuck. Macros stop when their state ends, with the **Stop macros** action (all,
   or one macro of the profile), with the **panic hotkey** (Settings, General; default
   `Ctrl+Shift+F12`, works while a game has the focus), when another profile becomes active and
-  when Detent quits. The panic hotkey, a profile switch and quitting also release what macros
+  when Trimcraft quits. The panic hotkey, a profile switch and quitting also release what macros
   that already finished left pressed (e.g. a "Ctrl down" waiting for its "Ctrl up"). The
   panic hotkey then also releases every vJoy button and centres the POVs (axes stay); they
   stay released until a control changes, a vJoy action runs or the profile changes. On quit,
@@ -188,7 +189,7 @@ Relative moves are sent as relative mouse input: games that read raw input see e
 recorded deltas, while the Windows desktop applies its pointer speed and acceleration to them.
 
 Windows does not deliver synthesised input to programs running with higher privileges: if a
-game runs as administrator, Detent must too for its macros to reach the game (and for the
+game runs as administrator, Trimcraft must too for its macros to reach the game (and for the
 recorder to see input while the game has focus).
 
 Mapping to a virtual joystick comes in a later stage.
@@ -209,10 +210,10 @@ visibility are shared by all profiles. A setup from before profiles becomes the 
   a full path keeps only the file name, a name without extension gets `.exe`). Type them in or
   **Pick from running processes** (programs with a window, with their titles).
 - **Auto-switch** (on by default): when a program a profile lists comes to the front, that
-  profile becomes active. Detent watches the foreground window event-driven
+  profile becomes active. Trimcraft watches the foreground window event-driven
   (`SetWinEventHook`), without polling. **When no game matches**: *Keep current profile*
   (default; alt-tabbing to Discord keeps the game's profile) or *Switch to the default
-  profile*. Detent's own windows never switch profiles. If several profiles list the same
+  profile*. Trimcraft's own windows never switch profiles. If several profiles list the same
   program, the active one stays, otherwise the first in the list wins.
 - The action **Switch profile** (to a profile, the next or the previous one) lets a controller
   button switch profiles. A profile chosen by hand (dropdown or action) stays until a program
@@ -224,31 +225,31 @@ visibility are shared by all profiles. A setup from before profiles becomes the 
 
 ## Connections
 
-The **Connections** section lists the programs Detent can control: Soundpad, Discord and
+The **Connections** section lists the programs Trimcraft can control: Soundpad, Discord and
 Voicemeeter. Each
 connection can be enabled, has its own settings (for Soundpad: timeout per request, how old the
 cached sound list may get), a live status (disabled, connecting, connected, not reachable) and a
-**Test connection** button. While enabled, Detent checks the connection every few seconds and
+**Test connection** button. While enabled, Trimcraft checks the connection every few seconds and
 reconnects with a growing pause when the program is gone; the number of sounds is shown.
 
 A connection's actions are offered in the action editor only while it is enabled. Actions of a
 connection that is later disabled stay saved, are shown greyed with a link to Connections, and
 are skipped (with a log entry) when they fire. Keyboard and mouse macros need no connection.
 Connection settings are stored in `setup.json`; secrets are kept in the Windows Credential
-Manager (generic credentials `detent/discord/…`), never in the file or the log.
+Manager (generic credentials `trimcraft/discord/…`), never in the file or the log.
 
 ### Voicemeeter
 
-Uses the VoicemeeterRemote API of a local Voicemeeter (Standard, Banana or Potato). Detent loads
+Uses the VoicemeeterRemote API of a local Voicemeeter (Standard, Banana or Potato). Trimcraft loads
 `VoicemeeterRemote64.dll` from the installation folder; without an installation the connection
 says so and its actions are not offered. Voicemeeter must be running; while the connection is
-enabled, Detent checks every few seconds and shows the edition.
+enabled, Trimcraft checks every few seconds and shows the edition.
 
 ### Discord
 
 The Discord card under **Connections** has a step-by-step setup guide (with a link to the
 Developer Portal); when something fails, the error points at the step that fixes it. In short:
-Detent talks to the Discord client through its local RPC interface (named pipe
+Trimcraft talks to the Discord client through its local RPC interface (named pipe
 `\\?\pipe\discord-ipc-0`), using your own application from the Discord Developer Portal:
 
 1. In the [Developer Portal](https://discord.com/developers/applications), create an
@@ -256,28 +257,28 @@ Detent talks to the Discord client through its local RPC interface (named pipe
    and add the redirect `https://localhost/` under **Redirects**. Leave **Public Client** off.
 2. Unapproved applications may only use RPC for their owner and testers. If Discord refuses
    the request, add your own Discord account under **App Testers** and accept the invitation.
-3. In Detent, under **Connections → Discord**, enter Client ID and Client Secret, **Save**,
+3. In Trimcraft, under **Connections → Discord**, enter Client ID and Client Secret, **Save**,
    enable the connection and press **Test connection**. Discord shows a consent request for
    `rpc`, `rpc.voice.read` and `rpc.voice.write`; approve it.
 
 The tokens Discord issues are stored in the Credential Manager and refreshed on their own;
 later starts need no approval. **Disconnect / forget authorization** deletes them, **Remove
 credentials** also deletes the secret. Discord lets only one app at a time change voice
-settings and reverts that app's changes when it disconnects, so Detent stays connected while
+settings and reverts that app's changes when it disconnects, so Trimcraft stays connected while
 the connection is enabled (and reconnects when Discord restarts).
 
 ### vJoy
 
-Detent can feed virtual joysticks from [vJoy](https://github.com/BrunnerInnovation/vJoy), which
-games see as ordinary controllers. vJoy must be installed; Detent loads its
+Trimcraft can feed virtual joysticks from [vJoy](https://github.com/BrunnerInnovation/vJoy), which
+games see as ordinary controllers. vJoy must be installed; Trimcraft loads its
 `vJoyInterface.dll` at run time. The vJoy card under **Connections** shows the driver version and
-the configured devices 1–16 with their axes, buttons and POVs and who owns each (free, Detent,
+the configured devices 1–16 with their axes, buttons and POVs and who owns each (free, Trimcraft,
 another program). Axes, buttons and POVs are set up in **Configure vJoy** (vJoyConf), not in
-Detent; a fresh vJoy has one device with three axes and no buttons, so add buttons and POVs
-there before using button or POV outputs (Detent warns when an output needs more than a device
+Trimcraft; a fresh vJoy has one device with three axes and no buttons, so add buttons and POVs
+there before using button or POV outputs (Trimcraft warns when an output needs more than a device
 has).
 
-While the connection is enabled, Detent acquires only the vJoy devices the active profile uses
+While the connection is enabled, Trimcraft acquires only the vJoy devices the active profile uses
 and gives them back when it is disabled, when the profile no longer uses them, and on exit;
 before giving a device back it releases its buttons and centres its POVs. Everything below is
 per profile:
@@ -296,7 +297,7 @@ per profile:
 
 On a profile switch everything the old profile held is released and the new profile's outputs
 apply at once (also at startup, with the restored states). vJoy devices never act as triggers
-or mapping sources, so Detent's own output cannot loop back. Output changes appear in the
+or mapping sources, so Trimcraft's own output cannot loop back. Output changes appear in the
 event log under *vJoy output* (axes at most 10 times per second each).
 
 To see the output: open **vJoy Monitor** (`JoyMonitor.exe` in the vJoy folder, or "Monitor
@@ -305,30 +306,30 @@ vJoy" in the Start menu) and pick the device, or open Windows' game controller s
 
 ## Tray and settings
 
-Detent keeps a **tray icon** while it runs: a left click opens the main window; its menu has
+Trimcraft keeps a **tray icon** while it runs: a left click opens the main window; its menu has
 *Show window*, *Overlay visible* (the same switch as the overlay hotkey) and *Quit*. Starting
-Detent a second time opens the running instance instead.
+Trimcraft a second time opens the running instance instead.
 
 The gear in the header opens **Settings**. Under *General*:
 
 - **Close button minimizes to the tray** (on by default): closing the window only hides it;
   inputs, actions and the overlay keep running. Quit from the tray menu. The first time,
-  Windows shows a notification that Detent is still running.
+  Windows shows a notification that Trimcraft is still running.
 - **Start with Windows** (off by default): registered per user. A start by Windows always
   goes to the tray.
 - **Start minimized to the tray** (on by default): also for starts by hand. The very first
   start (no settings saved yet) always shows the window.
 - **Always run as administrator** (off by default): Windows does not let a normal program send
-  keys and mouse input to a program that runs as administrator. If a game does, Detent must too.
-  With this on, Detent restarts itself as administrator (UAC prompt) when started normally.
+  keys and mouse input to a program that runs as administrator. If a game does, Trimcraft must too.
+  With this on, Trimcraft restarts itself as administrator (UAC prompt) when started normally.
   Together with *Start with Windows* it is registered as a Task Scheduler task with highest
   privileges instead of a startup entry, so there is no prompt at logon. Creating or removing
-  that task needs administrator rights; until Detent runs as administrator it uses the normal
+  that task needs administrator rights; until Trimcraft runs as administrator it uses the normal
   startup entry. **Restart as administrator** does it right away.
 
-The settings page and the version tooltip show whether Detent runs as administrator. When it
+The settings page and the version tooltip show whether Trimcraft runs as administrator. When it
 does not and the program in the foreground does, a banner in the main window warns that
-Detent's keys and mouse will not reach it (also in the log).
+Trimcraft's keys and mouse will not reach it (also in the log).
 
 Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
 
@@ -336,18 +337,18 @@ Uninstalling removes the startup entry and, after a UAC prompt, the task (only i
 
 Settings has a section **Backup & transfer**.
 
-- **Export** writes the configuration, or selected profiles, to a `.detent.json` file (also per profile in the profile
+- **Export** writes the configuration, or selected profiles, to a `.trimcraft.json` file (also per profile in the profile
   list). The file holds the schema version and the export time. Credentials are never exported: the Discord client secret
   reference and any field named like a secret, token, password or authorization header are emptied, and the file lists
   what was left out. After importing, enter those under Connections.
-- **Import** reads such a file (or a plain `setup.json`). Older schemas are converted; files from a newer Detent are
+- **Import** reads such a file (or a plain `setup.json`). Older schemas are converted; files from a newer Trimcraft are
   refused with a message. **Replace all** swaps the whole configuration (this computer's tray and startup settings stay,
   and so do the Discord credentials when the file names the same Client ID) after a confirmation. **Add profiles** adds the
   chosen profiles: names that are taken get a number ("DCS (2)"), ids are renumbered where they clash, the encoders and
   counters the profiles use come along, and programs that another profile already lists are not taken over. Before
   either, a backup of the current configuration is written; if that fails, nothing is imported.
 - **Automatic backups**: whenever `setup.json` is saved, at most every 5 minutes, and before every import and restore,
-  Detent copies it to `backups\setup-YYYYMMDD-HHMMSS.json` (UTC) in the config folder. It keeps the latest 20 and the
+  Trimcraft copies it to `backups\setup-YYYYMMDD-HHMMSS.json` (UTC) in the config folder. It keeps the latest 20 and the
   newest of each of the last 14 days. The list shows date, profile count and size; **Restore** (after a confirmation,
   with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
   in the event log.
@@ -373,32 +374,56 @@ Settings has a section **Backup & transfer**.
 
 | Path | What |
 |---|---|
-| `crates/detent-core` | Platform-independent model: device identity, live state, encoders, counters, virtual controls, actions, overlay layout. All logic is here and unit-tested. |
-| `crates/detent-input` | Input backends: SDL3 and a mock with synthetic devices. |
+| `crates/trimcraft-core` | Platform-independent model: device identity, live state, encoders, counters, virtual controls, actions, overlay layout. All logic is here and unit-tested. |
+| `crates/trimcraft-input` | Input backends: SDL3 and a mock with synthetic devices. |
 | `src-tauri` | Desktop app (Tauri 2): engine thread, windows, hotkey, persistence. |
 | `ui` | Svelte 5 + TypeScript frontend: main window and overlay window. |
 
 ## Development
 
-Detent runs on Windows 10/11 only, and is developed there. Requirements: Rust (stable, MSVC),
+Trimcraft runs on Windows 10/11 only, and is developed there. Requirements: Rust (stable, MSVC),
 Node 24, CMake (SDL3 is built from source and linked statically).
 
 ```sh
 npm install
 npx tauri dev                       # app with real devices
-DETENT_INPUT=mock npx tauri dev     # app with synthetic devices (no hardware needed)
+TRIMCRAFT_INPUT=mock npx tauri dev  # app with synthetic devices (no hardware needed)
 npm run dev                         # UI only, in a browser, with an in-page demo
-cargo run -p detent-input --example probe -- 30   # print raw input events for 30 s
+cargo run -p trimcraft-input --example probe -- 30   # print raw input events for 30 s
 ./scripts/check.sh                  # full gate, same as CI; run before every push
 ```
 
-Settings live in `%APPDATA%\cloud.breu.detent`: `devices.json` (known devices and
+Settings live in `%APPDATA%\cloud.breu.trimcraft`: `devices.json` (known devices and
 labels), `setup.json` (encoders, counters, profiles with their virtual controls and overlay widgets, overlay settings, recorder, connections,
 app-wide settings), `values.json`
 (current counter values), `control-states.json` (active radio states of all profiles).
 
+## Upgrading from Detent
+
+Trimcraft was called Detent before. Quit Detent, install Trimcraft and start it; on its first
+start it takes over the Detent installation and logs each step (app log and event log, lines
+starting with `migration:`):
+
+- **Settings, devices, values, backups:** `%APPDATA%\cloud.breu.detent` is copied to
+  `%APPDATA%\cloud.breu.trimcraft`, unless Trimcraft has a `setup.json` of its own already.
+  Old logs are copied from `%LOCALAPPDATA%\cloud.breu.detent\logs`; the WebView data is not.
+  The old folders stay, with a `MIGRATED_TO_TRIMCRAFT.txt` note; delete them once everything works.
+- **Credentials:** Credential Manager entries `detent/...` (Discord client secret and login,
+  HTTP header secrets) are moved to `trimcraft/...`; an old entry is deleted only after the new
+  one was written and read back. The references in the setup, in backups and in imported files
+  are renamed when they load.
+- **Autostart:** Detent's `Run` value is removed and Trimcraft registers its own from the
+  settings. Detent's elevated task can only be removed as administrator; with "Always run as
+  administrator" on, Trimcraft restarts elevated and removes it then.
+- **Exports:** `.detent.json` files import like `.trimcraft.json` files.
+
+Detent and Trimcraft do not see each other as the same app: a Detent that still runs neither
+blocks Trimcraft nor gets its second launches, and both would react to the same inputs, so
+Trimcraft warns when it finds one running. Uninstall Detent afterwards (its uninstaller leaves
+Trimcraft's files and autostart alone).
+
 ## CI
 
 Every push to `main` runs the gate and builds the app on Windows. The build
-is downloadable as the `detent-windows` artifact (NSIS installer and plain `detent.exe`).
+is downloadable as the `trimcraft-windows` artifact (NSIS installer and plain `trimcraft.exe`).
 Builds are not code-signed; Windows SmartScreen will warn on first start.

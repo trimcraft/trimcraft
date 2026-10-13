@@ -1,5 +1,5 @@
 //! The Soundpad connector: talks to Soundpad over its remote control pipe (see
-//! `detent_core::soundpad`).
+//! `trimcraft_core::soundpad`).
 //!
 //! While the connector is enabled, a monitor thread checks `IsAlive()` and keeps the sound
 //! list fresh; when Soundpad is not reachable it retries with a growing pause (backoff). The
@@ -11,11 +11,11 @@
 //! up, a sound list older than the configured age is fetched again, and also when the sound
 //! is not in it, so playing a sound normally costs one round trip.
 
-use detent_core::connection::{ConnectorState, ConnectorStatus, SoundpadSettings};
-use detent_core::soundpad::{self, Sound, SoundpadCommand};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use trimcraft_core::connection::{ConnectorState, ConnectorStatus, SoundpadSettings};
+use trimcraft_core::soundpad::{self, Sound, SoundpadCommand};
 
 /// How often a connected Soundpad is checked.
 const POLL: Duration = Duration::from_secs(5);
@@ -54,7 +54,7 @@ impl Soundpad {
         *lock(&state.settings) = settings;
         let worker = state.clone();
         std::thread::Builder::new()
-            .name("detent-soundpad".into())
+            .name("trimcraft-soundpad".into())
             .spawn(move || {
                 for command in commands {
                     worker.run(&command);
@@ -63,7 +63,7 @@ impl Soundpad {
             .expect("spawn soundpad thread");
         let monitor = state.clone();
         std::thread::Builder::new()
-            .name("detent-soundpad-monitor".into())
+            .name("trimcraft-soundpad-monitor".into())
             .spawn(move || monitor.monitor())
             .expect("spawn soundpad monitor");
         Self { queue, state }
@@ -253,7 +253,7 @@ impl State {
 
     /// Index of the stored sound: from the cache if it is fresh and has the sound, otherwise
     /// from a newly fetched list.
-    fn index_of(&self, sound: &detent_core::SoundRef) -> Result<Option<u32>, String> {
+    fn index_of(&self, sound: &trimcraft_core::SoundRef) -> Result<Option<u32>, String> {
         let max_age = Duration::from_millis(u64::from(self.settings().list_max_age_ms));
         {
             let cache = lock(&self.cache);
@@ -313,8 +313,8 @@ impl State {
 
 mod pipe {
     //! One request per connection, overlapped I/O so every step can time out.
-    use detent_core::soundpad::PIPE;
     use std::time::{Duration, Instant};
+    use trimcraft_core::soundpad::PIPE;
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_IO_PENDING, ERROR_MORE_DATA, ERROR_PIPE_BUSY,
         GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
@@ -484,7 +484,7 @@ mod pipe {
 mod tests {
     use super::*;
 
-    /// Needs a running Soundpad: `cargo test -p detent -- --ignored soundpad`. Plays nothing.
+    /// Needs a running Soundpad: `cargo test -p trimcraft -- --ignored soundpad`. Plays nothing.
     #[test]
     #[ignore = "needs a running Soundpad"]
     fn live_soundpad_answers() {
@@ -508,7 +508,7 @@ mod tests {
         let sounds = soundpad.sounds().unwrap();
         assert!(!sounds.is_empty());
         let first = &sounds[0];
-        let wanted = detent_core::SoundRef {
+        let wanted = trimcraft_core::SoundRef {
             title: first.title.clone(),
             path: first.path.clone(),
         };

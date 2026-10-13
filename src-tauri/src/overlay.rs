@@ -5,12 +5,12 @@
 //! fullscreen mode, not over exclusive fullscreen.
 
 use crate::Shared;
-use detent_core::MonitorRef;
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Monitor, WebviewUrl, WebviewWindowBuilder};
+use trimcraft_core::MonitorRef;
 
 const LABEL: &str = "overlay";
 
@@ -19,7 +19,7 @@ const TOPMOST_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn create(app: &AppHandle, shared: &Arc<Shared>) -> tauri::Result<()> {
     WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("overlay.html".into()))
-        .title("Detent Overlay")
+        .title("Trimcraft Overlay")
         .transparent(true)
         .decorations(false)
         .shadow(false)
@@ -82,9 +82,9 @@ pub fn monitors(app: &AppHandle) -> Result<Vec<MonitorInfo>, String> {
 }
 
 /// The connected monitors, for absolute mouse positions in macros.
-pub fn screens(app: &AppHandle) -> Option<detent_core::Screens> {
+pub fn screens(app: &AppHandle) -> Option<trimcraft_core::Screens> {
     match monitors(app) {
-        Ok(list) => Some(detent_core::Screens {
+        Ok(list) => Some(trimcraft_core::Screens {
             primary: list.iter().position(|m| m.primary),
             monitors: list.into_iter().map(|m| m.monitor).collect(),
         }),
@@ -104,7 +104,7 @@ pub fn cover_monitor(app: &AppHandle, saved: Option<&MonitorRef>) {
     let chosen = saved.and_then(|saved| {
         let available = window.available_monitors().unwrap_or_default();
         let refs: Vec<MonitorRef> = available.iter().map(to_ref).collect();
-        let found = detent_core::overlay::find_monitor(saved, &refs);
+        let found = trimcraft_core::overlay::find_monitor(saved, &refs);
         if found.is_none() {
             log::warn!(
                 "overlay monitor {:?} at {},{} is not connected; using the primary monitor",

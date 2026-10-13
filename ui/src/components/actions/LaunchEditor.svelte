@@ -26,7 +26,7 @@
     <label class="wide">Arguments <input class="mono grow" bind:value={action.target.arguments} placeholder={'e.g. --profile "My Game"'} /></label>
     <label class="wide">Start in <input class="mono grow" bind:value={action.target.workingDir} placeholder="(the program's folder)" /></label>
     <label class="check"><input type="checkbox" bind:checked={action.target.onlyIfNotRunning} /> Only if it is not running already</label>
-    <p class="muted small">Started directly, not through a command prompt: the arguments reach the program as written. When Detent runs as administrator, so does the program.</p>
+    <p class="muted small">Started directly, not through a command prompt: the arguments reach the program as written. When Trimcraft runs as administrator, so does the program.</p>
   {:else if action.target.type === "url"}
     <label class="wide">Address <input class="mono grow" bind:value={action.target.url} placeholder="https://example.com" /></label>
     <p class="muted small">Opens in the default browser. Only http and https addresses.</p>

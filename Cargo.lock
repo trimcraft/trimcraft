@@ -830,48 +830,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "detent"
-version = "0.1.0"
-dependencies = [
- "detent-core",
- "detent-input",
- "keyring",
- "log",
- "rodio",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-log",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "ureq",
- "windows",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "detent-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "detent-input"
-version = "0.1.0"
-dependencies = [
- "detent-core",
- "log",
- "sdl3-sys",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4783,6 +4741,48 @@ dependencies = [
  "serde",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "trimcraft"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "log",
+ "rodio",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-log",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "trimcraft-core",
+ "trimcraft-input",
+ "ureq",
+ "windows",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "trimcraft-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "trimcraft-input"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "sdl3-sys",
+ "trimcraft-core",
 ]
 
 [[package]]

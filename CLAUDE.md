@@ -4,8 +4,8 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Detent is a HOTAS configuration tool for Windows with an in-game overlay. Owner: Sam
-(private project). Detent supports Windows 10/11 only; development and testing happen on
+Trimcraft is a HOTAS configuration tool for Windows with an in-game overlay. Owner: Sam
+(private project). Trimcraft supports Windows 10/11 only; development and testing happen on
 Windows. The browser demo (`npm run dev`) and the mock input backend stay as platform-neutral
 dev tools.
 
@@ -13,28 +13,32 @@ dev tools.
 
 - **Language:** code, comments, commit messages and docs in English.
 - **Generic, no vendor special cases.** Never add logic keyed on a specific controller vendor
-  or model. The only vendor/product id the code knows is vJoy's (`1234:BEAD`), because Detent
+  or model. The only vendor/product id the code knows is vJoy's (`1234:BEAD`), because Trimcraft
   itself writes to vJoy later. A device whose vendor software sends keystrokes instead of joystick
   input is a normal case for the model, not a special path.
 - **Input is event-driven.** Never sample button state per frame. Every edge goes through
   `Engine::apply` as it arrives; the UI may redraw at a lower rate. Encoders depend on this.
-- **Logic lives in `detent-core`**, which has no OS dependencies and is fully unit-tested. The
+- **Logic lives in `trimcraft-core`**, which has no OS dependencies and is fully unit-tested. The
   Tauri crate only wires things together.
 - **Thresholds are measured, not assumed.** Encoder detection defaults are deliberately generous
   and the UI shows measured pulse lengths. Don't tune defaults without measurements.
 - **The overlay never injects into the game.** It is a separate transparent window. Do not add
   graphics hooks or DLL injection; games with kernel anti-cheat (e.g. Wardogs) would flag them.
-- **Git over HTTPS only** (`origin` is `https://github.com/bresam/detent.git`). No SSH.
+- **Git over HTTPS only** (`origin` is `https://github.com/trimcraft/trimcraft`). No SSH.
 - Commits directly on `main` are fine until the first tagged version; after that, feature
   branches from `main` and pull requests.
+- Trimcraft was called **Detent** before. The old name (`detent`, `cloud.breu.detent`,
+  `detent-export`) appears only in the migration code and its tests (`migration.rs` in both
+  crates), the legacy export format in `transfer`, and the "formerly Detent" note in the README.
+  `git grep -i detent` should find nothing else.
 
 ## Commands
 
 ```sh
 ./scripts/check.sh                 # full gate (npm ci, svelte-check, build, fmt, clippy -D warnings, tests); run before every push
-DETENT_INPUT=mock npx tauri dev    # run the app with synthetic devices
+TRIMCRAFT_INPUT=mock npx tauri dev # run the app with synthetic devices
 npm run dev                        # UI in a browser with the in-page demo (ui/src/lib/demo.ts)
-cargo run -p detent-input --example probe -- 30
+cargo run -p trimcraft-input --example probe -- 30
 ```
 
 On Windows, a checkout in a deep path (e.g. a worktree under `.claude/worktrees`) makes the SDL3
@@ -42,7 +46,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
 
 ## Layout
 
-- `crates/detent-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
+- `crates/trimcraft-core`: `device` (ids, fingerprints, vJoy detection), `registry` (stable identity
   resolution), `state` (live input), `encoder` (detection, pulse stats), `function` (counters),
   `setup` (persisted config, schema-versioned, migrations), `profile` (per-game profiles,
   executable matching, auto-switch decisions), `settings` (app-wide settings outside the
@@ -66,11 +70,12 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `toast` (toast queue: newest first, one per control, at most 3, expiry),
   `vjoy` (vJoy targets, axis curves, mappings, desired output state and its diff),
   `transfer` (export files, secret stripping, import validation, profile merge), `backup` (backup file names
-  and retention),
+  and retention), `migration` (taking over a Detent installation: folder, credential and
+  autostart plans, secret reference renaming),
   `recording` (recorder events to macro steps, key/mouse timeline merge, stop trimming, hotkey
   parsing), `engine`
   (ties it together, UI commands, queues action requests).
-- `crates/detent-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
+- `crates/trimcraft-input`: `InputBackend` trait, `sdl` (SDL3 via `sdl3-sys`, built from source,
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread), `player.rs` (input macro
   player: repetition, stop, release of held inputs, panic), `input.rs` (`SendInput`),
@@ -91,9 +96,10 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   from the foreground program, process window list),
   `commands.rs` (IPC; payload shapes are tested),
   `backups.rs` (automatic setup backups, hooked into the setup save), `transfer.rs` (export/import/restore
-  commands and their dialogs),
+  commands and their dialogs), `migration.rs` (Detent takeover on the first start: folders,
+  Credential Manager entries, autostart),
   `storage.rs` (atomic JSON files). The event log is a `Diagnostics` handle shared by the engine, executor and log bridge (`lib.rs`);
-  a thread sends new entries to the UI every 100 ms (`detent://diagnostics`).
+  a thread sends new entries to the UI every 100 ms (`trimcraft://diagnostics`).
 - `ui/src`: `App.svelte` (main window: Virtual Controls, Connections, Hardware Test; Settings
   via the gear, one component per section in `components/settings`), `Overlay.svelte`
   (overlay window), `components/DiagnosticsView.svelte` + `lib/diagnostics.svelte.ts` (event log tab),
@@ -111,9 +117,9 @@ the overlay over a borderless game, the global hotkey while the game has focus, 
 timing, the macro recorder (low-level hooks, Raw Input), Soundpad, Discord and Voicemeeter, the
 tray, autostart and elevation (UAC, Task Scheduler), speech, sound and volume. Ignored tests need
 such a setup:
-`cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
+`cargo test -p trimcraft -- --ignored` (installs the recorder hooks; talks to a running Soundpad
 without playing anything; reads Discord voice settings with saved, authorized credentials and
-`DETENT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
-Detent autostart enabled; lists voices, sound outputs and audio programs without playing anything;
+`TRIMCRAFT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
+Trimcraft autostart enabled; lists voices, sound outputs and audio programs without playing anything;
 asks a running Voicemeeter for its edition).
-Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.
+Use the CI artifact `trimcraft-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`.

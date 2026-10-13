@@ -3,19 +3,21 @@
 //! A session runs on a thread of its own: a countdown (so the user can switch to the game),
 //! then capture until the stop hotkey, the Stop button or Esc (cancel). On Windows capture
 //! uses low-level hooks (`WH_KEYBOARD_LL`, `WH_MOUSE_LL`) and, for relative mouse movement,
-//! Raw Input. Both observe input globally from Detent's own process; nothing is injected into
-//! any other process. Injected input (including Detent's own playback) is ignored.
+//! Raw Input. Both observe input globally from Trimcraft's own process; nothing is injected into
+//! any other process. Injected input (including Trimcraft's own playback) is ignored.
 //!
-//! The captured events go to `detent_core::recording`, which turns them into steps; the result
+//! The captured events go to `trimcraft_core::recording`, which turns them into steps; the result
 //! waits in the engine until the editor takes it.
 
 use crate::{Shared, overlay};
-use detent_core::Movement;
-use detent_core::recording::{self, COUNTDOWN_MS, Finished, RecordKind, Recorded, RecorderPhase};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use trimcraft_core::Movement;
+use trimcraft_core::recording::{
+    self, COUNTDOWN_MS, Finished, RecordKind, Recorded, RecorderPhase,
+};
 
 /// Values of [`Control::request`].
 const RUN: u8 = 0;
@@ -67,7 +69,7 @@ impl Recorder {
         let app = app.clone();
         let shared = shared.clone();
         std::thread::Builder::new()
-            .name("detent-recorder".into())
+            .name("trimcraft-recorder".into())
             .spawn(move || run(&app, &shared, session, kind, movement, &control))
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -137,7 +139,7 @@ fn run(
     overlay::refresh_visibility(app);
 }
 
-type Recording = Option<(detent_core::Action, Vec<String>)>;
+type Recording = Option<(trimcraft_core::Action, Vec<String>)>;
 
 fn record(
     app: &AppHandle,
@@ -178,11 +180,11 @@ fn record(
 
 mod platform {
     use super::{CANCEL, Control, Ended, RUN};
-    use detent_core::recording::{Hotkey, RawEvent, RecordKind, Recorded, StopReason};
-    use detent_core::{MouseButton, Movement};
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
+    use trimcraft_core::recording::{Hotkey, RawEvent, RecordKind, Recorded, StopReason};
+    use trimcraft_core::{MouseButton, Movement};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -375,7 +377,7 @@ mod platform {
                     std::mem::size_of::<RAWINPUTHEADER>() as u32,
                 )
             };
-            // Injected input (SendInput, including Detent's playback) has no device.
+            // Injected input (SendInput, including Trimcraft's playback) has no device.
             if got != u32::MAX
                 && raw.header.dwType == RIM_TYPEMOUSE
                 && !raw.header.hDevice.is_null()
@@ -489,7 +491,7 @@ mod platform {
     }
 
     fn message_window() -> Result<Window, String> {
-        let class: Vec<u16> = "DetentRecorder\0".encode_utf16().collect();
+        let class: Vec<u16> = "TrimcraftRecorder\0".encode_utf16().collect();
         let wc = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
             // SAFETY: no preconditions.
@@ -622,7 +624,7 @@ mod tests {
     use super::*;
 
     /// Installs the hooks, the message window and Raw Input, then stops at once. Needs an
-    /// interactive desktop: `cargo test -p detent -- --ignored recorder`.
+    /// interactive desktop: `cargo test -p trimcraft -- --ignored recorder`.
     #[test]
     #[ignore = "installs global input hooks"]
     fn capture_sets_up_and_tears_down() {

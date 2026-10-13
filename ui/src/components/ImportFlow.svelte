@@ -75,7 +75,7 @@
   <div class="row">
     <button onclick={pick} disabled={busy}>{onlyProfiles ? "Import profiles…" : "Import from file…"}</button>
     {#if !summary && !result && !error}
-      <span class="muted small">Detent export files (.detent.json) and setup backups.</span>
+      <span class="muted small">Trimcraft export files (.trimcraft.json) and setup backups.</span>
     {/if}
   </div>
   {#if error}<p class="error">{error}</p>{/if}
@@ -92,7 +92,7 @@
     <div class="box">
       <p class="small">
         {summary.kind === "profiles" ? "Profiles" : summary.kind === "all" ? "Whole configuration" : "Setup backup"}, exported
-        {when(summary.exportedAt)}{summary.detentVersion ? ` by Detent ${summary.detentVersion}` : ""}.
+        {when(summary.exportedAt)}{summary.trimcraftVersion ? ` by Trimcraft ${summary.trimcraftVersion}` : ""}.
         {#if summary.schemaVersion < 2}<span class="muted">Older file; it is converted on import.</span>{/if}
       </p>
       {#if summary.strippedFields.length}

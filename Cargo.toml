@@ -1,17 +1,18 @@
 [workspace]
 resolver = "3"
-members = ["crates/detent-core", "crates/detent-input", "src-tauri"]
+members = ["crates/trimcraft-core", "crates/trimcraft-input", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 license = "LicenseRef-Proprietary"
 publish = false
+repository = "https://github.com/trimcraft/trimcraft"
 rust-version = "1.90"
 
 [workspace.dependencies]
-detent-core = { path = "crates/detent-core" }
-detent-input = { path = "crates/detent-input" }
+trimcraft-core = { path = "crates/trimcraft-core" }
+trimcraft-input = { path = "crates/trimcraft-input" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

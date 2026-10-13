@@ -62,7 +62,7 @@
 
 <section class="panel">
   <h2>Counters</h2>
-  <p class="muted small">A counter is a value with a range, e.g. a radio channel. Each encoder detent moves it one step.</p>
+  <p class="muted small">A counter is a value with a range, e.g. a radio channel. Each encoder notch moves it one step.</p>
   {#if error}<p class="error">{error}</p>{/if}
 
   {#each snapshot.functions as f (f.id)}

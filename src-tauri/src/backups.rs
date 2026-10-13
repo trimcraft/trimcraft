@@ -3,14 +3,14 @@
 //! Every successful save of the setup asks for a backup; they are written at most once every
 //! five minutes (a change that arrives sooner is written when the time is up). Backups are also
 //! written before an import and before a restore, and on request. Old ones are pruned by the
-//! rules in `detent_core::backup`.
+//! rules in `trimcraft_core::backup`.
 
-use detent_core::backup::{self, BackupInfo};
-use detent_core::{Category, Diagnostics, Record};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use trimcraft_core::backup::{self, BackupInfo};
+use trimcraft_core::{Category, Diagnostics, Record};
 
 const DIR: &str = "backups";
 /// How often the thread looks for a change that is waiting for its turn.
@@ -48,7 +48,7 @@ impl Backups {
         });
         let weak = Arc::downgrade(&backups);
         let spawned = std::thread::Builder::new()
-            .name("detent-backups".into())
+            .name("trimcraft-backups".into())
             .spawn(move || {
                 loop {
                     std::thread::sleep(TICK);

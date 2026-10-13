@@ -1,7 +1,7 @@
-//! The vJoy connector: writes Detent's vJoy output through the vJoy driver.
+//! The vJoy connector: writes Trimcraft's vJoy output through the vJoy driver.
 //!
 //! `vJoyInterface.dll` is loaded at run time from the vJoy installation (found through its
-//! uninstall entry, else under Program Files), so Detent starts without vJoy installed. All
+//! uninstall entry, else under Program Files), so Trimcraft starts without vJoy installed. All
 //! driver calls go through [`VjoyApi`], which the tests replace with a fake.
 //!
 //! The engine resolves what it wants on the devices ([`VjoyState`]); this worker thread
@@ -10,13 +10,13 @@
 //! centring their POVs, so nothing stays pressed: on a profile switch, on disable and on exit.
 //! Every few seconds it looks at the devices again (configuration, other feeders).
 
-use detent_core::connection::{ConnectorState, ConnectorStatus};
-use detent_core::diagnostics::{AxisThrottle, Category, Diagnostics, Level, Record};
-use detent_core::vjoy::{
-    self, DeviceOwner, PovDirection, VjoyAxis, VjoyDeviceInfo, VjoyInfo, VjoyState, VjoyWrite,
-};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
+use trimcraft_core::connection::{ConnectorState, ConnectorStatus};
+use trimcraft_core::diagnostics::{AxisThrottle, Category, Diagnostics, Level, Record};
+use trimcraft_core::vjoy::{
+    self, DeviceOwner, PovDirection, VjoyAxis, VjoyDeviceInfo, VjoyInfo, VjoyState, VjoyWrite,
+};
 
 /// How often the device list is read again.
 const POLL: Duration = Duration::from_secs(5);
@@ -31,7 +31,7 @@ pub enum RawStatus {
     Unknown,
 }
 
-/// The driver calls Detent uses. Devices are 1–16, buttons and POVs 1-based, as vJoy counts.
+/// The driver calls Trimcraft uses. Devices are 1–16, buttons and POVs 1-based, as vJoy counts.
 pub trait VjoyApi: Send {
     /// The driver is installed and enabled.
     fn driver_enabled(&self) -> bool;
@@ -80,7 +80,7 @@ impl Vjoy {
     fn spawn_with(enabled: bool, diagnostics: Diagnostics, loader: Loader) -> Self {
         let (queue, messages) = channel();
         std::thread::Builder::new()
-            .name("detent-vjoy".into())
+            .name("trimcraft-vjoy".into())
             .spawn(move || Worker::new(enabled, diagnostics, loader).run(messages))
             .expect("spawn vjoy thread");
         Self { queue }
@@ -278,8 +278,8 @@ impl Worker {
         if changed_devices || !self.info.devices.is_empty() {
             for dev in &mut self.info.devices {
                 if self.written.devices.contains(&dev.id) {
-                    dev.owner = DeviceOwner::Detent;
-                } else if dev.owner == DeviceOwner::Detent {
+                    dev.owner = DeviceOwner::Trimcraft;
+                } else if dev.owner == DeviceOwner::Trimcraft {
                     dev.owner = DeviceOwner::Free;
                 }
             }
@@ -372,7 +372,7 @@ impl Worker {
                 if owned.is_empty() {
                     String::new()
                 } else {
-                    format!(", Detent owns {}", owned.join(", "))
+                    format!(", Trimcraft owns {}", owned.join(", "))
                 }
             )
         });
@@ -416,7 +416,7 @@ impl Worker {
                     d.discrete_povs.max(d.continuous_povs),
                     match d.owner {
                         DeviceOwner::Free => "free",
-                        DeviceOwner::Detent => "owned by Detent",
+                        DeviceOwner::Trimcraft => "owned by Trimcraft",
                         DeviceOwner::Other => "used by another program",
                         DeviceOwner::Missing => "not configured",
                     }
@@ -440,7 +440,7 @@ fn read_info(api: &dyn VjoyApi) -> VjoyInfo {
     let devices = (1..=vjoy::MAX_DEVICES)
         .map(|id| {
             let owner = match api.status(id) {
-                RawStatus::Own => DeviceOwner::Detent,
+                RawStatus::Own => DeviceOwner::Trimcraft,
                 RawStatus::Free => DeviceOwner::Free,
                 RawStatus::Busy => DeviceOwner::Other,
                 RawStatus::Missing | RawStatus::Unknown => DeviceOwner::Missing,
@@ -473,9 +473,9 @@ mod platform {
     //! `vJoyInterface.dll`, loaded at run time.
 
     use super::{RawStatus, VjoyApi};
-    use detent_core::vjoy::{PovDirection, VjoyAxis, pov_discrete, pov_hundredths};
     use std::ffi::c_void;
     use std::path::PathBuf;
+    use trimcraft_core::vjoy::{PovDirection, VjoyAxis, pov_discrete, pov_hundredths};
     use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HMODULE};
     use windows_sys::Win32::System::LibraryLoader::{
         GetProcAddress, LOAD_WITH_ALTERED_SEARCH_PATH, LoadLibraryExW,
@@ -487,7 +487,7 @@ mod platform {
 
     type Bool = i32;
 
-    /// The functions Detent calls, as `vJoyInterface.h` declares them.
+    /// The functions Trimcraft calls, as `vJoyInterface.h` declares them.
     struct Fns {
         enabled: unsafe extern "C" fn() -> Bool,
         version: unsafe extern "C" fn() -> i16,
@@ -742,9 +742,9 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use detent_core::trigger::HatDirection;
-    use detent_core::vjoy::{VjoyAxisRef, VjoyButton, VjoyPov};
     use std::sync::{Arc, Mutex};
+    use trimcraft_core::trigger::HatDirection;
+    use trimcraft_core::vjoy::{VjoyAxisRef, VjoyButton, VjoyPov};
 
     /// Records every driver call; device 1 is configured with X/Y/Z, 8 buttons, 1 POV;
     /// device 2 belongs to another feeder.
@@ -881,7 +881,7 @@ mod tests {
                 .unwrap()
                 .contains("vJoy device 2 could not be acquired")
         );
-        assert_eq!(w.info.devices[0].owner, DeviceOwner::Detent);
+        assert_eq!(w.info.devices[0].owner, DeviceOwner::Trimcraft);
 
         // Another profile: button 3 goes, button 5 comes.
         let mut s = w.desired.clone();

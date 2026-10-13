@@ -129,7 +129,7 @@
   }
 
   const warning = (t: Trigger) =>
-    hold && t.type === "encoderStep" ? "encoder detents cannot be held" : hold && t.press.kind === "release" ? "a release cannot be held" : "";
+    hold && t.type === "encoderStep" ? "encoder notches cannot be held" : hold && t.press.kind === "release" ? "a release cannot be held" : "";
 </script>
 
 <div class="slot">
@@ -158,7 +158,7 @@
         <option value="button">Button</option>
         <option value="hat">Hat direction</option>
         <option value="axisZone">Axis zone</option>
-        {#if !hold}<option value="encoderStep">Encoder detent</option>{/if}
+        {#if !hold}<option value="encoderStep">Encoder notch</option>{/if}
       </select>
       {#if kind === "encoderStep"}
         <select bind:value={encoder}>

@@ -68,7 +68,7 @@
   <div class="group">
     <h3>Export</h3>
     <p class="hint muted">
-      Saves the configuration to a .detent.json file you can keep or give to someone else. Credentials (Discord client secret
+      Saves the configuration to a .trimcraft.json file you can keep or give to someone else. Credentials (Discord client secret
       and sign-in) are never exported; after importing, enter them again under Connections.
     </p>
     <div class="row">
@@ -94,7 +94,7 @@
   <div class="group">
     <h3>Automatic backups</h3>
     <p class="hint muted">
-      Detent copies the configuration to the backup folder whenever it is saved, at most every 5 minutes, and before every
+      Trimcraft copies the configuration to the backup folder whenever it is saved, at most every 5 minutes, and before every
       import and restore. It keeps the latest 20 and the newest of each of the last 14 days.
     </p>
     <div class="row">

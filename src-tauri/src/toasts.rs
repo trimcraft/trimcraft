@@ -6,10 +6,10 @@
 //! happens here, so nothing waits for the window system while the engine lock is held.
 
 use crate::overlay;
-use detent_core::{Toast, ToastQueue, ToastRequest};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
+use trimcraft_core::{Toast, ToastQueue, ToastRequest};
 
 /// How long the window stays after the last toast ran out, so the fade-out can finish.
 const FADE_GRACE: Duration = Duration::from_millis(450);
@@ -38,7 +38,7 @@ impl Toasts {
         });
         let worker = Arc::clone(&toasts);
         let spawned = std::thread::Builder::new()
-            .name("detent-toasts".into())
+            .name("trimcraft-toasts".into())
             .spawn(move || worker.run(&app));
         if let Err(e) = spawned {
             log::error!("could not start the toast thread: {e}");
@@ -93,7 +93,7 @@ impl Toasts {
                     state.hide_at = Some(Instant::now() + FADE_GRACE);
                 }
                 drop(state);
-                if let Err(e) = app.emit("detent://toasts", &list) {
+                if let Err(e) = app.emit("trimcraft://toasts", &list) {
                     log::debug!("could not send toasts: {e}");
                 }
                 state = self.lock();

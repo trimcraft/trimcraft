@@ -473,7 +473,7 @@ export function controlActions(kind: VirtualControlKind): Action[] {
   }
 }
 
-/** Same as detent-core's AxisCurve::apply: shapes an axis value (-1..1) on its way to vJoy. */
+/** Same as trimcraft-core's AxisCurve::apply: shapes an axis value (-1..1) on its way to vJoy. */
 export function applyCurve(c: AxisCurve, value: number): number {
   let v = Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
   if (c.invert) v = -v;

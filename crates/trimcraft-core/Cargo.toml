@@ -1,0 +1,17 @@
+[package]
+name = "trimcraft-core"
+description = "Platform-independent model of Trimcraft: device identity, live input state, overlay layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -3,17 +3,17 @@
 //! never see a path, only what the user picked.
 
 use crate::{Shared, overlay};
-use detent_core::backup::{self, BackupInfo};
-use detent_core::transfer::{
-    self, EXPORT_EXTENSION, ImportSummary, MergeReport, parse_import, prepare_replace,
-};
-use detent_core::{Category, Record, Setup};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+use trimcraft_core::backup::{self, BackupInfo};
+use trimcraft_core::transfer::{
+    self, EXPORT_EXTENSION, ImportSummary, MergeReport, parse_import, prepare_replace,
+};
+use trimcraft_core::{Category, Record, Setup};
 
 type Res<T> = Result<T, String>;
 
@@ -72,16 +72,16 @@ pub async fn export_setup(
                 .find(|p| &p.id == only)
                 .map_or("profile".into(), |p| file_safe(&p.name)),
             Some(_) => "profiles".into(),
-            None => format!("detent-{}", &backup::stamp(now)[..8]),
+            None => format!("trimcraft-{}", &backup::stamp(now)[..8]),
         };
         (text, format!("{name}.{EXPORT_EXTENSION}"))
     };
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("Export Detent configuration")
+            .set_title("Export Trimcraft configuration")
             .set_file_name(&name)
-            .add_filter("Detent export", &["json"])
+            .add_filter("Trimcraft export", &["json"])
             .blocking_save_file()
     })
     .await
@@ -117,8 +117,8 @@ pub async fn pick_import_file(
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .set_title("Import Detent configuration")
-            .add_filter("Detent export or setup", &["json"])
+            .set_title("Import Trimcraft configuration")
+            .add_filter("Trimcraft export or setup", &["json"])
             .blocking_pick_file()
     })
     .await
@@ -131,7 +131,7 @@ pub async fn pick_import_file(
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?
         .len();
     if size > MAX_IMPORT_BYTES {
-        return Err("this file is too large to be a Detent export".into());
+        return Err("this file is too large to be a Trimcraft export".into());
     }
     let text = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;

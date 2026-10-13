@@ -4,9 +4,9 @@
 //! logged. Error texts name the host and path, never the query (tokens often sit there).
 
 use crate::secrets;
-use detent_core::connection::SecretRef;
-use detent_core::webhook::{HeaderValue, Prepared, SECRET_PREFIX, redact_url};
 use std::time::Duration;
+use trimcraft_core::connection::SecretRef;
+use trimcraft_core::webhook::{HeaderValue, Prepared, SECRET_PREFIX, redact_url};
 
 /// Sends the request. Returns the outcome for the event log, e.g. "HTTP 204"; a 4xx or 5xx
 /// status is an error.

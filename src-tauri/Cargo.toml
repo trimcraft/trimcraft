@@ -1,22 +1,23 @@
 [package]
-name = "detent"
-description = "Detent: HOTAS configuration tool with in-game overlay"
+name = "trimcraft"
+description = "Trimcraft: HOTAS configuration tool with in-game overlay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "detent_app"
+name = "trimcraft_app"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-detent-core.workspace = true
-detent-input.workspace = true
+trimcraft-core.workspace = true
+trimcraft-input.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
@@ -44,6 +45,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",

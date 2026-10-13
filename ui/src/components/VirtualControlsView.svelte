@@ -87,14 +87,14 @@
   const typeName = (c: VirtualControlView) => CONTROL_TYPES.find(([t]) => t === c.kind.type)?.[1] ?? "";
 </script>
 
-<datalist id="detent-keys">
+<datalist id="trimcraft-keys">
   {#each keys as k (k.name)}<option value={k.name}></option>{/each}
 </datalist>
 
 <section class="panel">
   <h2>Virtual controls</h2>
   <p class="muted small">
-    Built from buttons, hat directions, axis zones and encoder detents; switching them can press keys or mouse buttons and
+    Built from buttons, hat directions, axis zones and encoder notches; switching them can press keys or mouse buttons and
     run other actions. Radio: one of several states (or none). Toggle: on/off. Momentary: on while held. Counter: a value.
     Mode: a layer with exactly one state, which other triggers can depend on.
   </p>

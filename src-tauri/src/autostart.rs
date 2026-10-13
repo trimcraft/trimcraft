@@ -1,18 +1,19 @@
 //! "Start with Windows": a per-user `Run` registry value, or, with "Always run as
 //! administrator", a Task Scheduler task at logon with highest privileges (no UAC prompt).
 //! Which one is registered, and what happens to the other, is decided in
-//! `detent_core::settings::plan_autostart`; this module only reads and writes them.
+//! `trimcraft_core::settings::plan_autostart`; this module only reads and writes them.
 //!
 //! The uninstaller removes both (src-tauri/windows/hooks.nsh).
 
 use crate::elevation::wide;
-use detent_core::AppSettings;
-use detent_core::settings::{
-    AUTOSTART_ARG, AutostartKind, AutostartOp, AutostartPresent, plan_autostart,
-};
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::Mutex;
+use trimcraft_core::AppSettings;
+use trimcraft_core::migration::{self, AutostartStep};
+use trimcraft_core::settings::{
+    AUTOSTART_ARG, AutostartKind, AutostartOp, AutostartPresent, plan_autostart,
+};
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
@@ -20,7 +21,7 @@ use windows_sys::Win32::System::Registry::{
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 /// Name of the `Run` value; the uninstaller uses it too.
-const RUN_VALUE: &str = "Detent";
+const RUN_VALUE: &str = "Trimcraft";
 /// schtasks.exe without a console window flashing up.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -54,17 +55,36 @@ pub fn sync(settings: &AppSettings, elevated: bool) -> (AutostartKind, Option<St
 
 pub fn present() -> AutostartPresent {
     AutostartPresent {
-        run_key: run_key_present(),
-        task: task_present(),
+        run_key: run_value_present(RUN_VALUE),
+        task: task_exists(&task_name()),
     }
 }
 
 fn apply(op: AutostartOp) -> Result<(), String> {
     match op {
         AutostartOp::WriteRunKey => write_run_key(),
-        AutostartOp::RemoveRunKey => remove_run_key(),
+        AutostartOp::RemoveRunKey => remove_run_value(RUN_VALUE),
         AutostartOp::CreateTask => create_task(),
         AutostartOp::RemoveTask => schtasks(&["/Delete", "/TN", &task_name(), "/F"]),
+    }
+}
+
+/// Whether Detent's (Trimcraft's former name) `Run` value and task are registered.
+pub fn detent_present() -> (bool, bool) {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    (
+        run_value_present(migration::OLD_RUN_VALUE),
+        task_exists(&migration::old_task_name(&user)),
+    )
+}
+
+pub fn remove_detent(step: AutostartStep) -> Result<(), String> {
+    match step {
+        AutostartStep::RemoveOldRunKey => remove_run_value(migration::OLD_RUN_VALUE),
+        AutostartStep::RemoveOldTask => {
+            let user = std::env::var("USERNAME").unwrap_or_default();
+            schtasks(&["/Delete", "/TN", &migration::old_task_name(&user), "/F"])
+        }
     }
 }
 
@@ -72,11 +92,11 @@ fn apply(op: AutostartOp) -> Result<(), String> {
 fn exe() -> Result<String, String> {
     std::env::current_exe()
         .map(|p| p.display().to_string())
-        .map_err(|e| format!("cannot find Detent's executable: {e}"))
+        .map_err(|e| format!("cannot find Trimcraft's executable: {e}"))
 }
 
-fn run_key_present() -> bool {
-    let (key, value) = (wide(RUN_KEY), wide(RUN_VALUE));
+fn run_value_present(name: &str) -> bool {
+    let (key, value) = (wide(RUN_KEY), wide(name));
     // SAFETY: NUL-terminated strings; null buffers only check the value exists.
     let status = unsafe {
         RegGetValueW(
@@ -115,8 +135,8 @@ fn write_run_key() -> Result<(), String> {
     }
 }
 
-fn remove_run_key() -> Result<(), String> {
-    let (key, value) = (wide(RUN_KEY), wide(RUN_VALUE));
+fn remove_run_value(name: &str) -> Result<(), String> {
+    let (key, value) = (wide(RUN_KEY), wide(name));
     // SAFETY: NUL-terminated strings.
     let status = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
     if status == ERROR_SUCCESS {
@@ -132,11 +152,11 @@ fn remove_run_key() -> Result<(), String> {
 /// name from %USERNAME%.
 fn task_name() -> String {
     let user = std::env::var("USERNAME").unwrap_or_default();
-    format!("Detent autostart {user}")
+    format!("Trimcraft autostart {user}")
 }
 
-fn task_present() -> bool {
-    schtasks(&["/Query", "/TN", &task_name()]).is_ok()
+fn task_exists(name: &str) -> bool {
+    schtasks(&["/Query", "/TN", name]).is_ok()
 }
 
 fn create_task() -> Result<(), String> {
@@ -149,7 +169,7 @@ fn create_task() -> Result<(), String> {
     // schtasks reads UTF-16 with a byte order mark.
     let mut bytes = vec![0xFF, 0xFE];
     bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
-    let path = std::env::temp_dir().join(format!("detent-autostart-{}.xml", std::process::id()));
+    let path = std::env::temp_dir().join(format!("trimcraft-autostart-{}.xml", std::process::id()));
     std::fs::write(&path, bytes).map_err(|e| format!("cannot write the task file: {e}"))?;
     let result = schtasks(&[
         "/Create",
@@ -170,7 +190,7 @@ fn task_xml(exe: &str, user: &str) -> String {
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Starts Detent as administrator when you log on (Detent: Settings, Start with Windows).</Description>
+    <Description>Starts Trimcraft as administrator when you log on (Trimcraft: Settings, Start with Windows).</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -232,8 +252,8 @@ mod tests {
 
     #[test]
     fn task_definition_escapes_and_starts_elevated() {
-        let xml = task_xml(r"C:\Apps & Tools\detent.exe", r"PC\sam");
-        assert!(xml.contains(r"<Command>C:\Apps &amp; Tools\detent.exe</Command>"));
+        let xml = task_xml(r"C:\Apps & Tools\trimcraft.exe", r"PC\sam");
+        assert!(xml.contains(r"<Command>C:\Apps &amp; Tools\trimcraft.exe</Command>"));
         assert!(xml.contains(r"<UserId>PC\sam</UserId>"));
         assert!(xml.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(xml.contains("<Arguments>--autostart</Arguments>"));
@@ -245,12 +265,12 @@ mod tests {
     #[ignore]
     fn run_key_round_trip() {
         assert!(
-            !run_key_present(),
-            "a Detent autostart is registered already"
+            !run_value_present(RUN_VALUE),
+            "a Trimcraft autostart is registered already"
         );
         write_run_key().unwrap();
-        assert!(run_key_present());
-        remove_run_key().unwrap();
-        assert!(!run_key_present());
+        assert!(run_value_present(RUN_VALUE));
+        remove_run_value(RUN_VALUE).unwrap();
+        assert!(!run_value_present(RUN_VALUE));
     }
 }

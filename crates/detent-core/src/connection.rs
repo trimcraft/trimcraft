@@ -1,4 +1,4 @@
-//! Connections: external programs Detent talks to (Soundpad now, Discord later).
+//! Connections: external programs Detent talks to (Soundpad, Discord).
 //!
 //! Each connector has persisted settings (in `setup.json`, under `connections`) and a live
 //! status the app reports. A connector's actions are only offered once it is enabled; actions
@@ -9,6 +9,7 @@
 //! credential store; the app reads and writes the secret there.
 
 use crate::action::Action;
+use crate::discord::VoiceState;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,14 +18,16 @@ use thiserror::Error;
 #[serde(rename_all = "camelCase")]
 pub enum ConnectorId {
     Soundpad,
+    Discord,
 }
 
 impl ConnectorId {
-    pub const ALL: [ConnectorId; 1] = [ConnectorId::Soundpad];
+    pub const ALL: [ConnectorId; 2] = [ConnectorId::Soundpad, ConnectorId::Discord];
 
     pub fn name(self) -> &'static str {
         match self {
             ConnectorId::Soundpad => "Soundpad",
+            ConnectorId::Discord => "Discord",
         }
     }
 
@@ -32,12 +35,13 @@ impl ConnectorId {
     pub fn for_action(action: &Action) -> Option<ConnectorId> {
         match action {
             Action::Soundpad { .. } => Some(ConnectorId::Soundpad),
+            Action::Discord { .. } => Some(ConnectorId::Discord),
             Action::KeyboardMacro { .. } | Action::MouseMacro { .. } => None,
         }
     }
 }
 
-/// Where a secret lives, never the secret itself. For future connectors with credentials.
+/// Where a secret lives, never the secret itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "store")]
 pub enum SecretRef {
@@ -69,11 +73,33 @@ impl Default for SoundpadSettings {
     }
 }
 
+/// Discord: the user's own application in the Discord Developer Portal. The client secret
+/// and the OAuth tokens live in the credential store (see [`crate::discord`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiscordSettings {
+    pub enabled: bool,
+    /// The application's ID ("Client ID"), a number; empty until entered.
+    pub client_id: String,
+    /// Where the client secret is stored; `None` until one was saved.
+    pub client_secret: Option<SecretRef>,
+}
+
+impl DiscordSettings {
+    pub fn secret_ref() -> SecretRef {
+        SecretRef::WindowsCredentialManager {
+            target: crate::discord::SECRET_TARGET.into(),
+        }
+    }
+}
+
 /// Settings of all connectors, as stored in the setup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Connections {
     pub soundpad: SoundpadSettings,
+    /// Missing in files from before the Discord connector.
+    pub discord: DiscordSettings,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -82,12 +108,20 @@ pub enum ConnectionError {
     BadTimeout,
     #[error("sound list age must be at most 10 minutes")]
     BadListAge,
+    #[error("the Discord Client ID is a number (Developer Portal, OAuth2 page)")]
+    BadClientId,
+}
+
+/// A Discord application ID: a snowflake, digits only.
+pub fn valid_client_id(id: &str) -> bool {
+    (15..=22).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit())
 }
 
 impl Connections {
     pub fn enabled(&self, id: ConnectorId) -> bool {
         match id {
             ConnectorId::Soundpad => self.soundpad.enabled,
+            ConnectorId::Discord => self.discord.enabled,
         }
     }
 
@@ -104,6 +138,10 @@ impl Connections {
         if sp.list_max_age_ms > 600_000 {
             return Err(ConnectionError::BadListAge);
         }
+        let id = &self.discord.client_id;
+        if !id.is_empty() && !valid_client_id(id) {
+            return Err(ConnectionError::BadClientId);
+        }
         Ok(())
     }
 }
@@ -116,20 +154,35 @@ pub enum ConnectorStatus {
     #[default]
     NotConfigured,
     Connecting,
+    /// The program shows a consent request the user has to approve (Discord).
+    WaitingForApproval,
     Connected,
     Error {
         message: String,
     },
 }
 
+/// Which credentials a connector has in the credential store (never the values).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialState {
+    pub secret_saved: bool,
+    /// OAuth tokens are stored.
+    pub authorized: bool,
+}
+
 /// What the app knows about a connector right now.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConnectorState {
     pub status: ConnectorStatus,
-    /// E.g. "26 sounds".
+    /// E.g. "26 sounds", "Connected as Sam".
     pub detail: Option<String>,
     /// The last problem running one of its actions, until one succeeds again.
     pub warning: Option<String>,
+    /// Live mute/deaf state (Discord, while connected).
+    pub voice: Option<VoiceState>,
+    /// For connectors with credentials (Discord).
+    pub credentials: Option<CredentialState>,
 }
 
 /// A connector as the UI shows it.
@@ -142,15 +195,24 @@ pub struct ConnectorView {
     pub status: ConnectorStatus,
     pub detail: Option<String>,
     pub warning: Option<String>,
+    pub voice: Option<VoiceState>,
+    pub credentials: Option<CredentialState>,
 }
 
 impl ConnectorView {
-    /// A disabled connector is "not configured" whatever was last reported.
+    /// A disabled connector is "not configured" whatever was last reported. Credentials are
+    /// shown either way, so they can be entered before enabling.
     pub fn new(id: ConnectorId, enabled: bool, state: Option<&ConnectorState>) -> Self {
-        let (status, detail, warning) = match (enabled, state) {
-            (false, _) => (ConnectorStatus::NotConfigured, None, None),
-            (true, None) => (ConnectorStatus::Connecting, None, None),
-            (true, Some(s)) => (s.status.clone(), s.detail.clone(), s.warning.clone()),
+        let credentials = state.and_then(|s| s.credentials);
+        let (status, detail, warning, voice) = match (enabled, state) {
+            (false, _) => (ConnectorStatus::NotConfigured, None, None, None),
+            (true, None) => (ConnectorStatus::Connecting, None, None, None),
+            (true, Some(s)) => (
+                s.status.clone(),
+                s.detail.clone(),
+                s.warning.clone(),
+                s.voice,
+            ),
         };
         Self {
             id,
@@ -159,6 +221,8 @@ impl ConnectorView {
             status,
             detail,
             warning,
+            voice,
+            credentials,
         }
     }
 }
@@ -201,8 +265,15 @@ mod tests {
         assert_eq!(c.soundpad.timeout_ms, 500);
         assert_eq!(
             serde_json::to_string(&c).unwrap(),
-            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000}}"#
+            r#"{"soundpad":{"enabled":true,"timeoutMs":500,"listMaxAgeMs":10000},"discord":{"enabled":false,"clientId":"","clientSecret":null}}"#
         );
+        let c: Connections = serde_json::from_str(
+            r#"{"discord":{"enabled":true,"clientId":"1234567890123456789",
+                "clientSecret":{"store":"windowsCredentialManager","target":"detent/discord/client-secret"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.discord.client_secret, Some(DiscordSettings::secret_ref()));
+        assert!(c.validate().is_ok() && c.enabled(ConnectorId::Discord));
         let secret = SecretRef::WindowsCredentialManager {
             target: "detent/discord/client-secret".into(),
         };
@@ -221,6 +292,28 @@ mod tests {
         c.soundpad.timeout_ms = 500;
         c.soundpad.list_max_age_ms = 700_000;
         assert_eq!(c.validate(), Err(ConnectionError::BadListAge));
+        c.soundpad.list_max_age_ms = 0;
+        c.discord.client_id = "my-app".into();
+        assert_eq!(c.validate(), Err(ConnectionError::BadClientId));
+        c.discord.client_id = "123".into();
+        assert_eq!(c.validate(), Err(ConnectionError::BadClientId));
+        c.discord.client_id = "1234567890123456789".into();
+        assert_eq!(c.validate(), Ok(()));
+    }
+
+    #[test]
+    fn discord_actions_are_gated() {
+        use crate::discord::DiscordCommand;
+        let mut c = Connections::default();
+        let mute = Action::Discord {
+            command: DiscordCommand::ToggleMute,
+        };
+        assert_eq!(ConnectorId::for_action(&mute), Some(ConnectorId::Discord));
+        assert!(!c.action_enabled(&mute));
+        c.soundpad.enabled = true;
+        assert!(!c.action_enabled(&mute));
+        c.discord.enabled = true;
+        assert!(c.action_enabled(&mute));
     }
 
     #[test]
@@ -228,8 +321,35 @@ mod tests {
         let reported = ConnectorState {
             status: ConnectorStatus::Connected,
             detail: Some("26 sounds".into()),
-            warning: None,
+            ..Default::default()
         };
+        // Credentials show while disabled; live voice state only while enabled.
+        let discord = ConnectorState {
+            status: ConnectorStatus::Connected,
+            voice: Some(VoiceState {
+                mute: true,
+                deaf: false,
+            }),
+            credentials: Some(CredentialState {
+                secret_saved: true,
+                authorized: true,
+            }),
+            ..Default::default()
+        };
+        let off = ConnectorView::new(ConnectorId::Discord, false, Some(&discord));
+        assert_eq!((off.voice, off.credentials.is_some()), (None, true));
+        let json = serde_json::to_value(ConnectorView::new(
+            ConnectorId::Discord,
+            true,
+            Some(&discord),
+        ))
+        .unwrap();
+        assert_eq!(json["voice"]["mute"], true);
+        assert_eq!(json["credentials"]["secretSaved"], true);
+        assert_eq!(
+            serde_json::to_value(ConnectorStatus::WaitingForApproval).unwrap()["state"],
+            "waitingForApproval"
+        );
         let off = ConnectorView::new(ConnectorId::Soundpad, false, Some(&reported));
         assert_eq!(off.status, ConnectorStatus::NotConfigured);
         assert_eq!(off.detail, None);

@@ -143,6 +143,28 @@ mod tests {
     }
 
     #[test]
+    fn file_from_stage_2_loads_with_discord_disabled() {
+        let json = r#"{
+            "schemaVersion": 1,
+            "connections": {"soundpad": {"enabled": true, "timeoutMs": 800, "listMaxAgeMs": 10000}}
+        }"#;
+        let s = Setup::from_json(json).unwrap();
+        assert!(s.connections.soundpad.enabled);
+        assert_eq!(
+            s.connections.discord,
+            crate::connection::DiscordSettings::default()
+        );
+        assert!(!s.connections.discord.enabled);
+        // The secret itself never ends up in the file, only where it is stored.
+        let mut s = s;
+        s.connections.discord.client_secret =
+            Some(crate::connection::DiscordSettings::secret_ref());
+        let out = s.to_json();
+        assert!(out.contains("\"target\": \"detent/discord/client-secret\""));
+        assert_eq!(Setup::from_json(&out).unwrap(), s);
+    }
+
+    #[test]
     fn round_trip() {
         let mut s = Setup::default();
         s.dismissed_suggestions.push(ButtonPair {

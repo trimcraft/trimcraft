@@ -1,6 +1,7 @@
 import type {
   Action,
   ControlRef,
+  DiscordCommand,
   DeviceSnapshot,
   EngineSnapshot,
   HatDirection,
@@ -150,9 +151,23 @@ export function soundpadText(c: SoundpadCommand): string {
   }
 }
 
+export const DISCORD_COMMANDS: [DiscordCommand, string][] = [
+  ["mute", "Mute"],
+  ["unmute", "Unmute"],
+  ["toggleMute", "Toggle mute"],
+  ["deafen", "Deafen"],
+  ["undeafen", "Undeafen"],
+  ["toggleDeafen", "Toggle deafen"],
+];
+
+export function discordText(c: DiscordCommand): string {
+  return (DISCORD_COMMANDS.find(([k]) => k === c)?.[1] ?? c).toLowerCase();
+}
+
 /** One-line summary, e.g. "Keys: ↓ LeftCtrl, F1, ↑ LeftCtrl". */
 export function actionText(a: Action): string {
   if (a.type === "soundpad") return `Soundpad: ${soundpadText(a.command)}`;
+  if (a.type === "discord") return `Discord: ${discordText(a.command)}`;
   const steps = a.type === "keyboardMacro" ? a.steps.map(keyStepText) : a.steps.map(mouseStepText);
   const speed = a.playback.speedPercent === 100 ? "" : ` (${a.playback.speedPercent}%)`;
   return `${a.type === "keyboardMacro" ? "Keys" : "Mouse"}${speed}: ${steps.join(", ") || "no steps"}`;

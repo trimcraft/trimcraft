@@ -1,6 +1,8 @@
 //! Commands the UI invokes. Each one changes the engine, saves, and triggers a redraw.
 
-use crate::{Meta, Shared, overlay};
+use crate::{Meta, Shared, overlay, secrets};
+use detent_core::connection::{DiscordSettings, valid_client_id};
+use detent_core::discord;
 use detent_core::recording::{RecordKind, RecorderConfig};
 use detent_core::{
     Action, ActionRequest, Anchor, ButtonPair, Connections, ConnectorId, ControlRef,
@@ -47,6 +49,9 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         set_overlay_editing,
         set_connections,
         test_connection,
+        save_discord_credentials,
+        forget_discord_authorization,
+        remove_discord_credentials,
         soundpad_sounds,
         start_recording,
         stop_recording,
@@ -325,27 +330,106 @@ fn set_overlay_editing(app: AppHandle, shared: State<'_, Arc<Shared>>, editing: 
     Ok(())
 }
 
-/// Saves connector settings (Connections page) and applies them.
+/// Saves connector settings (Connections page) and applies them. Discord's client ID and
+/// secret reference only change through [`save_discord_credentials`].
 #[tauri::command]
-fn set_connections(shared: State<'_, Arc<Shared>>, connections: Connections) -> Res<()> {
+fn set_connections(shared: State<'_, Arc<Shared>>, mut connections: Connections) -> Res<()> {
+    let current = shared.engine().connections().discord.clone();
+    connections.discord.client_id = current.client_id;
+    connections.discord.client_secret = current.client_secret;
     let soundpad = connections.soundpad.clone();
+    let discord = connections.discord.clone();
     with(&shared, |e| e.set_connections(connections))?;
     shared.soundpad.apply(soundpad);
+    shared.discord.apply(discord);
     Ok(())
 }
 
-/// "Test connection": checks the connector now. Async: the pipe round trip must not block
-/// the UI thread.
+/// "Test connection": checks the connector now. Async: the pipe round trip (and for Discord
+/// the consent popup) must not block the UI thread.
 #[tauri::command]
 async fn test_connection(shared: State<'_, Arc<Shared>>, id: ConnectorId) -> Res<String> {
-    match id {
-        ConnectorId::Soundpad => {
-            let soundpad = shared.soundpad.clone();
-            tauri::async_runtime::spawn_blocking(move || soundpad.test())
-                .await
-                .map_err(|e| e.to_string())?
-        }
+    let shared = Arc::clone(&shared);
+    tauri::async_runtime::spawn_blocking(move || match id {
+        ConnectorId::Soundpad => shared.soundpad.test(),
+        ConnectorId::Discord => shared.discord.test(),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Changes Discord settings and applies them.
+fn update_discord(shared: &Shared, change: impl FnOnce(&mut DiscordSettings)) -> Res<()> {
+    let mut connections = shared.engine().connections().clone();
+    change(&mut connections.discord);
+    let discord = connections.discord.clone();
+    with(shared, |e| e.set_connections(connections))?;
+    shared.discord.apply(discord);
+    Ok(())
+}
+
+/// Saves the Discord application's client ID and, if given, its secret. The secret goes to
+/// the credential store; the setup only gets a reference to it. A different client ID drops
+/// the stored authorization, which belongs to the old application.
+#[tauri::command]
+fn save_discord_credentials(
+    shared: State<'_, Arc<Shared>>,
+    client_id: String,
+    client_secret: Option<String>,
+) -> Res<()> {
+    let client_id = client_id.trim().to_owned();
+    if !valid_client_id(&client_id) {
+        return Err(
+            "the Client ID is a long number; copy it from the Developer Portal (OAuth2 page)"
+                .into(),
+        );
     }
+    let secret = client_secret
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty());
+    let current = shared.engine().connections().discord.clone();
+    let has_secret = current.client_secret.is_some() && secrets::exists(discord::SECRET_TARGET);
+    if secret.is_none() && !has_secret {
+        return Err("enter the Client Secret".into());
+    }
+    if let Some(secret) = &secret {
+        secrets::set(discord::SECRET_TARGET, secret)?;
+    }
+    if client_id != current.client_id {
+        secrets::delete(discord::TOKENS_TARGET)?;
+    }
+    log::info!(
+        "discord: credentials saved (client id {client_id}{})",
+        if secret.is_some() { ", new secret" } else { "" }
+    );
+    update_discord(&shared, |d| {
+        d.client_id = client_id;
+        d.client_secret = Some(DiscordSettings::secret_ref());
+    })
+}
+
+/// "Forget authorization": deletes the OAuth tokens and disconnects. The next Test connection
+/// asks in Discord again.
+#[tauri::command]
+fn forget_discord_authorization(shared: State<'_, Arc<Shared>>) -> Res<()> {
+    secrets::delete(discord::TOKENS_TARGET)?;
+    log::info!("discord: authorization forgotten");
+    shared.discord.forget();
+    Ok(())
+}
+
+/// "Remove credentials": deletes client secret and tokens and clears the client ID.
+#[tauri::command]
+fn remove_discord_credentials(shared: State<'_, Arc<Shared>>) -> Res<()> {
+    secrets::delete(discord::TOKENS_TARGET)?;
+    secrets::delete(discord::SECRET_TARGET)?;
+    log::info!("discord: credentials removed");
+    update_discord(&shared, |d| {
+        d.client_id.clear();
+        d.client_secret = None;
+    })?;
+    shared.discord.forget();
+    Ok(())
 }
 
 /// Soundpad's sound list ("All sounds"), for the sound picker.
@@ -513,6 +597,27 @@ mod tests {
         assert!(connections.validate().is_ok() && connections.soundpad.enabled);
         let id: ConnectorId = serde_json::from_str(r#""soundpad""#).unwrap();
         assert_eq!(id, ConnectorId::Soundpad);
+        let id: ConnectorId = serde_json::from_str(r#""discord""#).unwrap();
+        assert_eq!(id, ConnectorId::Discord);
+        // As the UI sends them: the stored secret reference comes back unchanged.
+        let connections: Connections = serde_json::from_str(
+            r#"{"soundpad":{"enabled":false,"timeoutMs":500,"listMaxAgeMs":10000},
+                "discord":{"enabled":true,"clientId":"1234567890123456789",
+                  "clientSecret":{"store":"windowsCredentialManager","target":"detent/discord/client-secret"}}}"#,
+        )
+        .unwrap();
+        assert!(connections.validate().is_ok() && connections.discord.enabled);
+        let dc: VirtualControl = serde_json::from_str(
+            r#"{"id":"vc-2","name":"Voice","kind":{"type":"radio","states":[
+                {"id":"st-1","name":"Muted","select":[],
+                 "onActivate":[{"type":"discord","command":"mute"},{"type":"discord","command":"deafen"}],
+                 "onDeactivate":[{"type":"discord","command":"unmute"},{"type":"discord","command":"undeafen"},
+                    {"type":"discord","command":"toggleMute"},{"type":"discord","command":"toggleDeafen"}]}],
+                "increment":[],"decrement":[],"clear":[],"toggleOff":[],
+                "end":"wrap","toggleOnReselect":false,"startup":"restoreLast"}}"#,
+        )
+        .unwrap();
+        assert_eq!(dc.radio().states[0].on_deactivate.len(), 4);
 
         // Recorder and test play.
         let _: RecordKind = serde_json::from_str(r#""keyboard""#).unwrap();

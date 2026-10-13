@@ -46,7 +46,9 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `connection` (connector settings, status, gating of connector actions; secrets only by
   reference),
   `action` (keyboard/mouse macros, key table with scan codes, expansion to input ops),
-  `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `path`
+  `soundpad` (Soundpad commands, request strings, sound list parsing and lookup), `discord`
+  (Discord RPC frames, messages, OAuth login flow over a `Transport` trait, idempotent
+  mute/deafen), `path`
   (mouse path simplification, playback schedule, monitor and SendInput coordinates),
   `recording` (recorder events to macro steps, stop trimming, hotkey parsing), `engine`
   (ties it together, UI commands, queues action requests).
@@ -54,6 +56,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   static), `mock`.
 - `src-tauri`: `lib.rs` (engine thread, persistence), `executor.rs` (action thread, `SendInput`),
   `soundpad.rs` (Soundpad connector: pipe client, monitor with reconnect, worker thread),
+  `discord.rs` (Discord connector: IPC pipe, token endpoint over HTTPS, worker thread with
+  reconnect), `secrets.rs` (credential store via `keyring`),
   `recorder.rs` (macro recorder:
   low-level hooks and Raw Input on a thread of its own), `overlay.rs` (overlay window, hotkey),
   `commands.rs` (IPC; payload shapes are tested),
@@ -70,7 +74,8 @@ or bump `SETUP_SCHEMA_VERSION`.
 
 Only the Windows machine can verify: real devices through DirectInput/RawInput, the overlay
 over a borderless game, the global hotkey while the game has focus, encoder pulse timing, the
-macro recorder (low-level hooks, Raw Input) and Soundpad. Two ignored tests need such a machine:
+macro recorder (low-level hooks, Raw Input), Soundpad and Discord. Ignored tests need such a machine:
 `cargo test -p detent -- --ignored` (installs the recorder hooks; talks to a running Soundpad
-without playing anything).
+without playing anything; reads Discord voice settings with saved, authorized credentials and
+`DETENT_DISCORD_CLIENT_ID` set).
 Use the CI artifact `detent-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.detent\logs\detent.log`.

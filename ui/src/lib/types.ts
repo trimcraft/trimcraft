@@ -250,7 +250,11 @@ export type MouseMacro = {
   monitor: MonitorRef | null;
 };
 
-export type Action = KeyboardMacro | MouseMacro | { type: "soundpad"; command: SoundpadCommand };
+export type Action =
+  | KeyboardMacro
+  | MouseMacro
+  | { type: "soundpad"; command: SoundpadCommand }
+  | { type: "discord"; command: DiscordCommand };
 
 // --- Macro recorder (detent-core: recording.rs) ----------------------------------------------
 
@@ -305,25 +309,49 @@ export interface Sound {
   duration: string;
 }
 
+// --- Discord (detent-core: discord.rs) --------------------------------------------------------
+
+/** Mute/deafen set the state (skipped when it already holds); toggles use the live state. */
+export type DiscordCommand = "mute" | "unmute" | "deafen" | "undeafen" | "toggleMute" | "toggleDeafen";
+
+/** The user's own mute and deaf state in Discord. */
+export interface VoiceState {
+  mute: boolean;
+  deaf: boolean;
+}
+
 // --- Connections (detent-core: connection.rs) -------------------------------------------------
 
-export type ConnectorId = "soundpad";
+export type ConnectorId = "soundpad" | "discord";
 
 export type ConnectorStatus =
   | { state: "notConfigured" }
   | { state: "connecting" }
+  /** Discord shows a consent request the user has to approve. */
+  | { state: "waitingForApproval" }
   | { state: "connected" }
   | { state: "error"; message: string };
+
+/** Which credentials are in the credential store (never the values). */
+export interface CredentialState {
+  secretSaved: boolean;
+  /** OAuth tokens are stored. */
+  authorized: boolean;
+}
 
 export interface ConnectorView {
   id: ConnectorId;
   name: string;
   enabled: boolean;
   status: ConnectorStatus;
-  /** E.g. "26 sounds". */
+  /** E.g. "26 sounds", "Connected as Sam". */
   detail: string | null;
   /** Last problem running one of its actions. */
   warning: string | null;
+  /** Live mute/deaf state (Discord, while connected). */
+  voice: VoiceState | null;
+  /** For connectors with credentials (Discord). */
+  credentials: CredentialState | null;
 }
 
 export interface SoundpadSettings {
@@ -332,9 +360,20 @@ export interface SoundpadSettings {
   listMaxAgeMs: number;
 }
 
-/** Connector settings as stored in setup.json. Secrets never go here (see SecretRef in Rust). */
+/** Where a secret is stored, never the secret. */
+export type SecretRef = { store: "windowsCredentialManager"; target: string };
+
+export interface DiscordSettings {
+  enabled: boolean;
+  clientId: string;
+  /** Null until a client secret was saved. */
+  clientSecret: SecretRef | null;
+}
+
+/** Connector settings as stored in setup.json. Secrets never go here. */
 export interface Connections {
   soundpad: SoundpadSettings;
+  discord: DiscordSettings;
 }
 
 export interface RadioState {

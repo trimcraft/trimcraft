@@ -1,13 +1,16 @@
 //! Detent desktop app: wires the engine to the input backend, the windows and the disk.
 
 mod commands;
+mod discord;
 mod executor;
 mod overlay;
 mod recorder;
+mod secrets;
 mod soundpad;
 mod storage;
 
 use detent_core::{DeviceRegistry, Engine, Setup};
+use discord::Discord;
 use executor::Executor;
 use serde::Serialize;
 use soundpad::Soundpad;
@@ -45,6 +48,7 @@ pub struct Shared {
     storage: Storage,
     executor: Executor,
     soundpad: Arc<Soundpad>,
+    discord: Arc<Discord>,
     recorder: recorder::Recorder,
     meta: Meta,
 }
@@ -182,12 +186,14 @@ fn load(app: &AppHandle, backend: &str) -> Result<Shared, Box<dyn std::error::Er
     let mut engine = Engine::new(registry, setup, &values);
     engine.restore_active_states(&control_states);
     let soundpad = Arc::new(Soundpad::spawn(engine.connections().soundpad.clone()));
+    let discord = Arc::new(Discord::spawn(engine.connections().discord.clone()));
     Ok(Shared {
         engine: Mutex::new(engine),
         changed: AtomicBool::new(true),
         storage,
-        executor: Executor::spawn(app.clone(), soundpad.clone()),
+        executor: Executor::spawn(app.clone(), soundpad.clone(), discord.clone()),
         soundpad,
+        discord,
         recorder: recorder::Recorder::default(),
         meta,
     })
@@ -252,12 +258,17 @@ fn start_input(app: AppHandle, shared: Arc<Shared>, backend: Box<dyn detent_inpu
 
 /// Connector status changes go into the engine, so both windows see them.
 fn report_connectors(shared: &Arc<Shared>) {
-    let weak = Arc::downgrade(shared);
-    shared.soundpad.on_status(move |state| {
-        let Some(shared) = weak.upgrade() else { return };
-        let mut engine = shared.engine();
-        if engine.set_connector_state(detent_core::ConnectorId::Soundpad, state) {
-            shared.changed.store(true, Ordering::Relaxed);
+    use detent_core::ConnectorId;
+    let reporter = |id: ConnectorId| {
+        let weak = Arc::downgrade(shared);
+        move |state| {
+            let Some(shared) = weak.upgrade() else { return };
+            let mut engine = shared.engine();
+            if engine.set_connector_state(id, state) {
+                shared.changed.store(true, Ordering::Relaxed);
+            }
         }
-    });
+    };
+    shared.soundpad.on_status(reporter(ConnectorId::Soundpad));
+    shared.discord.on_status(reporter(ConnectorId::Discord));
 }

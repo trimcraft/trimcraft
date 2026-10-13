@@ -39,14 +39,18 @@ A virtual control is built from physical inputs and can run actions. The first k
 - Each state has actions on activate and on deactivate. Switching from A to B runs A's
   deactivate actions, then B's activate actions.
 - Actions are keyboard macros (key down, key up, tap with hold time, wait), mouse macros
-  (button down, up, click, wheel, relative move, move to a position, recorded paths, wait) and
-  Soundpad commands. Keys are sent as scan codes so games that read DirectInput or RawInput see
-  them. Every executed action is logged.
+  (button down, up, click, wheel, relative move, move to a position, recorded paths, wait),
+  Soundpad commands and Discord mute/deafen. Keys are sent as scan codes so games that read
+  DirectInput or RawInput see them. Every executed action is logged.
 - **Soundpad** actions play a sound (on speakers, on the mic, or both), stop, pause/resume, or
   play a random, the next or the previous sound. Pick the sound from Soundpad's live list; it is
   stored by title and file path, so rearranging the list in Soundpad does not break it. Soundpad
   (full version, with its remote control) must be running, and the Soundpad connection must be
   enabled under **Connections**.
+- **Discord** actions mute, unmute, deafen, undeafen, or toggle mute or deafen. Mute and deafen
+  set the state (nothing is sent when it already holds); the toggles go by Discord's live state,
+  so muting by hand in Discord is taken into account. Discord must be running and the Discord
+  connection enabled under **Connections**.
 - At the ends a radio wraps around or stops; selecting the active state again can turn it off;
   at startup the last state is restored (without running actions) or none is active.
 - On the overlay a radio shows its name and all its states, vertically or horizontally, with the
@@ -99,8 +103,28 @@ reconnects with a growing pause when the program is gone; the number of sounds i
 A connection's actions are offered in the action editor only while it is enabled. Actions of a
 connection that is later disabled stay saved, are shown greyed with a link to Connections, and
 are skipped (with a log entry) when they fire. Keyboard and mouse macros need no connection.
-Connection settings are stored in `setup.json`; secrets (future connections such as Discord)
-will be kept in the Windows Credential Manager, not in the file.
+Connection settings are stored in `setup.json`; secrets are kept in the Windows Credential
+Manager (generic credentials `detent/discord/…`), never in the file or the log.
+
+### Discord
+
+Detent talks to the Discord client through its local RPC interface (named pipe
+`\\?\pipe\discord-ipc-0`), using your own application from the Discord Developer Portal:
+
+1. In the [Developer Portal](https://discord.com/developers/applications), create an
+   application. Under **OAuth2**, copy the **Client ID**, reset and copy the **Client Secret**,
+   and add the redirect `https://localhost/` under **Redirects**. Leave **Public Client** off.
+2. Unapproved applications may only use RPC for their owner and testers. If Discord refuses
+   the request, add your own Discord account under **App Testers** and accept the invitation.
+3. In Detent, under **Connections → Discord**, enter Client ID and Client Secret, **Save**,
+   enable the connection and press **Test connection**. Discord shows a consent request for
+   `rpc`, `rpc.voice.read` and `rpc.voice.write`; approve it.
+
+The tokens Discord issues are stored in the Credential Manager and refreshed on their own;
+later starts need no approval. **Disconnect / forget authorization** deletes them, **Remove
+credentials** also deletes the secret. Discord lets only one app at a time change voice
+settings and reverts that app's changes when it disconnects, so Detent stays connected while
+the connection is enabled (and reconnects when Discord restarts).
 
 ## Layout
 

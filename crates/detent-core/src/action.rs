@@ -1,5 +1,5 @@
-//! Actions: what Detent does when a virtual control changes, e.g. press a key or play a
-//! Soundpad sound.
+//! Actions: what Detent does when a virtual control changes, e.g. press a key, play a
+//! Soundpad sound or mute Discord.
 //!
 //! The core only describes actions and expands macros into low-level [`InputOp`]s. Executing
 //! them (Windows `SendInput`, the Soundpad pipe) happens in the app, on its own thread, so the
@@ -12,6 +12,7 @@
 //! (see [`crate::path`]), or by relative amounts. Recorded movement is kept as paths of
 //! waypoints with timestamps; playback interpolates between them.
 
+use crate::discord::DiscordCommand;
 use crate::overlay::MonitorRef;
 use crate::path::{self, Sample, Screens};
 use crate::soundpad::SoundpadCommand;
@@ -59,6 +60,8 @@ pub enum Action {
     },
     /// A remote control command for Soundpad.
     Soundpad { command: SoundpadCommand },
+    /// Mute or deafen in Discord.
+    Discord { command: DiscordCommand },
 }
 
 /// How a mouse macro records movement.
@@ -523,6 +526,7 @@ impl Action {
                     sound.path = sound.path.trim().to_owned();
                 }
             }
+            Action::Discord { .. } => {}
         }
         Ok(())
     }
@@ -559,7 +563,7 @@ impl Action {
                     expand_mouse_step(step, playback, target, &mut ops, &mut warnings);
                 }
             }
-            Action::Soundpad { .. } => {}
+            Action::Soundpad { .. } | Action::Discord { .. } => {}
         }
         (ops, warnings)
     }
@@ -570,6 +574,7 @@ impl Action {
         let percent = |x: f32| format!("{:.1}%", x * 100.0);
         let (kind, parts, playback): (&str, Vec<String>, &Playback) = match self {
             Action::Soundpad { command } => return format!("soundpad: {}", command.describe()),
+            Action::Discord { command } => return format!("discord: {}", command.describe()),
             Action::KeyboardMacro { steps, playback } => (
                 "keys",
                 steps
@@ -1145,6 +1150,15 @@ mod tests {
         .unwrap();
         assert_eq!(sp.describe(), r#"soundpad: play "Siren" (mic)"#);
         assert!(sp.expand(None).0.is_empty());
+        let mut dc: Action =
+            serde_json::from_str(r#"{"type":"discord","command":"toggleDeafen"}"#).unwrap();
+        assert_eq!(dc.normalize(), Ok(()));
+        assert_eq!(dc.describe(), "discord: toggle deafen");
+        assert!(dc.expand(None).0.is_empty());
+        assert_eq!(
+            serde_json::to_string(&dc).unwrap(),
+            r#"{"type":"discord","command":"toggleDeafen"}"#
+        );
     }
 
     #[test]

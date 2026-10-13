@@ -8,12 +8,14 @@
     switch (connector.status.state) {
       case "notConfigured":
         return "disabled";
+      case "waitingForApproval":
+        return "waiting for approval";
       case "connecting":
         return "connecting…";
       case "connected":
         return "connected";
       case "error":
-        return "not reachable";
+        return connector.id === "soundpad" ? "not reachable" : "error";
     }
   });
 </script>
@@ -25,6 +27,6 @@
 
 <style>
   .connected { border-color: var(--ok); color: var(--ok); }
-  .connecting { border-color: var(--warn); color: var(--warn); }
+  .connecting, .waitingForApproval { border-color: var(--warn); color: var(--warn); }
   .error { border-color: var(--bad); color: var(--bad); }
 </style>

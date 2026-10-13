@@ -1,12 +1,13 @@
 //! Runs actions (keyboard and mouse macros) on a worker thread of its own, so a macro with
 //! delays never blocks the engine thread. Requests run strictly in the order they arrive.
-//! Soundpad commands are handed on to the Soundpad thread, so a slow or missing Soundpad
-//! never holds up the queue.
+//! Soundpad and Discord commands are handed on to their connector threads, so a slow or
+//! missing program never holds up the queue.
 //!
 //! On Windows input is synthesised with `SendInput`, keys as scan codes so games reading
 //! DirectInput or RawInput see them. Other platforms only log what would be sent, so the app
 //! still builds and runs for development.
 
+use crate::discord::Discord;
 use crate::overlay;
 use crate::soundpad::Soundpad;
 use detent_core::{Action, ActionRequest, InputOp, Phase};
@@ -20,13 +21,13 @@ pub struct Executor {
 }
 
 impl Executor {
-    pub fn spawn(app: AppHandle, soundpad: Arc<Soundpad>) -> Self {
+    pub fn spawn(app: AppHandle, soundpad: Arc<Soundpad>, discord: Arc<Discord>) -> Self {
         let (queue, requests) = channel::<ActionRequest>();
         std::thread::Builder::new()
             .name("detent-actions".into())
             .spawn(move || {
                 for request in requests {
-                    run(&app, &request, &soundpad);
+                    run(&app, &request, &soundpad, &discord);
                 }
             })
             .expect("spawn action thread");
@@ -42,7 +43,7 @@ impl Executor {
     }
 }
 
-fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad) {
+fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad, discord: &Discord) {
     let phase = match request.phase {
         Phase::Activate => "activate",
         Phase::Deactivate => "deactivate",
@@ -55,6 +56,10 @@ fn run(app: &AppHandle, request: &ActionRequest, soundpad: &Soundpad) {
     );
     if let Action::Soundpad { command } = &request.action {
         soundpad.submit(command.clone());
+        return;
+    }
+    if let Action::Discord { command } = &request.action {
+        discord.submit(*command);
         return;
     }
     // Absolute moves need the current monitor layout; it is queried per macro, so a changed

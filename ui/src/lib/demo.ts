@@ -3,7 +3,9 @@
 
 import type { Backend } from "./backend";
 import type {
+  Action,
   DeviceSnapshot,
+  DiscordCommand,
   EngineSnapshot,
   FunctionDef,
   FunctionView,
@@ -20,6 +22,7 @@ import type {
   Sound,
   Trigger,
   VirtualControlView,
+  VoiceState,
 } from "./types";
 import { actionText, sameTrigger } from "./format";
 
@@ -143,8 +146,14 @@ export function createDemo(): Backend {
     overlayEditing: false,
     recorder: { session: 0, phase: "idle", kind: null, movement: "absolute", result: null, error: null },
     recorderConfig: { stopHotkey: "Ctrl+Shift+F9", tolerance: 2, sampleIntervalMs: 8 },
-    connections: { soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 } },
-    connectors: [{ id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null }],
+    connections: {
+      soundpad: { enabled: false, timeoutMs: 500, listMaxAgeMs: 10000 },
+      discord: { enabled: false, clientId: "", clientSecret: null },
+    },
+    connectors: [
+      { id: "soundpad", name: "Soundpad", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: null },
+      { id: "discord", name: "Discord", enabled: false, status: { state: "notConfigured" }, detail: null, warning: null, voice: null, credentials: { secretSaved: false, authorized: false } },
+    ],
     overlay: { visible: true, hotkey: "Ctrl+Shift+F10", monitor: null, anchor: "bottomLeft", margin: 32, scale: 1, widgets: [] },
     detector: { maxPulseMs: 200, maxRunGapMs: 600, minRunLength: 3 },
   };
@@ -153,6 +162,36 @@ export function createDemo(): Backend {
   let tick = 0;
 
   const emit = () => listeners.forEach((l) => l(structuredClone(s)));
+
+  // Discord: a simulated voice state, changed by Discord actions (idempotent, like the app).
+  const demoVoice: VoiceState = { mute: false, deaf: false };
+  const discordView = () => s.connectors.find((c) => c.id === "discord")!;
+  function discordStatus() {
+    const c = discordView();
+    c.enabled = s.connections.discord.enabled;
+    const creds = c.credentials!;
+    if (!c.enabled) Object.assign(c, { status: { state: "notConfigured" }, detail: null, voice: null });
+    else if (!s.connections.discord.clientId || !creds.secretSaved) {
+      Object.assign(c, { status: { state: "error", message: "Enter the Client ID and Client Secret of your Discord application and save them" }, detail: null, voice: null });
+    } else if (!creds.authorized) {
+      Object.assign(c, { status: { state: "error", message: "Not authorized yet: press Test connection and approve the request in Discord" }, detail: null, voice: null });
+    } else Object.assign(c, { status: { state: "connected" }, detail: "Connected as Demo User", voice: { ...demoVoice } });
+  }
+  function runDiscord(command: DiscordCommand) {
+    if (discordView().status.state !== "connected") return console.info(`[demo] discord: ${command} skipped, not connected`);
+    const next = { ...demoVoice };
+    if (command === "mute" || command === "unmute") next.mute = command === "mute";
+    if (command === "toggleMute") next.mute = !demoVoice.mute;
+    if (command === "deafen" || command === "undeafen") next.deaf = command === "deafen";
+    if (command === "toggleDeafen") next.deaf = !demoVoice.deaf;
+    if (next.mute === demoVoice.mute && next.deaf === demoVoice.deaf) return console.info(`[demo] discord: ${command} skipped, already so`);
+    Object.assign(demoVoice, next);
+    discordStatus();
+  }
+  const voiceText = (v: VoiceState) => `mic muted: ${v.mute ? "yes" : "no"}, deafened: ${v.deaf ? "yes" : "no"}`;
+  const runAction = (a: Action) => {
+    if (a.type === "discord" && s.connections.discord.enabled) runDiscord(a.command);
+  };
 
   // Virtual controls: same semantics as detent-core's virtual_control.rs, without actions
   // (they are only logged to the console).
@@ -190,8 +229,8 @@ export function createDemo(): Backend {
     const from = indexOf(r, c.active);
     const to = nextState(r, from, indexOf(r, lastActive.get(c.id)), cmd);
     if (from === to) return;
-    if (from !== null) r.states[from]!.onDeactivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[from]!.name} deactivate:`, actionText(a)));
-    if (to !== null) r.states[to]!.onActivate.forEach((a) => console.info(`[demo] ${c.name} / ${r.states[to]!.name} activate:`, actionText(a)));
+    if (from !== null) r.states[from]!.onDeactivate.forEach((a) => { console.info(`[demo] ${c.name} / ${r.states[from]!.name} deactivate:`, actionText(a)); runAction(a); });
+    if (to !== null) r.states[to]!.onActivate.forEach((a) => { console.info(`[demo] ${c.name} / ${r.states[to]!.name} activate:`, actionText(a)); runAction(a); });
     setActive(c, to);
   };
   const fire = (t: Trigger) => {
@@ -446,7 +485,9 @@ export function createDemo(): Backend {
       const sp = connections.soundpad;
       if (sp.timeoutMs < 100 || sp.timeoutMs > 5000) throw new Error("timeout must be between 100 and 5000 ms");
       const enabling = sp.enabled && !s.connections.soundpad.enabled;
-      s.connections = structuredClone(connections);
+      // Client ID and secret reference only change through saveDiscordCredentials.
+      const discord = { ...s.connections.discord, enabled: connections.discord.enabled };
+      s.connections = { ...structuredClone(connections), discord };
       const c = s.connectors[0]!;
       c.enabled = sp.enabled;
       if (!sp.enabled) Object.assign(c, { status: { state: "notConfigured" }, detail: null, warning: null });
@@ -457,9 +498,46 @@ export function createDemo(): Backend {
           emit();
         }, 800);
       }
+      discordStatus();
       emit();
     },
-    testConnection: async () => `Connected, ${DEMO_SOUNDS.length} sounds (demo)`,
+    async testConnection(id) {
+      if (id === "soundpad") return `Connected, ${DEMO_SOUNDS.length} sounds (demo)`;
+      const creds = discordView().credentials!;
+      if (!s.connections.discord.clientId || !creds.secretSaved) {
+        throw new Error("Enter the Client ID and Client Secret of your Discord application and save them");
+      }
+      if (!creds.authorized) {
+        Object.assign(discordView(), { status: { state: "waitingForApproval" }, detail: "Approve the request in your Discord client" });
+        emit();
+        await new Promise((r) => setTimeout(r, 1500));
+        creds.authorized = true;
+      }
+      discordStatus();
+      emit();
+      return `Connected as Demo User, ${voiceText(demoVoice)} (demo)`;
+    },
+    async saveDiscordCredentials(clientId, clientSecret) {
+      if (!/^\d{15,22}$/.test(clientId.trim())) throw new Error("the Client ID is a long number; copy it from the Developer Portal (OAuth2 page)");
+      const creds = discordView().credentials!;
+      if (!clientSecret?.trim() && !creds.secretSaved) throw new Error("enter the Client Secret");
+      if (clientId.trim() !== s.connections.discord.clientId) creds.authorized = false;
+      creds.secretSaved = true;
+      s.connections.discord = { ...s.connections.discord, clientId: clientId.trim(), clientSecret: { store: "windowsCredentialManager", target: "detent/discord/client-secret" } };
+      discordStatus();
+      emit();
+    },
+    async forgetDiscordAuthorization() {
+      discordView().credentials!.authorized = false;
+      discordStatus();
+      emit();
+    },
+    async removeDiscordCredentials() {
+      discordView().credentials = { secretSaved: false, authorized: false };
+      s.connections.discord = { ...s.connections.discord, clientId: "", clientSecret: null };
+      discordStatus();
+      emit();
+    },
     soundpadSounds: async () => structuredClone(DEMO_SOUNDS),
     async startRecording(kind, movement) {
       if (s.recorder.phase !== "idle") throw new Error("a recording is already running");

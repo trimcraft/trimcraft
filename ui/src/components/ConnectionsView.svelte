@@ -5,6 +5,7 @@
   import type { Connections, ConnectorId, ConnectorView, EngineSnapshot } from "../lib/types";
   import { backend, errorText } from "../lib/backend";
   import ConnectorBadge from "./ConnectorBadge.svelte";
+  import DiscordSettings from "./DiscordSettings.svelte";
 
   let { snapshot }: { snapshot: EngineSnapshot } = $props();
 
@@ -87,6 +88,8 @@
                 save((x) => (x.soundpad.listMaxAgeMs = v));
               }} /> s</label>
         </div>
+      {:else if c.id === "discord"}
+        <DiscordSettings connector={c} settings={snapshot.connections.discord} />
       {/if}
     </div>
   {/each}

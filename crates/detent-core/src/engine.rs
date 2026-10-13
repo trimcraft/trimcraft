@@ -1230,7 +1230,9 @@ mod tests {
             .into_iter()
             .flat_map(|a| match a.action {
                 Action::KeyboardMacro { steps, .. } => steps,
-                Action::MouseMacro { .. } | Action::Soundpad { .. } => vec![],
+                Action::MouseMacro { .. } | Action::Soundpad { .. } | Action::Discord { .. } => {
+                    vec![]
+                }
             })
             .filter_map(|s| match s {
                 KeyStep::KeyTap { key, .. } => Some(key),
@@ -1580,7 +1582,7 @@ mod tests {
         let connected = ConnectorState {
             status: ConnectorStatus::Connected,
             detail: Some("26 sounds".into()),
-            warning: None,
+            ..Default::default()
         };
         assert!(engine.set_connector_state(ConnectorId::Soundpad, connected.clone()));
         assert!(!engine.set_connector_state(ConnectorId::Soundpad, connected));

@@ -64,6 +64,12 @@ export interface Backend {
   setConnections(connections: Connections): Promise<void>;
   /** Checks a connector now; resolves with a message, rejects with the problem. */
   testConnection(id: ConnectorId): Promise<string>;
+  /** Saves the Discord client ID and, if given, the client secret (to the credential store). */
+  saveDiscordCredentials(clientId: string, clientSecret: string | null): Promise<void>;
+  /** Deletes the Discord OAuth tokens; the next test asks in Discord again. */
+  forgetDiscordAuthorization(): Promise<void>;
+  /** Deletes client secret and tokens and clears the client ID. */
+  removeDiscordCredentials(): Promise<void>;
   /** Soundpad's live sound list; fails when Soundpad is not reachable. */
   soundpadSounds(): Promise<Sound[]>;
   /** Records into the snapshot's `recorder.result` after a countdown. */
@@ -119,6 +125,9 @@ async function tauriBackend(): Promise<Backend> {
     setOverlayEditing: (editing) => invoke("set_overlay_editing", { editing }),
     setConnections: (connections) => invoke("set_connections", { connections }),
     testConnection: (id) => invoke("test_connection", { id }),
+    saveDiscordCredentials: (clientId, clientSecret) => invoke("save_discord_credentials", { clientId, clientSecret }),
+    forgetDiscordAuthorization: () => invoke("forget_discord_authorization"),
+    removeDiscordCredentials: () => invoke("remove_discord_credentials"),
     soundpadSounds: () => invoke("soundpad_sounds"),
     startRecording: (kind, movement) => invoke("start_recording", { kind, movement }),
     stopRecording: () => invoke("stop_recording"),

@@ -23,6 +23,10 @@ log.workspace = true
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-log = "2"
+# Discord token endpoint (HTTPS, rustls).
+ureq = "2"
+# Client secret and OAuth tokens in the OS credential store.
+keyring = "3"
 
 [lints]
 workspace = true
@@ -41,3 +45,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target.'cfg(windows)'.dependencies.keyring]
+version = "3"
+features = ["windows-native"]
+
+[target.'cfg(target_os = "macos")'.dependencies.keyring]
+version = "3"
+features = ["apple-native"]

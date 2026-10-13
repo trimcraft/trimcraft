@@ -1,10 +1,12 @@
 <script lang="ts">
-  // Edits a list of actions: keyboard and mouse macros (see MacroEditor) and Soundpad commands.
+  // Edits a list of actions: keyboard and mouse macros (see MacroEditor), Soundpad and Discord
+  // commands.
   import type { Action, ConnectorId, EngineSnapshot, KeyInfo, KeyboardMacro, MouseMacro, Playback } from "../lib/types";
   import { show } from "../lib/nav.svelte";
   import { actionText } from "../lib/format";
   import MacroEditor from "./MacroEditor.svelte";
   import SoundpadEditor from "./SoundpadEditor.svelte";
+  import DiscordEditor from "./DiscordEditor.svelte";
 
   let {
     label,
@@ -15,7 +17,7 @@
 
   let open = $state<number | null>(null);
   /** The connector an action needs (keyboard and mouse macros are built in). */
-  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" ? "soundpad" : null);
+  const connectorOf = (a: Action): ConnectorId | null => (a.type === "soundpad" || a.type === "discord" ? a.type : null);
   const connectorView = (id: ConnectorId) => snapshot.connectors.find((c) => c.id === id);
   /** A connector's actions are offered, and run, only while it is enabled. */
   const enabled = (id: ConnectorId) => snapshot.connections[id].enabled;
@@ -34,6 +36,8 @@
         return { type, steps: [{ type: "click", button: "left", holdMs: null }], playback: playback(), movement: "absolute", monitor: null };
       case "soundpad":
         return { type, command: { type: "play", sound: { title: "", path: "" }, output: "both" } };
+      case "discord":
+        return { type, command: "toggleMute" };
     }
   }
 
@@ -72,6 +76,8 @@
           <div class="steps">
             {#if action.type === "soundpad"}
               <SoundpadEditor bind:command={action.command} connector={connectorView("soundpad")} />
+            {:else if action.type === "discord"}
+              <DiscordEditor bind:command={action.command} connector={connectorView("discord")} />
             {:else}
               <MacroEditor bind:action={() => action as KeyboardMacro | MouseMacro, (v) => (actions[ai] = v)} {keys} {snapshot} />
             {/if}
@@ -85,6 +91,7 @@
       <button class="small" onclick={() => addAction("keyboardMacro")}>+ Keyboard macro</button>
       <button class="small" onclick={() => addAction("mouseMacro")}>+ Mouse macro</button>
       {#if enabled("soundpad")}<button class="small" onclick={() => addAction("soundpad")}>+ Soundpad</button>{/if}
+      {#if enabled("discord")}<button class="small" onclick={() => addAction("discord")}>+ Discord</button>{/if}
     </div>
   </div>
 </div>

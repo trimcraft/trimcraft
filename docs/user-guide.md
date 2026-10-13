@@ -341,7 +341,9 @@ Uninstalling removes the startup entry and, after a UAC prompt, the task (only i
 
 **About** shows the version, the licence (GPL-3.0-or-later) and the licences of the third-party
 software built into Trimcraft; the same list is installed next to the program as
-`THIRD_PARTY_LICENSES`.
+`THIRD_PARTY_LICENSES`. **Credits** there lists the maintainer, contributors, supporters and the
+projects Trimcraft is built on (from `CREDITS.md`, built into the app; nothing is loaded from
+the internet), and the donation links once they exist.
 
 ## Backup and transfer
 

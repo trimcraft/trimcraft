@@ -1330,7 +1330,11 @@ export function createDemo(): Backend {
       throw new Error("not available in the browser demo");
     },
     async openAboutLink(link) {
+      if (!ABOUT_URLS[link]) throw new Error("this link is not set up");
       window.open(ABOUT_URLS[link], "_blank", "noopener");
+    },
+    async supportLinks() {
+      return (["githubSponsors", "koFi"] as const).filter((l) => ABOUT_URLS[l] !== "");
     },
     async thirdPartyLicenses() {
       return "Third-party licences for Trimcraft\n\n(In the app this shows THIRD_PARTY_LICENSES from the repository.)\n";

@@ -1,6 +1,6 @@
 // README screenshots (docs/images) of the browser demo, taken with headless Chrome over the
 // DevTools protocol. Start the demo first (npm run dev), then:
-//   node scripts/screenshots.mjs docs/images http://localhost:1420 virtual-controls connections hardware settings overlay
+//   node scripts/screenshots.mjs docs/images http://localhost:1420 virtual-controls connections hardware settings credits overlay
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,6 +89,16 @@ const SHOTS = {
     await click("Settings", "button");
     await sleep(800);
     await shot("settings");
+  },
+  credits: async () => {
+    await open("/", "controls");
+    await click("Settings", "button");
+    await sleep(500);
+    await click("About", "button");
+    await sleep(500);
+    await click("Credits", "button");
+    await sleep(800);
+    await shot("credits");
   },
   overlay: async () => {
     await open("/overlay.html");

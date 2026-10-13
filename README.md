@@ -45,7 +45,8 @@ The [user guide](docs/user-guide.md) explains every part in detail.
 | **Connections** | **Settings** |
 | ![Connections: Soundpad, Discord, Voicemeeter and vJoy](docs/images/connections.png) | ![Settings, General: tray, autostart, administrator rights and the panic hotkey](docs/images/settings.png) |
 
-The screenshots show the browser demo with made-up devices ([Hardware Test](docs/images/hardware-test.png)).
+The screenshots show the browser demo with made-up devices. More: [Hardware Test](docs/images/hardware-test.png),
+[Credits](docs/images/credits.png).
 
 ## Requirements
 
@@ -157,6 +158,25 @@ The SDL3 build fails on Windows' 260-character path limit in deep folders: set
 Bug reports, ideas and pull requests are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
 Security problems: [SECURITY.md](SECURITY.md). This project follows the
 [Contributor Covenant](CODE_OF_CONDUCT.md).
+
+## Credits
+
+Maintained by Samuel Breu ([@bresam](https://github.com/bresam)). Contributors, supporters and
+the open source projects Trimcraft is built on are listed in [CREDITS.md](CREDITS.md), also in
+the app under Settings → About → Credits.
+
+## Support Trimcraft
+
+Trimcraft is free and stays free, without ads, nags or locked features. The most valuable
+support is feedback: [open an issue](https://github.com/trimcraft/trimcraft/issues/new/choose)
+with bugs, ideas or wishes from your cockpit.
+
+<!-- TODO(orchestrator): donation links are not live yet. Once the accounts exist, set
+     SUPPORT_URLS in src-tauri/src/commands.rs, uncomment .github/FUNDING.yml and the badges
+     below (replace <name>), and drop this comment.
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-%E2%99%A5-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/<name>)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-ff5e5b?logo=kofi)](https://ko-fi.com/<name>)
+-->
 
 ## Licence
 

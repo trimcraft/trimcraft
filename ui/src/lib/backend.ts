@@ -119,6 +119,8 @@ export interface Backend {
   openLogFolder(): Promise<void>;
   /** Opens one of the fixed links on Settings > About in the browser. */
   openAboutLink(link: AboutLink): Promise<void>;
+  /** The donation pages that are set up (none until their URLs exist). */
+  supportLinks(): Promise<AboutLink[]>;
   /** The licences of the third-party software built into Trimcraft, as plain text. */
   thirdPartyLicenses(): Promise<string>;
   /** Saves the configuration, or the given profiles, to a file chosen in a dialog; credentials are left out. Resolves with the path, null if cancelled. */
@@ -233,6 +235,7 @@ async function tauriBackend(): Promise<Backend> {
     clearDiagnostics: () => invoke("clear_diagnostics"),
     openLogFolder: () => invoke("open_log_folder"),
     openAboutLink: (link) => invoke("open_about_link", { link }),
+    supportLinks: () => invoke("support_links"),
     thirdPartyLicenses: () => invoke("third_party_licenses"),
     exportSetup: (profiles) => invoke("export_setup", { profiles }),
     pickImportFile: () => invoke("pick_import_file"),

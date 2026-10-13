@@ -4,9 +4,9 @@ Guidance for agents working in this repository.
 
 ## Project
 
-Trimcraft is a HOTAS configuration tool for Windows with an in-game overlay. Owner: Sam
-(private project). Trimcraft supports Windows 10/11 only; development and testing happen on
-Windows. The browser demo (`npm run dev`) and the mock input backend stay as platform-neutral
+Trimcraft is a HOTAS configuration tool for Windows with an in-game overlay: a public open
+source project under GPL-3.0-or-later, maintained by Samuel Breu (@bresam). Trimcraft supports
+Windows 10/11 only; development and testing happen on Windows. The browser demo (`npm run dev`) and the mock input backend stay as platform-neutral
 dev tools.
 
 ## Rules
@@ -22,8 +22,9 @@ dev tools.
   Tauri crate only wires things together.
 - **Thresholds are measured, not assumed.** Encoder detection defaults are deliberately generous
   and the UI shows measured pulse lengths. Don't tune defaults without measurements.
-- **The overlay never injects into the game.** It is a separate transparent window. Do not add
-  graphics hooks or DLL injection; games with kernel anti-cheat (e.g. Wardogs) would flag them.
+- **Never inject into game processes.** Trimcraft must stay compatible with kernel anti-cheat:
+  no graphics hooks, no DLL injection, no reading or writing game memory. The overlay is a
+  separate transparent window.
 - **Git over HTTPS only** (`origin` is `https://github.com/trimcraft/trimcraft`). No SSH.
 - Commits directly on `main` are fine until the first tagged version; after that, feature
   branches from `main` and pull requests.
@@ -39,7 +40,12 @@ dev tools.
 TRIMCRAFT_INPUT=mock npx tauri dev # run the app with synthetic devices
 npm run dev                        # UI in a browser with the in-page demo (ui/src/lib/demo.ts)
 cargo run -p trimcraft-input --example probe -- 30
+./scripts/third-party-licenses.sh  # regenerate THIRD_PARTY_LICENSES after dependency changes (needs cargo-about)
+node scripts/screenshots.mjs docs/images http://localhost:1420 virtual-controls connections hardware settings credits overlay
 ```
+
+Docs: `README.md` is the public front page (short); behaviour in detail goes to
+`docs/user-guide.md`. Update the guide when you change what the user sees.
 
 On Windows, a checkout in a deep path (e.g. a worktree under `.claude/worktrees`) makes the SDL3
 CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a short directory.

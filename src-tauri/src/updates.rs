@@ -136,16 +136,20 @@ pub async fn check(app: &AppHandle, shared: &Arc<Shared>, origin: CheckOrigin) -
 
 /// The automatic check, while the setting is on: shortly after the start, then every
 /// [`RECHECK_INTERVAL`] until an update is found (Trimcraft often runs in the tray for days, and
-/// a release published after the start is found too). On a thread of its own.
+/// a release published after the start is found too).
+///
+/// Never in the way of the start: this only spawns a thread, and everything (the engine, the
+/// network) happens on it after [`STARTUP_DELAY`]. The window renders from the snapshot without
+/// waiting for any update state.
 pub fn check_automatically(app: &AppHandle, shared: &Arc<Shared>) {
-    if !shared.engine().setup().settings.check_updates_on_startup {
-        log::info!("updates: the automatic check is off");
-    }
     let (app, shared) = (app.clone(), Arc::clone(shared));
     let spawned = std::thread::Builder::new()
         .name("trimcraft-updates".into())
         .spawn(move || {
             std::thread::sleep(STARTUP_DELAY);
+            if !shared.engine().setup().settings.check_updates_on_startup {
+                log::info!("updates: the automatic check is off");
+            }
             let mut origin = CheckOrigin::Startup;
             let mut announced: Option<String> = None;
             loop {
@@ -354,6 +358,21 @@ mod tests {
         let err = check_versions(cargo, &v("0.2.0"), &v("0.2.0"), "{}").unwrap_err();
         assert!(err.contains("tauri.conf.json (none)"), "{err}");
         assert!(check_versions("[workspace]\n", &v("0.2.0"), &v("0.2.0"), &v("0.2.0")).is_err());
+    }
+
+    /// The update check never delays the start: the main window's startup (App.svelte's
+    /// onMount) waits for nothing but the snapshot, and the check waits before it runs.
+    #[test]
+    fn the_start_does_not_wait_for_updates() {
+        assert!(super::STARTUP_DELAY >= std::time::Duration::from_secs(5));
+        let app = include_str!("../../ui/src/App.svelte");
+        let start = app.find("onMount(").expect("App.svelte has onMount");
+        let end = start + app[start..].find("\n  });").expect("end of onMount");
+        let on_mount = &app[start..end];
+        assert!(on_mount.contains("subscribe("), "{on_mount}");
+        for call in ["checkForUpdates", "update", "installUpdate"] {
+            assert!(!on_mount.contains(call), "onMount must not use {call}");
+        }
     }
 
     /// The feed override is for local tests; published builds never honour it.

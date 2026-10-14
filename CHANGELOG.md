@@ -7,6 +7,8 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-14
+
 ### Fixed
 
 - **Automatic update check**: a new version published after Trimcraft started (or while a check
@@ -78,6 +80,7 @@ The first public release (early access), for Windows 10/11.
 - **Updates**: Trimcraft checks for new releases on startup (can be turned off) and installs
   them from Settings, Updates; releases are signed.
 
-[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/trimcraft/trimcraft/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.0

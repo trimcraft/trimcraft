@@ -4992,7 +4992,7 @@ dependencies = [
 
 [[package]]
 name = "trimcraft"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "keyring",
  "log",
@@ -5017,7 +5017,7 @@ dependencies = [
 
 [[package]]
 name = "trimcraft-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "trimcraft-input"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "log",
  "sdl3-sys",

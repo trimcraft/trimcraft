@@ -7,6 +7,19 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Automatic update check**: a new version published after Trimcraft started (or while a check
+  at startup could not see it yet) was only found with **Check now**. The automatic check now
+  repeats every 6 hours while Trimcraft runs, until it finds one, and a check that hangs gives
+  up after 30 seconds.
+
+### Changed
+
+- Every update check writes its result to the event log ("up to date", "available", or why it
+  failed), and a new version found while Trimcraft is in the tray shows a notification once.
+  The setting is now called "Check for updates automatically".
+
 ## [0.1.1] - 2026-10-14
 
 ### Fixed

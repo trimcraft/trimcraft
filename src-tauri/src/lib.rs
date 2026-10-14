@@ -335,7 +335,7 @@ pub fn run() {
                     main.show()?;
                 }
             }
-            updates::check_on_startup(&handle, &shared);
+            updates::check_automatically(&handle, &shared);
             start_input(handle, shared, backend);
             Ok(())
         })

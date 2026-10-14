@@ -26,7 +26,8 @@ pub struct AppSettings {
     /// Global hotkey that stops all macros and releases every input they hold. Missing in
     /// files from before it.
     pub panic_hotkey: String,
-    /// Look for a new release when Trimcraft starts. Missing in files from before updates.
+    /// Look for a new release automatically: after the start and every few hours while it runs
+    /// (the name is from when it only ran at startup). Missing in files from before updates.
     pub check_updates_on_startup: bool,
 }
 

@@ -67,9 +67,9 @@
     <p class="state">Installed version: <b class="mono">{meta ? `v${meta.version}` : "…"}</b></p>
     <label class="check">
       <input type="checkbox" checked={snapshot.settings.checkUpdatesOnStartup} onchange={(e) => setStartupCheck(e.currentTarget.checked)} />
-      Check for updates on startup
+      Check for updates automatically
     </label>
-    <p class="hint muted">Looks for a new release on GitHub shortly after Trimcraft starts. Nothing is installed without you.</p>
+    <p class="hint muted">Looks for a new release on GitHub shortly after Trimcraft starts and every 6 hours while it runs. A new version shows an <b>update</b> badge in the header (and a notification while Trimcraft is in the tray). Nothing is installed without you.</p>
     <div class="row">
       <button disabled={busy} onclick={checkNow}>{update.state === "checking" ? "Checking…" : "Check now"}</button>
       {#if update.state === "upToDate"}

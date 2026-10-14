@@ -848,7 +848,7 @@ async fn check_for_updates(
     shared: State<'_, Arc<Shared>>,
 ) -> Res<trimcraft_core::updates::UpdateState> {
     let shared = Arc::clone(&shared);
-    Ok(crate::updates::check(&app, &shared).await)
+    Ok(crate::updates::check(&app, &shared, trimcraft_core::updates::CheckOrigin::Manual).await)
 }
 
 /// What an update would interrupt, so the UI can ask first.

@@ -339,9 +339,11 @@ Trimcraft's keys and mouse will not reach it (also in the log).
 
 Uninstalling removes the startup entry and, after a UAC prompt, the task (only if it exists).
 
-**Updates** shows the installed version and checks for a new release on startup (on by
-default) or with **Check now**. When one is available it shows its version and release notes, and
-the header shows an **update** badge next to the version. **Download & install** downloads the
+**Updates** shows the installed version and checks for a new release automatically (on by
+default: about 10 seconds after the start, then every 6 hours while Trimcraft runs, until one is
+found) or with **Check now**. When one is available it shows its version and release notes, and
+the header shows an **update** badge next to the version; while Trimcraft is in the tray, a
+notification says so once. Every check's result is in the event log. **Download & install** downloads the
 signed update, quits Trimcraft (macros stop and vJoy is released; it asks first when they are
 active), installs it for your user and starts Trimcraft again. Before the first release, or
 without a connection, it says so; problems appear in the event log.

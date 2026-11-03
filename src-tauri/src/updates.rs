@@ -72,6 +72,7 @@ fn endpoint_override() -> Option<tauri::Url> {
 
 /// With [`ENDPOINT_VAR`] set, the automatic check repeats after this many seconds instead of
 /// [`RECHECK_INTERVAL`] (same builds only).
+#[cfg(any(debug_assertions, feature = "update-endpoint-override"))]
 pub const RECHECK_VAR: &str = "TRIMCRAFT_UPDATE_RECHECK_SECS";
 
 #[cfg(any(debug_assertions, feature = "update-endpoint-override"))]

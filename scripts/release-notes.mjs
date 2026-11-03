@@ -13,7 +13,8 @@ const EARLY_ACCESS =
   "**Early access.** Trimcraft is young: expect rough edges and back up your configuration " +
   "(Settings, Backup & transfer) before updating. Currently runs on Windows 10/11. Install with " +
   "`Trimcraft_<version>_x64-setup.exe`; installed copies update themselves (Settings, Updates). " +
-  "Windows code signing (SignPath Foundation): see the " +
+  "Releases are currently not code-signed, so Windows SmartScreen may warn on the first run " +
+  "(More info, then Run anyway). Signing through the SignPath Foundation is planned; see the " +
   "[code signing policy](https://github.com/trimcraft/trimcraft#code-signing-policy).";
 
 /** The body of `## [version]` in a Keep a Changelog file, or null. */

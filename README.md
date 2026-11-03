@@ -99,8 +99,9 @@ it then starts through the Task Scheduler without a prompt.
 - No telemetry, no accounts, no analytics. Trimcraft only goes online for what you configure
   (Discord sign-in, your HTTP requests) and for update checks; the full list is in the
   [code signing policy](#code-signing-policy) below.
-- Everything stays on your computer: settings in `%APPDATA%\cloud.breu.trimcraft`, logs in
-  `%LOCALAPPDATA%\cloud.breu.trimcraft\logs`.
+- Everything stays on your computer: settings in `%APPDATA%\io.github.trimcraft.trimcraft`,
+  logs in `%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs` (up to 0.1.3: `cloud.breu.trimcraft`;
+  0.1.4 copies them over on its first start).
 - Secrets (Discord client secret and tokens, secret HTTP headers) are stored in the **Windows
   Credential Manager**, never in the settings files, exports or logs.
 

@@ -64,6 +64,6 @@ body:
     attributes:
       label: Log excerpt
       description: |
-        From Hardware Test → Event log ("Copy"), or from `%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`.
+        From Hardware Test → Event log ("Copy"), or from `%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs\trimcraft.log`.
         **Privacy:** check the excerpt before posting and remove user names, paths, URLs, webhook addresses and anything else private. Trimcraft never writes secrets to the log, but your own action texts may contain personal data.
       render: text

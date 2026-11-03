@@ -1,13 +1,23 @@
-//! Taking over a Detent installation (Trimcraft's former name) on the first start: the config
-//! and log folders, the Credential Manager entries, the secret references in the setup, and
+//! Taking over the folders of an earlier installation on the first start, plus a Detent
+//! installation's (Trimcraft's former name) Credential Manager entries, secret references and
 //! autostart. Only the decisions live here; `src-tauri/src/migration.rs` does the file system,
 //! credential and registry work.
+//!
+//! Folders come from the newest earlier location that has something: Trimcraft up to 0.1.3
+//! (`cloud.breu.trimcraft`), then Detent (`cloud.breu.detent`). A machine that only has Detent
+//! moves straight to the current folders.
 //!
 //! Every step is idempotent: the old folders are copied, never moved, and get a note file
 //! afterwards; a credential is deleted only after its copy was written and read back.
 
 use serde_json::Value;
 
+/// Tauri identifier since 0.1.4; its folders are `%APPDATA%\io.github.trimcraft.trimcraft` and
+/// `%LOCALAPPDATA%\io.github.trimcraft.trimcraft`. Must match `tauri.conf.json` (a test in the
+/// app crate checks it).
+pub const IDENTIFIER: &str = "io.github.trimcraft.trimcraft";
+/// Tauri identifier of Trimcraft up to 0.1.3.
+pub const OLD_TRIMCRAFT_IDENTIFIER: &str = "cloud.breu.trimcraft";
 /// Tauri identifier of Detent; its folders are `%APPDATA%\cloud.breu.detent` and
 /// `%LOCALAPPDATA%\cloud.breu.detent`.
 pub const OLD_IDENTIFIER: &str = "cloud.breu.detent";
@@ -16,9 +26,11 @@ pub const OLD_SECRET_PREFIX: &str = "detent/";
 pub const SECRET_PREFIX: &str = "trimcraft/";
 /// Name of Detent's per-user `Run` registry value.
 pub const OLD_RUN_VALUE: &str = "Detent";
-/// Left in an old folder once its contents were copied. Its presence ends the folder's
+/// Left in a Detent folder once its contents were copied. Its presence ends the folder's
 /// migration for good.
 pub const NOTE_FILE: &str = "MIGRATED_TO_TRIMCRAFT.txt";
+/// Left in a `cloud.breu.trimcraft` folder once its contents were copied.
+pub const MOVED_NOTE_FILE: &str = "MOVED_TO_io.github.trimcraft.trimcraft.txt";
 /// The file whose presence in the new config folder means Trimcraft has a setup of its own.
 pub const SETUP_FILE: &str = "setup.json";
 /// Store name of credential references in the setup (`SecretRef::store`).
@@ -29,18 +41,54 @@ pub fn old_task_name(user: &str) -> String {
     format!("Detent autostart {user}")
 }
 
-pub fn note_text(new_dir: &str) -> String {
-    format!(
-        "Detent is now called Trimcraft.\r\n\
-         Trimcraft copied the contents of this folder to {new_dir} on its first start and uses \
-         that copy from now on. This folder is no longer read; you can delete it once \
-         Trimcraft works as expected.\r\n"
-    )
-}
-
 // --- Folders ---------------------------------------------------------------------------------
 
-/// Which of the two old folders.
+/// An earlier location of Trimcraft's folders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Source {
+    /// The Tauri identifier, the folder name below `%APPDATA%` and `%LOCALAPPDATA%`.
+    pub identifier: &'static str,
+    /// For log messages.
+    pub name: &'static str,
+    /// Written into the old folder once it was copied.
+    pub note_file: &'static str,
+}
+
+/// Earlier locations, newest first. The newest one that has something decides.
+pub const SOURCES: [Source; 2] = [
+    Source {
+        identifier: OLD_TRIMCRAFT_IDENTIFIER,
+        name: "Trimcraft 0.1.3 or older",
+        note_file: MOVED_NOTE_FILE,
+    },
+    Source {
+        identifier: OLD_IDENTIFIER,
+        name: "Detent",
+        note_file: NOTE_FILE,
+    },
+];
+
+impl Source {
+    pub fn note_text(&self, new_dir: &str) -> String {
+        if self.identifier == OLD_IDENTIFIER {
+            format!(
+                "Detent is now called Trimcraft.\r\n\
+                 Trimcraft copied the contents of this folder to {new_dir} on its first start \
+                 and uses that copy from now on. This folder is no longer read; you can delete \
+                 it once Trimcraft works as expected.\r\n"
+            )
+        } else {
+            format!(
+                "Trimcraft keeps its files in {new_dir} since version 0.1.4.\r\n\
+                 It copied the contents of this folder there on its first start and uses that \
+                 copy from now on. This folder is no longer read; you can delete it once \
+                 Trimcraft works as expected.\r\n"
+            )
+        }
+    }
+}
+
+/// Which of the two folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderKind {
     /// `%APPDATA%\<identifier>`: setup, devices, values, control states, backups.
@@ -49,62 +97,73 @@ pub enum FolderKind {
     Local,
 }
 
-/// What is known about an old folder and its new counterpart.
+/// What is known about one earlier folder.
 #[derive(Debug, Clone, Default)]
 pub struct FolderState {
-    pub old_exists: bool,
-    /// Files in the old folder, relative, with `/` as separator.
-    pub old_files: Vec<String>,
-    /// The new config folder has a setup.json (only looked at for [`FolderKind::Config`]).
-    pub new_has_setup: bool,
+    pub exists: bool,
+    /// Files in the folder, relative, with `/` as separator.
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FolderPlan {
     /// Nothing to do, and why.
     Skip(&'static str),
-    /// Copy these files (relative paths, the same in both folders), in this order, then write
-    /// the note into the old folder. `skipped` were left out on purpose.
+    /// Copy these files from `SOURCES[source]` (relative paths, the same in both folders), in
+    /// this order, then write the source's note into the old folder. `skipped` were left out
+    /// on purpose.
     Copy {
+        source: usize,
         files: Vec<String>,
         skipped: Vec<String>,
     },
 }
 
-/// What to copy from an old folder. The setup goes last, so a copy that was interrupted is
-/// done again at the next start (a config folder counts as taken over once it has a setup).
-pub fn plan_folder(kind: FolderKind, state: &FolderState) -> FolderPlan {
-    if !state.old_exists {
-        return FolderPlan::Skip("no Detent folder");
-    }
-    if state.old_files.iter().any(|f| f == NOTE_FILE) {
-        return FolderPlan::Skip("taken over before");
-    }
-    if kind == FolderKind::Config && state.new_has_setup {
+/// What to copy into a new folder. `sources` holds the state of each of [`SOURCES`], in that
+/// order; `new_has_setup` whether the new config folder has a setup.json (only looked at for
+/// [`FolderKind::Config`]).
+///
+/// The newest source with something to take over decides: if it was taken over before (it has
+/// its note), nothing older is looked at either. The setup goes last, so a copy that was
+/// interrupted is done again at the next start (a config folder counts as taken over once it
+/// has a setup).
+pub fn plan_folder(kind: FolderKind, sources: &[FolderState], new_has_setup: bool) -> FolderPlan {
+    if kind == FolderKind::Config && new_has_setup {
         return FolderPlan::Skip("Trimcraft has a setup of its own");
     }
-    let (mut files, mut skipped): (Vec<String>, Vec<String>) = state
-        .old_files
+    let Some((source, state)) = sources
         .iter()
-        .cloned()
-        .partition(|f| copies(kind, f));
-    if files.is_empty() {
-        return FolderPlan::Skip("nothing to take over");
+        .enumerate()
+        .take(SOURCES.len())
+        .find(|(_, s)| s.exists && s.files.iter().any(|f| copies(kind, f)))
+    else {
+        return FolderPlan::Skip("no earlier folder");
+    };
+    if state.files.iter().any(|f| f == SOURCES[source].note_file) {
+        return FolderPlan::Skip("taken over before");
     }
+    let (mut files, mut skipped): (Vec<String>, Vec<String>) =
+        state.files.iter().cloned().partition(|f| copies(kind, f));
     files.sort_by_key(|f| (f == SETUP_FILE, f.clone()));
     skipped.sort();
-    FolderPlan::Copy { files, skipped }
+    FolderPlan::Copy {
+        source,
+        files,
+        skipped,
+    }
 }
 
 fn copies(kind: FolderKind, file: &str) -> bool {
-    // Leftovers of an atomic write (storage.rs writes `<name>.tmp`, then renames).
-    if file.ends_with(".tmp") {
+    // Leftovers of an atomic write (storage.rs writes `<name>.tmp`, then renames), and the
+    // notes of earlier migrations.
+    if file.ends_with(".tmp") || SOURCES.iter().any(|s| s.note_file == file) {
         return false;
     }
     match kind {
         FolderKind::Config => true,
-        // The WebView2 profile is mostly cache, locked while Detent runs, and the one value the
-        // UI keeps there (the last opened section) now has another key; only the logs move.
+        // The WebView2 profile is mostly cache, locked while the old version runs, and the one
+        // value the UI keeps there (the last opened section) is only a convenience; only the
+        // logs move.
         FolderKind::Local => file.starts_with("logs/"),
     }
 }
@@ -224,30 +283,61 @@ mod tests {
         list.iter().map(|s| s.to_string()).collect()
     }
 
-    fn config(list: &[&str]) -> FolderState {
+    fn folder(list: &[&str]) -> FolderState {
         FolderState {
-            old_exists: true,
-            old_files: files(list),
-            new_has_setup: false,
+            exists: true,
+            files: files(list),
         }
+    }
+
+    const NONE: FolderState = FolderState {
+        exists: false,
+        files: Vec::new(),
+    };
+
+    /// Old Trimcraft only, Detent only, both.
+    fn only_trimcraft(state: FolderState) -> [FolderState; 2] {
+        [state, NONE]
+    }
+
+    fn only_detent(state: FolderState) -> [FolderState; 2] {
+        [NONE, state]
+    }
+
+    #[test]
+    fn sources_are_newest_first_and_not_the_current_identifier() {
+        assert_eq!(SOURCES[0].identifier, "cloud.breu.trimcraft");
+        assert_eq!(SOURCES[1].identifier, "cloud.breu.detent");
+        assert!(SOURCES.iter().all(|s| s.identifier != IDENTIFIER));
+        assert_eq!(MOVED_NOTE_FILE, format!("MOVED_TO_{IDENTIFIER}.txt"));
+        let note = SOURCES[0].note_text(r"C:\x\io.github.trimcraft.trimcraft");
+        assert!(note.contains(r"C:\x\io.github.trimcraft.trimcraft"));
+        assert!(!note.contains("Detent"));
+        assert!(
+            SOURCES[1]
+                .note_text("d")
+                .starts_with("Detent is now called Trimcraft.")
+        );
     }
 
     #[test]
     fn config_folder_is_copied_with_the_setup_last() {
         let plan = plan_folder(
             FolderKind::Config,
-            &config(&[
+            &only_trimcraft(folder(&[
                 "setup.json",
                 "devices.json",
                 "backups/setup-20260101-120000.json",
                 "values.json",
                 "control-states.json",
                 "setup.tmp",
-            ]),
+            ])),
+            false,
         );
         assert_eq!(
             plan,
             FolderPlan::Copy {
+                source: 0,
                 files: files(&[
                     "backups/setup-20260101-120000.json",
                     "control-states.json",
@@ -262,68 +352,163 @@ mod tests {
 
     #[test]
     fn config_folder_is_left_alone_when_done_or_not_needed() {
-        let missing = FolderState::default();
         assert_eq!(
-            plan_folder(FolderKind::Config, &missing),
-            FolderPlan::Skip("no Detent folder")
+            plan_folder(FolderKind::Config, &[NONE, NONE], false),
+            FolderPlan::Skip("no earlier folder")
         );
-        let done = config(&["setup.json", NOTE_FILE]);
         assert_eq!(
-            plan_folder(FolderKind::Config, &done),
+            plan_folder(FolderKind::Config, &[], false),
+            FolderPlan::Skip("no earlier folder")
+        );
+        let done = only_trimcraft(folder(&["setup.json", MOVED_NOTE_FILE]));
+        assert_eq!(
+            plan_folder(FolderKind::Config, &done, false),
             FolderPlan::Skip("taken over before")
         );
-        let own = FolderState {
-            new_has_setup: true,
-            ..config(&["setup.json"])
-        };
         assert_eq!(
-            plan_folder(FolderKind::Config, &own),
+            plan_folder(
+                FolderKind::Config,
+                &only_trimcraft(folder(&["setup.json"])),
+                true
+            ),
             FolderPlan::Skip("Trimcraft has a setup of its own")
         );
         assert_eq!(
-            plan_folder(FolderKind::Config, &config(&[])),
-            FolderPlan::Skip("nothing to take over")
+            plan_folder(FolderKind::Config, &only_trimcraft(folder(&[])), false),
+            FolderPlan::Skip("no earlier folder")
         );
     }
 
     #[test]
     fn an_interrupted_copy_is_repeated() {
         // The first start copied some files but not the setup and wrote no note.
-        let plan = plan_folder(FolderKind::Config, &config(&["devices.json", "setup.json"]));
+        let plan = plan_folder(
+            FolderKind::Config,
+            &only_trimcraft(folder(&["devices.json", "setup.json"])),
+            false,
+        );
         assert!(matches!(plan, FolderPlan::Copy { ref files, .. } if files.len() == 2));
     }
 
     #[test]
-    fn local_folder_takes_only_the_logs() {
-        let state = FolderState {
-            old_exists: true,
-            old_files: files(&[
-                "logs/detent.log",
-                "logs/detent_2026-10-01.log",
-                "EBWebView/Default/Local Storage/leveldb/000003.log",
-                "EBWebView/Default/Cache/data_0",
-            ]),
-            // Not looked at for the local folder.
-            new_has_setup: true,
-        };
+    fn a_detent_only_machine_moves_straight_to_the_new_folder() {
+        let plan = plan_folder(
+            FolderKind::Config,
+            &only_detent(folder(&["setup.json", "devices.json"])),
+            false,
+        );
         assert_eq!(
-            plan_folder(FolderKind::Local, &state),
+            plan,
             FolderPlan::Copy {
-                files: files(&["logs/detent.log", "logs/detent_2026-10-01.log"]),
+                source: 1,
+                files: files(&["devices.json", "setup.json"]),
+                skipped: vec![],
+            }
+        );
+        let done = only_detent(folder(&["setup.json", NOTE_FILE]));
+        assert_eq!(
+            plan_folder(FolderKind::Config, &done, false),
+            FolderPlan::Skip("taken over before")
+        );
+    }
+
+    #[test]
+    fn the_newest_source_wins() {
+        // Detent was taken over by Trimcraft 0.1.3 before: copy 0.1.3's folder.
+        let both = [
+            folder(&["setup.json", "values.json"]),
+            folder(&["setup.json", NOTE_FILE]),
+        ];
+        assert!(matches!(
+            plan_folder(FolderKind::Config, &both, false),
+            FolderPlan::Copy { source: 0, .. }
+        ));
+        // 0.1.3 started with a setup of its own and left Detent alone: still 0.1.3's.
+        let both = [folder(&["setup.json"]), folder(&["setup.json"])];
+        assert!(matches!(
+            plan_folder(FolderKind::Config, &both, false),
+            FolderPlan::Copy { source: 0, .. }
+        ));
+        // Once 0.1.3's folder was taken over, Detent's is never looked at.
+        let both = [
+            folder(&["setup.json", MOVED_NOTE_FILE]),
+            folder(&["setup.json"]),
+        ];
+        assert_eq!(
+            plan_folder(FolderKind::Config, &both, false),
+            FolderPlan::Skip("taken over before")
+        );
+        // An old Trimcraft folder with nothing in it does not hide Detent's.
+        let both = [folder(&["setup.tmp"]), folder(&["setup.json"])];
+        assert!(matches!(
+            plan_folder(FolderKind::Config, &both, false),
+            FolderPlan::Copy { source: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn notes_of_earlier_migrations_are_not_copied() {
+        // 0.1.3's own folder never has Detent's note, but a copy must not carry one along.
+        let plan = plan_folder(
+            FolderKind::Config,
+            &only_trimcraft(folder(&["setup.json", NOTE_FILE])),
+            false,
+        );
+        assert_eq!(
+            plan,
+            FolderPlan::Copy {
+                source: 0,
+                files: files(&["setup.json"]),
+                skipped: files(&[NOTE_FILE]),
+            }
+        );
+    }
+
+    #[test]
+    fn local_folder_takes_only_the_logs() {
+        let state = folder(&[
+            "logs/trimcraft.log",
+            "logs/trimcraft_2026-10-01.log",
+            "EBWebView/Default/Local Storage/leveldb/000003.log",
+            "EBWebView/Default/Cache/data_0",
+        ]);
+        // The new setup is not looked at for the local folder.
+        assert_eq!(
+            plan_folder(FolderKind::Local, &only_trimcraft(state), true),
+            FolderPlan::Copy {
+                source: 0,
+                files: files(&["logs/trimcraft.log", "logs/trimcraft_2026-10-01.log"]),
                 skipped: files(&[
                     "EBWebView/Default/Cache/data_0",
                     "EBWebView/Default/Local Storage/leveldb/000003.log",
                 ]),
             }
         );
-        let webview_only = FolderState {
-            old_exists: true,
-            old_files: files(&["EBWebView/Default/Cache/data_0"]),
-            new_has_setup: false,
-        };
+        let webview_only = folder(&["EBWebView/Default/Cache/data_0"]);
         assert_eq!(
-            plan_folder(FolderKind::Local, &webview_only),
-            FolderPlan::Skip("nothing to take over")
+            plan_folder(FolderKind::Local, &only_trimcraft(webview_only), false),
+            FolderPlan::Skip("no earlier folder")
+        );
+        // Detent's logs when 0.1.3 has none; none when 0.1.3's were taken over.
+        let detent_logs = folder(&["logs/detent.log"]);
+        assert!(matches!(
+            plan_folder(
+                FolderKind::Local,
+                &[folder(&["EBWebView/x"]), detent_logs.clone()],
+                false
+            ),
+            FolderPlan::Copy { source: 1, .. }
+        ));
+        assert_eq!(
+            plan_folder(
+                FolderKind::Local,
+                &[
+                    folder(&["logs/trimcraft.log", MOVED_NOTE_FILE]),
+                    detent_logs
+                ],
+                false
+            ),
+            FolderPlan::Skip("taken over before")
         );
     }
 

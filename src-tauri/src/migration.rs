@@ -1,14 +1,15 @@
-//! Takes over a Detent installation (Trimcraft's former name) on the first start: copies the
-//! config and log folders, moves the Credential Manager entries and replaces the autostart
-//! entries. What to do is decided in `trimcraft_core::migration`; this module does it and logs
-//! every step to the app log and the event log.
+//! Takes over an earlier installation on the first start: copies the config and log folders of
+//! Trimcraft 0.1.3 or older (`cloud.breu.trimcraft`) or of Detent (Trimcraft's former name), and
+//! for Detent moves the Credential Manager entries and replaces the autostart entries. What to
+//! do is decided in `trimcraft_core::migration`; this module does it and logs every step to the
+//! app log and the event log.
 //!
 //! The folders are copied before Tauri starts (the log plugin creates the new log folder, and
 //! the setup must be in place before it loads), so their steps are collected in a [`Report`]
 //! and logged once the logger runs. The secret references inside the setup are renamed when it
 //! loads (setup schema 5).
 //!
-//! A Detent that still runs uses another identifier, so it neither blocks Trimcraft's
+//! An older version that still runs uses another identifier, so it neither blocks Trimcraft's
 //! single-instance check nor receives its second launches; both would react to the same
 //! inputs, though, so Trimcraft warns when it finds one.
 
@@ -18,8 +19,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use trimcraft_core::migration::{
-    self, CredentialStep, FolderKind, FolderPlan, FolderState, NOTE_FILE, OLD_IDENTIFIER,
-    OLD_SECRET_PREFIX, SECRET_PREFIX, SETUP_FILE,
+    self, CredentialStep, FolderKind, FolderPlan, FolderState, OLD_SECRET_PREFIX, SECRET_PREFIX,
+    SETUP_FILE, SOURCES,
 };
 use trimcraft_core::{Category, Diagnostics, Level, Record};
 
@@ -56,13 +57,17 @@ fn note(diagnostics: &Diagnostics, level: Level, text: String) {
 
 // --- Folders ---------------------------------------------------------------------------------
 
-/// Copies Detent's config and log folders, if there are any to take over.
+/// Copies the config and log folders of the newest earlier installation (Trimcraft 0.1.3 or
+/// older, else Detent), if there is one to take over.
 pub fn folders(identifier: &str) -> Report {
     let mut report = Report::default();
-    if old_instance_running() {
-        report.warn(
-            "migration: Detent is still running; quit it, or both react to the same inputs".into(),
-        );
+    for source in &SOURCES {
+        if instance_running(source.identifier) {
+            report.warn(format!(
+                "migration: {} is still running; quit it, or both react to the same inputs",
+                source.name
+            ));
+        }
     }
     for (kind, var) in [
         (FolderKind::Config, "APPDATA"),
@@ -74,44 +79,49 @@ pub fn folders(identifier: &str) -> Report {
             ));
             continue;
         };
-        folder(
-            kind,
-            &base.join(OLD_IDENTIFIER),
-            &base.join(identifier),
-            &mut report,
-        );
+        folder(kind, &base, &base.join(identifier), &mut report);
     }
     report
 }
 
-fn folder(kind: FolderKind, old: &Path, new: &Path, report: &mut Report) {
-    let state = FolderState {
-        old_exists: old.is_dir(),
-        old_files: if old.is_dir() {
-            list_files(old).unwrap_or_else(|e| {
-                report.warn(format!("migration: cannot list {}: {e}", old.display()));
+fn folder(kind: FolderKind, base: &Path, new: &Path, report: &mut Report) {
+    let states: Vec<FolderState> = SOURCES
+        .iter()
+        .map(|source| {
+            let dir = base.join(source.identifier);
+            let exists = dir.is_dir();
+            let files = if exists {
+                list_files(&dir).unwrap_or_else(|e| {
+                    report.warn(format!("migration: cannot list {}: {e}", dir.display()));
+                    Vec::new()
+                })
+            } else {
                 Vec::new()
-            })
-        } else {
-            Vec::new()
-        },
-        new_has_setup: new.join(SETUP_FILE).is_file(),
-    };
-    let (files, skipped) = match migration::plan_folder(kind, &state) {
+            };
+            FolderState { exists, files }
+        })
+        .collect();
+    let new_has_setup = new.join(SETUP_FILE).is_file();
+    let (source, files, skipped) = match migration::plan_folder(kind, &states, new_has_setup) {
         FolderPlan::Skip(why) => {
-            if state.old_exists {
+            if states.iter().any(|s| s.exists) {
                 report.info(format!(
-                    "migration: {} not taken over: {why}",
-                    old.display()
+                    "migration: {kind:?} folder {} not filled from an earlier one: {why}",
+                    new.display()
                 ));
             }
             return;
         }
-        FolderPlan::Copy { files, skipped } => (files, skipped),
+        FolderPlan::Copy {
+            source,
+            files,
+            skipped,
+        } => (&SOURCES[source], files, skipped),
     };
+    let old = base.join(source.identifier);
     let mut failed = Vec::new();
     for file in &files {
-        if let Err(e) = copy(old, new, file) {
+        if let Err(e) = copy(&old, new, file) {
             report.warn(format!(
                 "migration: cannot copy {file} from {}: {e}",
                 old.display()
@@ -120,10 +130,11 @@ fn folder(kind: FolderKind, old: &Path, new: &Path, report: &mut Report) {
         }
     }
     report.info(format!(
-        "migration: copied {} of {} files from {} to {}{}",
+        "migration: copied {} of {} files from {} ({}) to {}{}",
         files.len() - failed.len(),
         files.len(),
         old.display(),
+        source.name,
         new.display(),
         if skipped.is_empty() {
             String::new()
@@ -135,11 +146,12 @@ fn folder(kind: FolderKind, old: &Path, new: &Path, report: &mut Report) {
     if kind == FolderKind::Config && failed.contains(&SETUP_FILE) {
         return;
     }
-    let note = migration::note_text(&new.display().to_string());
-    match fs::write(old.join(NOTE_FILE), note) {
-        Ok(()) => report.info(format!("migration: left {NOTE_FILE} in {}", old.display())),
+    let note_file = source.note_file;
+    let text = source.note_text(&new.display().to_string());
+    match fs::write(old.join(note_file), text) {
+        Ok(()) => report.info(format!("migration: left {note_file} in {}", old.display())),
         Err(e) => report.warn(format!(
-            "migration: cannot write {NOTE_FILE} into {}: {e}",
+            "migration: cannot write {note_file} into {}: {e}",
             old.display()
         )),
     }
@@ -185,12 +197,13 @@ fn list_files(dir: &Path) -> io::Result<Vec<String>> {
     Ok(out)
 }
 
-/// Detent's single-instance mutex exists (access denied: it runs elevated).
-fn old_instance_running() -> bool {
+/// The single-instance mutex of an installation with this identifier exists (access denied: it
+/// runs elevated).
+fn instance_running(identifier: &str) -> bool {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, GetLastError};
     use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
     use windows_sys::Win32::System::Threading::OpenMutexW;
-    let name = crate::elevation::wide(format!("{OLD_IDENTIFIER}-sim"));
+    let name = crate::elevation::wide(format!("{identifier}-sim"));
     // SAFETY: NUL-terminated name; the handle is closed right away.
     let mutex = unsafe { OpenMutexW(SYNCHRONIZE, 0, name.as_ptr()) };
     if !mutex.is_null() {
@@ -271,5 +284,25 @@ pub fn autostart(elevated: bool, diagnostics: &Diagnostics) {
     }
     if let Some(text) = plan.note {
         note(diagnostics, Level::Warn, format!("migration: {text}"));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_identifier_and_publisher_are_the_ones_the_migration_expects() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        assert_eq!(conf["identifier"], trimcraft_core::migration::IDENTIFIER);
+        // hooks.nsh moves the install location from the old publisher's key to this one.
+        assert_eq!(conf["bundle"]["publisher"], "Trimcraft");
+        assert_eq!(conf["productName"], "Trimcraft");
+        let hooks = include_str!("../windows/hooks.nsh");
+        assert!(hooks.contains(r#"!define TRIMCRAFT_OLD_MANUKEY "Software\breu""#));
+        // Software\<publisher>\<productName>, as the template's MANUPRODUCTKEY.
+        assert!(hooks.contains(r#"!define TRIMCRAFT_KEY "Software\Trimcraft\Trimcraft""#));
+        for source in &trimcraft_core::migration::SOURCES[..1] {
+            assert!(hooks.contains(source.identifier), "{}", source.identifier);
+        }
     }
 }

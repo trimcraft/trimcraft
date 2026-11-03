@@ -7,6 +7,15 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+### Changed
+
+- Trimcraft now appears with the publisher **Trimcraft** in Windows (Apps & Features) and keeps
+  its files in `%APPDATA%\io.github.trimcraft.trimcraft` and
+  `%LOCALAPPDATA%\io.github.trimcraft.trimcraft` (before: `cloud.breu.trimcraft`). On its first
+  start it copies your configuration, backups and logs from the old folders and leaves a note
+  there; nothing is deleted. Credentials and "Start with Windows" stay as they are. The update
+  keeps the install folder and the single Apps & Features entry.
+
 ## [0.1.3] - 2026-11-04
 
 ### Security

@@ -7,7 +7,7 @@ real cockpits is the most valuable contribution: bugs, rough edges and ideas.
 
 - **Bugs:** use the [bug report](https://github.com/trimcraft/trimcraft/issues/new?template=bug_report.yml)
   template. Include your operating system and Trimcraft versions, the devices involved and a log
-  excerpt (Hardware Test → Event log, or `%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`).
+  excerpt (Hardware Test → Event log, or `%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs\trimcraft.log`).
   Check the excerpt for names, paths or anything private before posting.
 - **Ideas:** use the [feature request](https://github.com/trimcraft/trimcraft/issues/new?template=feature_request.yml)
   template and describe the situation in the game or sim, not only the solution.

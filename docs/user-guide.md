@@ -42,7 +42,7 @@ sees and does, newest at the bottom: button, hat and encoder input (axes only wh
 actions (queued, executed with duration, skipped, failed), connector status changes, and warnings and
 errors from the app log. The last 5000 entries are kept in memory. Filter by category, device or text,
 pause the view while recording continues, copy what is visible, or open the log folder. The file log
-(`%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`) is unchanged.
+(`%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs\trimcraft.log`) is unchanged.
 
 A virtual control is built from physical inputs and can run actions. The first kind is the
 **radio**: several states of which at most one is active, like the preset buttons of a car radio.
@@ -373,6 +373,12 @@ Settings has a section **Backup & transfer**.
   newest of each of the last 14 days. The list shows date, profile count and size; **Restore** (after a confirmation,
   with a backup of the current state first), **Back up now** and **Open backup folder** are there too. Backup events appear
   in the event log.
+- **Where the files are**: the config folder is `%APPDATA%\io.github.trimcraft.trimcraft`, the logs are in
+  `%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs`. Versions up to 0.1.3 used `cloud.breu.trimcraft` instead; on
+  its first start, a newer version copies the configuration (with backups) and the logs from there, leaves a
+  `MOVED_TO_io.github.trimcraft.trimcraft.txt` note in the old folders and logs each step in the event log. The old
+  folders are no longer read and can be deleted once everything works. Credentials and "Start with Windows" are not
+  affected. Only the last opened section of the main window is not carried over.
 
 ## Overlay toasts and appearance
 

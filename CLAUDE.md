@@ -88,7 +88,8 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   `toast` (toast queue: newest first, one per control, at most 3, expiry),
   `vjoy` (vJoy targets, axis curves, mappings, desired output state and its diff),
   `transfer` (export files, secret stripping, import validation, profile merge), `backup` (backup file names
-  and retention), `migration` (taking over a Detent installation: folder, credential and
+  and retention), `migration` (taking over earlier installations: folders of `cloud.breu.trimcraft` (up to
+  0.1.3) or Detent, newest first; Detent credential and
   autostart plans, secret reference renaming),
   `recording` (recorder events to macro steps, key/mouse timeline merge, stop trimming, hotkey
   parsing), `engine`
@@ -114,7 +115,7 @@ CMake build fail on the 260-character path limit. Point `CARGO_TARGET_DIR` at a 
   from the foreground program, process window list),
   `commands.rs` (IPC; payload shapes are tested),
   `backups.rs` (automatic setup backups, hooked into the setup save), `transfer.rs` (export/import/restore
-  commands and their dialogs), `migration.rs` (Detent takeover on the first start: folders,
+  commands and their dialogs), `migration.rs` (takeover on the first start: folders of 0.1.3 or Detent, Detent's
   Credential Manager entries, autostart),
   `storage.rs` (atomic JSON files). The event log is a `Diagnostics` handle shared by the engine, executor and log bridge (`lib.rs`);
   a thread sends new entries to the UI every 100 ms (`trimcraft://diagnostics`).
@@ -174,4 +175,4 @@ without playing anything; reads Discord voice settings with saved, authorized cr
 `TRIMCRAFT_DISCORD_CLIENT_ID` set; writes and removes the autostart Run value, so only without
 Trimcraft autostart enabled; lists voices, sound outputs and audio programs without playing anything;
 asks a running Voicemeeter for its edition).
-Use the CI artifact `trimcraft-windows`. Log file: `%LOCALAPPDATA%\cloud.breu.trimcraft\logs\trimcraft.log`.
+Use the CI artifact `trimcraft-windows`. Log file: `%LOCALAPPDATA%\io.github.trimcraft.trimcraft\logs\trimcraft.log`.

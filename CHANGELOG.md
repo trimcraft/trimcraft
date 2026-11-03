@@ -7,14 +7,18 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-04
+
 ### Changed
 
 - Trimcraft now appears with the publisher **Trimcraft** in Windows (Apps & Features) and keeps
   its files in `%APPDATA%\io.github.trimcraft.trimcraft` and
   `%LOCALAPPDATA%\io.github.trimcraft.trimcraft` (before: `cloud.breu.trimcraft`). On its first
   start it copies your configuration, backups and logs from the old folders and leaves a note
-  there; nothing is deleted. Credentials and "Start with Windows" stay as they are. The update
-  keeps the install folder and the single Apps & Features entry.
+  there; nothing is lost or deleted. Credentials and "Start with Windows" stay as they are. The
+  update keeps the install folder and the single Apps & Features entry.
+- Existing Start menu, desktop and taskbar shortcuts are updated to the new app id, so Windows
+  notifications from Trimcraft keep working after the update.
 
 ## [0.1.3] - 2026-11-04
 
@@ -104,7 +108,8 @@ The first public release (early access), for Windows 10/11.
 - **Updates**: Trimcraft checks for new releases on startup (can be turned off) and installs
   them from Settings, Updates; releases are signed.
 
-[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/trimcraft/trimcraft/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/trimcraft/trimcraft/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/trimcraft/trimcraft/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...v0.1.1

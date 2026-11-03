@@ -447,7 +447,7 @@ Used by:
   - encoding_rs 0.8.42 (https://github.com/hsivonen/encoding_rs)
   - multiversion_no_op 1.0.0 (https://github.com/hsivonen/multiversion_no_op)
   - siphasher 1.0.4 (https://github.com/jedisct1/rust-siphash)
-  - ureq-proto 0.6.4 (https://github.com/algesten/ureq-proto)
+  - ureq-proto 0.6.5 (https://github.com/algesten/ureq-proto)
   - utf8_iter 1.0.4 (https://github.com/hsivonen/utf8_iter)
   - zeroize 1.9.1 (https://github.com/RustCrypto/utils)
 
@@ -1585,7 +1585,7 @@ Used by:
   - rustls-platform-verifier 0.7.1 (https://github.com/rustls/rustls-platform-verifier)
   - serialize-to-javascript-impl 0.1.2 (https://github.com/chippers/serialize-to-javascript)
   - serialize-to-javascript 0.1.2 (https://github.com/chippers/serialize-to-javascript)
-  - ureq 3.4.2 (https://github.com/algesten/ureq)
+  - ureq 3.5.0 (https://github.com/algesten/ureq)
 
                                  Apache License
                            Version 2.0, January 2004
@@ -4929,7 +4929,6 @@ Apache License 2.0 (Apache-2.0)
 Used by:
   - arrayvec 0.7.8 (https://github.com/bluss/arrayvec)
   - atomic-waker 1.1.2 (https://github.com/smol-rs/atomic-waker)
-  - base64 0.22.1 (https://github.com/marshallpierce/rust-base64)
   - base64 0.23.1 (https://github.com/marshallpierce/rust-base64)
   - bitflags 1.3.2 (https://github.com/bitflags/bitflags)
   - bitflags 2.13.2 (https://github.com/bitflags/bitflags)
@@ -4973,7 +4972,7 @@ Used by:
   - regex-syntax 0.8.11 (https://github.com/rust-lang/regex)
   - regex 1.13.1 (https://github.com/rust-lang/regex)
   - ring 0.17.14 (https://github.com/briansmith/ring)
-  - rustls 0.23.45 (https://github.com/rustls/rustls)
+  - rustls 0.23.46 (https://github.com/rustls/rustls)
   - scopeguard 1.2.0 (https://github.com/bluss/scopeguard)
   - serde_with 3.24.0 (https://github.com/jonasbb/serde_with/)
   - serde_with_macros 3.24.0 (https://github.com/jonasbb/serde_with/)
@@ -6952,32 +6951,33 @@ Used by:
   - serde_core 1.0.229 (https://github.com/serde-rs/serde)
   - serde_derive 1.0.229 (https://github.com/serde-rs/serde)
   - serde_derive_internals 0.29.1 (https://github.com/serde-rs/serde)
-  - serde_json 1.0.151 (https://github.com/serde-rs/json)
+  - serde_json 1.0.154 (https://github.com/serde-rs/json)
   - serde_repr 0.1.21 (https://github.com/dtolnay/serde-repr)
   - simdutf8 0.1.5 (https://github.com/rusticstuff/simdutf8)
   - syn 2.0.119 (https://github.com/dtolnay/syn)
   - syn 3.0.6 (https://github.com/dtolnay/syn)
   - sync_wrapper 1.0.2 (https://github.com/Actyx/sync_wrapper)
-  - tauri-codegen 2.7.1 (https://github.com/tauri-apps/tauri)
-  - tauri-macros 2.7.1 (https://github.com/tauri-apps/tauri)
-  - tauri-plugin-dialog 2.8.2 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-fs 2.7.0 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-global-shortcut 2.4.0 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-log 2.10.0 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-notification 2.6.0 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-opener 2.7.1 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-single-instance 2.5.3 (https://github.com/tauri-apps/plugins-workspace)
-  - tauri-plugin-updater 2.13.3 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-codegen 2.7.2 (https://github.com/tauri-apps/tauri)
+  - tauri-macros 2.7.2 (https://github.com/tauri-apps/tauri)
+  - tauri-plugin-dialog 2.8.3 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-fs 2.7.1 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-global-shortcut 2.4.1 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-log 2.10.1 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-notification 2.7.0 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-opener 2.7.2 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-single-instance 2.5.4 (https://github.com/tauri-apps/plugins-workspace)
+  - tauri-plugin-updater 2.14.1 (https://github.com/tauri-apps/plugins-workspace)
   - tauri-runtime-wry 2.12.1 (https://github.com/tauri-apps/tauri)
   - tauri-runtime 2.12.1 (https://github.com/tauri-apps/tauri)
   - tauri-utils 2.10.1 (https://github.com/tauri-apps/tauri)
   - tauri-winrt-notification 0.8.1 (https://github.com/tauri-apps/winrt-notification)
-  - tauri 2.12.2 (https://github.com/tauri-apps/tauri)
+  - tauri 2.12.3 (https://github.com/tauri-apps/tauri)
   - thiserror-impl 2.0.21 (https://github.com/dtolnay/thiserror)
   - thiserror 2.0.21 (https://github.com/dtolnay/thiserror)
   - time-core 0.1.9 (https://github.com/time-rs/time)
   - time-macros 0.2.32 (https://github.com/time-rs/time)
   - time 0.3.55 (https://github.com/time-rs/time)
+  - typed-path 0.13.0 (https://github.com/chipsenkbeil/typed-path)
   - typeid 1.0.3 (https://github.com/dtolnay/typeid)
   - unicode-ident 1.0.26 (https://github.com/dtolnay/unicode-ident)
   - utf8-zero 0.8.1 (https://github.com/algesten/utf8-zero)
@@ -7229,7 +7229,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Community Data License Agreement Permissive 2.0 (CDLA-Permissive-2.0)
 
 Used by:
-  - webpki-roots 1.0.9 (https://github.com/rustls/webpki-roots)
+  - webpki-roots 1.0.11 (https://github.com/rustls/webpki-roots)
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -8777,6 +8777,7 @@ MIT License (MIT)
 
 Used by:
   - tracing-core 0.1.36 (https://github.com/tokio-rs/tracing)
+  - zip 9.3.0 (https://github.com/zip-rs/zip2)
 
 The MIT License (MIT)
 
@@ -8800,36 +8801,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-================================================================================
-MIT License (MIT)
-
-Used by:
-  - zip 4.6.1 (https://github.com/zip-rs/zip2.git)
-
-The MIT License (MIT)
-
-Copyright (c) 2014 Mathijs van de Nes
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-Some files in the "tests/data" subdirectory of this repository are under other
-licences; see files named LICENSE.*.txt for details.
 ================================================================================
 MIT License (MIT)
 
@@ -10450,7 +10421,7 @@ POSSIBILITY OF SUCH DAMAGE.
 @tauri-apps/api (Apache-2.0 OR MIT)
 
 Used by:
-  - @tauri-apps/api 2.12.3 (npm)
+  - @tauri-apps/api 2.12.4 (npm)
 
 MIT License
 
@@ -10478,7 +10449,7 @@ SOFTWARE.
 svelte (MIT)
 
 Used by:
-  - svelte 5.57.2 (npm)
+  - svelte 5.57.3 (npm)
 
 Copyright (c) 2016-2025 [Svelte Contributors](https://github.com/sveltejs/svelte/graphs/contributors)
 

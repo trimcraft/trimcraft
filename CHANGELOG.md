@@ -7,6 +7,17 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+### Security
+
+- Updated the updater component, which brings its ZIP library to a version without the known
+  extraction vulnerabilities. Trimcraft's own updates are signed NSIS installers, not ZIP files,
+  and each download is checked against the signature before it is used.
+
+### Changed
+
+- Updated dependencies. If the update installer cannot be started, the error message now gives
+  the real reason instead of an unrelated one.
+
 ## [0.1.2] - 2026-10-14
 
 ### Fixed

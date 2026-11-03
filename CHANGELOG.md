@@ -7,16 +7,20 @@ expect rough edges, and back up your configuration before updating.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-04
+
 ### Security
 
 - Updated the updater component, which brings its ZIP library to a version without the known
   extraction vulnerabilities. Trimcraft's own updates are signed NSIS installers, not ZIP files,
-  and each download is checked against the signature before it is used.
+  and each download is checked against the update signature before it is installed.
 
 ### Changed
 
 - Updated dependencies. If the update installer cannot be started, the error message now gives
   the real reason instead of an unrelated one.
+- The README and release notes now say plainly that releases are currently not Windows
+  code-signed (SmartScreen may warn on the first run); signing is planned.
 
 ## [0.1.2] - 2026-10-14
 
@@ -91,7 +95,8 @@ The first public release (early access), for Windows 10/11.
 - **Updates**: Trimcraft checks for new releases on startup (can be turned off) and installs
   them from Settings, Updates; releases are signed.
 
-[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/trimcraft/trimcraft/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/trimcraft/trimcraft/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/trimcraft/trimcraft/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/trimcraft/trimcraft/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.0

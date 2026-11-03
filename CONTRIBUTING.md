@@ -35,7 +35,8 @@ human or agent):
 
 See the README's "Build from source" section for the toolchain.
 
-Releases are code-signed from the tagged builds of this repository
+Releases are built from tagged commits of this repository. They are currently not code-signed;
+signing is planned for exactly these builds
 ([code signing policy](README.md#code-signing-policy)). Changes to the build scripts, workflows
 (`.github/`) and the signing configuration (`.signpath/`) are reviewed as carefully as code, and
 pull requests must not make the build download or bundle anything that is not built from this

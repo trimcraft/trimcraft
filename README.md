@@ -61,9 +61,9 @@ The screenshots show the browser demo with made-up devices. More: [Hardware Test
 1. Download `Trimcraft_<version>_x64-setup.exe` from the
    [latest release](https://github.com/trimcraft/trimcraft/releases/latest).
 2. Run it. It installs for the current user; no administrator rights needed.
-3. Releases up to now are **not code-signed**, so Windows SmartScreen warns on the first start
-   ("Windows protected your PC"): click **More info**, then **Run anyway**. Code signing through
-   the SignPath Foundation is underway; see the [code signing policy](#code-signing-policy).
+3. Releases are currently **not code-signed**, so Windows SmartScreen may warn on the first start
+   ("Windows protected your PC"): click **More info**, then **Run anyway**. Signing is planned;
+   see the [code signing policy](#code-signing-policy).
 
 Trimcraft is early access: back up your configuration (**Settings → Backup & transfer**) before
 updating.
@@ -110,8 +110,10 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 [SignPath Foundation](https://signpath.org).
 
 > [!NOTE]
-> Trimcraft has applied to the SignPath Foundation's open source program. Releases published
-> before the approval, including v0.1.0, are not Windows code-signed.
+> Releases are currently **not code-signed**; Windows SmartScreen may warn on the first run
+> (**More info** → **Run anyway**). We plan to sign releases through the SignPath Foundation's
+> open source program once the project qualifies; the policy below describes how signing will
+> work.
 
 **What is signed:** only the Windows installer `Trimcraft_<version>_x64-setup.exe` and the
 program `trimcraft.exe` inside it. Both are built from a tagged commit of this repository by the

@@ -26,6 +26,7 @@
   ${AndIf} $R1 != ""
     WriteRegStr HKCU "${TRIMCRAFT_KEY}" "" $R1
     ${If} $INSTDIR == "$LOCALAPPDATA\Trimcraft"
+    ${AndIf} $R1 != $INSTDIR
       StrCpy $INSTDIR $R1
     ${EndIf}
   ${EndIf}
@@ -44,6 +45,11 @@ FunctionEnd
   ; Silent installs (winget) have no GUI init; the location is still free to change here.
   !insertmacro TRIMCRAFT_ADOPT_OLD_LOCATION
   SetOutPath $INSTDIR
+  ; The install section created the default folder before this hook; if the location moved
+  ; away from it, remove it again (only if empty; not while it was the working directory).
+  ${If} $INSTDIR != "$LOCALAPPDATA\Trimcraft"
+    RMDir "$LOCALAPPDATA\Trimcraft"
+  ${EndIf}
 !macroend
 
 !macro TRIMCRAFT_SET_AUMID shortcut

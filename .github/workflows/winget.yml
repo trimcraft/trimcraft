@@ -1,0 +1,88 @@
+name: WinGet
+
+# Submits a published release to the Windows Package Manager: a pull request to
+# microsoft/winget-pkgs that updates the Trimcraft.Trimcraft manifests (docs/winget.md).
+#
+# The Release workflow publishes with GITHUB_TOKEN, and events caused by GITHUB_TOKEN start no
+# other workflows, so `release: published` alone would never fire for our own releases. The
+# normal path is therefore `workflow_run`: after a successful Release run for a tag push.
+# `release: published` still covers a release published by hand, and `workflow_dispatch`
+# submits (or resubmits) any published tag.
+#
+# Needs the repository secret WINGET_TOKEN: a classic PAT with `public_repo` of the account that
+# owns the winget-pkgs fork (FORK_USER below). Without it the job skips with a notice.
+# winget-releaser only updates packages that already exist in winget-pkgs; the first version is
+# submitted by hand (docs/winget.md).
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to submit (e.g. v0.1.3); the release must be published
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: winget-${{ github.event.workflow_run.head_branch || github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  IDENTIFIER: Trimcraft.Trimcraft
+  # Owner of the winget-pkgs fork the pull request comes from; the PAT must belong to it.
+  FORK_USER: bresam
+
+jobs:
+  submit:
+    name: submit to winget-pkgs
+    runs-on: ubuntu-latest
+    # Only successful tag builds of Release (a manual Release run is a dry run and publishes
+    # nothing), and never prereleases (the project publishes none; winget would list them).
+    if: >-
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+        && github.event.workflow_run.event == 'push')
+      || (github.event_name == 'release' && !github.event.release.prerelease && !github.event.release.draft)
+      || github.event_name == 'workflow_dispatch'
+    permissions:
+      # The action reads the public release through the job token (winget-pkgs is written
+      # with WINGET_TOKEN only).
+      contents: read
+    steps:
+      - name: Resolve tag and token
+        id: prep
+        shell: bash
+        env:
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          HAS_TOKEN: ${{ secrets.WINGET_TOKEN != '' }}
+        run: |
+          tag="${RUN_TAG:-${RELEASE_TAG:-$INPUT_TAG}}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$tag' is not a release tag (vX.Y.Z)"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "::notice::WINGET_TOKEN is not set; skipping the winget-pkgs submission for $tag (docs/winget.md)."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Uses Komac to update the manifests from the latest version in winget-pkgs (installer URL,
+      # SHA256, release date, notes) and opens the pull request from the fork.
+      - name: Submit to winget-pkgs
+        if: steps.prep.outputs.skip != 'true'
+        uses: vedantmgoyal9/winget-releaser@b7370d4d152efdce803a26cc6ca9eee58cb2ad54 # v2
+        with:
+          identifier: ${{ env.IDENTIFIER }}
+          release-tag: ${{ steps.prep.outputs.tag }}
+          installers-regex: '_x64-setup\.exe$'
+          fork-user: ${{ env.FORK_USER }}
+          token: ${{ secrets.WINGET_TOKEN }}

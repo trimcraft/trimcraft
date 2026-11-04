@@ -163,6 +163,11 @@ a passed CI run for its commit; for a branch, start CI on it by hand first (`gh 
 ci.yml --ref <branch>`). Never mark a release as prerelease or
 draft: `/releases/latest`, and with it the updater, only sees normal releases.
 
+After a successful tag release, `.github/workflows/winget.yml` submits the new version to the
+Windows Package Manager (`Trimcraft.Trimcraft`, pull request to microsoft/winget-pkgs; needs the
+secret `WINGET_TOKEN`, skips without it). Setup, the first manual submission and the reference
+manifests: `docs/winget.md`, `packaging/winget/`.
+
 ## Testing with real hardware
 
 Some things need real hardware and an interactive desktop: devices through DirectInput/RawInput,

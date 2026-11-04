@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 
 PackageIdentifier: Trimcraft.Trimcraft
-PackageVersion: 0.1.2
+PackageVersion: 0.1.4
 PackageLocale: en-US
 Publisher: Trimcraft
 PublisherUrl: https://github.com/trimcraft
@@ -29,7 +29,7 @@ Tags:
 - overlay
 - space-sim
 - vjoy
-ReleaseNotesUrl: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.2
+ReleaseNotesUrl: https://github.com/trimcraft/trimcraft/releases/tag/v0.1.4
 Documentations:
 - DocumentLabel: User guide
   DocumentUrl: https://github.com/trimcraft/trimcraft/blob/main/docs/user-guide.md

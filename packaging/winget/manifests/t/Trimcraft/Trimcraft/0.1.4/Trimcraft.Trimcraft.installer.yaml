@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 
 PackageIdentifier: Trimcraft.Trimcraft
-PackageVersion: 0.1.2
+PackageVersion: 0.1.4
 InstallerType: nullsoft
 Scope: user
 InstallModes:
@@ -10,14 +10,14 @@ InstallModes:
 - silentWithProgress
 UpgradeBehavior: install
 ProductCode: Trimcraft
-ReleaseDate: 2026-10-14
+ReleaseDate: 2026-11-04
 AppsAndFeaturesEntries:
 - DisplayName: Trimcraft
-  Publisher: breu
+  Publisher: Trimcraft
   ProductCode: Trimcraft
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/trimcraft/trimcraft/releases/download/v0.1.2/Trimcraft_0.1.2_x64-setup.exe
-  InstallerSha256: 5CC6DF6AC2E957EFB7048CD36826C5B0E8C4B47962AADB75E554AC6579C1330E
+  InstallerUrl: https://github.com/trimcraft/trimcraft/releases/download/v0.1.4/Trimcraft_0.1.4_x64-setup.exe
+  InstallerSha256: 74063EB962C4BF42D9982A8FB6204C5EE61193A67413F007B74CA94132CBDF70
 ManifestType: installer
 ManifestVersion: 1.12.0

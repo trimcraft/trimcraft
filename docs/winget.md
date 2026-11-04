@@ -22,11 +22,12 @@ What the NSIS installer from Tauri writes, and what the manifest relies on:
 - It installs per user (`installMode: currentUser`) to `%LOCALAPPDATA%\Trimcraft` without
   administrator rights, and registers under
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Trimcraft` with `DisplayName`
-  `Trimcraft`, `DisplayVersion` `<version>` and `Publisher` `breu`. Tauri uses the second part of
-  the bundle identifier (`cloud.breu.trimcraft`) as publisher because `bundle.publisher` is not
-  set. The manifest therefore names the key as `ProductCode: Trimcraft` and lists
-  `AppsAndFeaturesEntries` with that publisher, so winget recognises existing installations,
-  including ones installed from the website.
+  `Trimcraft`, `DisplayVersion` `<version>` and `Publisher` `Trimcraft` (`productName`, `version`
+  and `bundle.publisher` in `tauri.conf.json`). The manifest names the key as
+  `ProductCode: Trimcraft` and lists the same values in `AppsAndFeaturesEntries`, so winget
+  recognises existing installations, including ones installed from the website. The key name
+  does not depend on the publisher, so installations of versions before 0.1.4, which wrote a
+  different publisher, are matched by the product code as well.
 - winget's defaults for `nullsoft` fit: `/S` for silent installs (the installer does not start
   Trimcraft afterwards without `/R`), `/D=<path>` for a custom location. No custom switches.
 - `UpgradeBehavior: install`: the new installer runs over the existing installation, as the
@@ -51,7 +52,7 @@ base and updates the installer URL, SHA256, release date and release notes.
   `release: published` would never fire for our own releases; it stays as a trigger for releases
   published by hand. A manual Release run (dry run) submits nothing.
 - **By hand:** Actions → WinGet → "Run workflow" with a tag (for example to resubmit after a
-  failure), or `gh workflow run winget.yml -R trimcraft/trimcraft -f tag=v0.1.3`.
+  failure), or `gh workflow run winget.yml -R trimcraft/trimcraft -f tag=v0.1.5`.
 - **Without the secret** `WINGET_TOKEN`, the job ends successfully with a notice and submits
   nothing.
 - WinGet Releaser **only updates existing packages**. Until the first version is merged in
@@ -109,7 +110,7 @@ Submit the **latest** published version. If that is no longer the version in
 2. Validate:
 
    ```powershell
-   winget validate --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.2
+   winget validate --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.4
    ```
 
 3. Optional, test the installation. This installs Trimcraft for your user like the installer
@@ -118,7 +119,7 @@ Submit the **latest** published version. If that is no longer the version in
 
    ```powershell
    winget settings --enable LocalManifestFiles
-   winget install --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.2
+   winget install --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.4
    ```
 
    For an isolated test, use Windows Sandbox with winget-pkgs'
@@ -129,12 +130,12 @@ Submit the **latest** published version. If that is no longer the version in
    winget-pkgs under your account and opens the pull request:
 
    ```powershell
-   wingetcreate submit --prtitle "New package: Trimcraft.Trimcraft version 0.1.2" packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.2
+   wingetcreate submit --prtitle "New package: Trimcraft.Trimcraft version 0.1.4" packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.4
    ```
 
    By hand instead: fork microsoft/winget-pkgs, copy the folder to
-   `manifests/t/Trimcraft/Trimcraft/0.1.2/` (only these three files), commit, open a pull request
-   titled `New package: Trimcraft.Trimcraft version 0.1.2` and fill in the checklist.
+   `manifests/t/Trimcraft/Trimcraft/0.1.4/` (only these three files), commit, open a pull request
+   titled `New package: Trimcraft.Trimcraft version 0.1.4` and fill in the checklist.
 
 5. Watch the pull request: the validation bot sets labels (`Validation-Completed` when it
    passes, otherwise see the
@@ -151,7 +152,7 @@ installer manifest `InstallerUrl`, `InstallerSha256` and `ReleaseDate`; in the l
 `ReleaseNotesUrl`. The SHA256 (uppercase in the manifest) comes from the release:
 
 ```sh
-gh api repos/trimcraft/trimcraft/releases/tags/v0.1.3 --jq '.assets[] | select(.name | endswith("-setup.exe")) | .digest'
+gh api repos/trimcraft/trimcraft/releases/tags/v0.1.5 --jq '.assets[] | select(.name | endswith("-setup.exe")) | .digest'
 ```
 
 Then `winget validate --manifest <folder>`. With wingetcreate, `wingetcreate update
@@ -160,7 +161,7 @@ exists in winget-pkgs.
 
 ## When something changes
 
-- **Publisher name:** setting `bundle.publisher` in `tauri.conf.json` changes the `Publisher` the
+- **Publisher name:** changing `bundle.publisher` in `tauri.conf.json` changes the `Publisher` the
   installer writes (and Tauri's `HKCU\Software\<publisher>` key). Update `AppsAndFeaturesEntries`
   in the next manifest accordingly (Komac reads it from the installer).
 - **Install mode, product name or installer file name:** check `Scope`, `ProductCode` and the

@@ -7,5 +7,5 @@ template; later versions are submitted by `.github/workflows/winget.yml` and are
 here. See [docs/winget.md](../../docs/winget.md).
 
 ```powershell
-winget validate --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.2
+winget validate --manifest packaging\winget\manifests\t\Trimcraft\Trimcraft\0.1.4
 ```
